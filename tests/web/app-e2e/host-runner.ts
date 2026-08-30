@@ -49,14 +49,14 @@ function presetCaps(p: string | undefined): DriverCapabilities {
   // this tuple only after its permission hook is proved ready; a static pre-ready constant previously
   // let this fixture silently advertise the wrong permission posture.
   if (p === "tmux") return tmuxCapabilities(true);
-  if (p === "opencode-skip")
-    // opencode with --skip-permissions: NO structured gating (the "permissions off" posture), interrupt
-    // only — set_model needs a providerID/modelID the viewer's aliases lack, set_mode/end no-op.
+  if (p === "opencode")
+    // Exact supported OpenCode default: permission interaction remains native/local, status is not
+    // claimed without an initial snapshot, and only plain text + interrupt cross the viewer boundary.
     return {
       structuredPermissions: false,
-      status: true,
+      status: false,
       controls: { interrupt: true, setModel: false, setMode: false, end: false },
-      attachments: true,
+      attachments: false,
     };
   return STABLE_MITM_CAPABILITIES;
 }

@@ -1,7 +1,7 @@
 # OpenCode 1.17.5 protocol fixture
 
 This is a retained research fixture for one OpenCode version. It records native API facts used by the
-experimental implementation of an intended product adapter. It is not runtime authority, a deployment
+current pinned implementation of an intended product adapter. It is not runtime authority, a deployment
 attestation, or a claim that the current driver has exactly-once mutation or durable recovery.
 
 The fixture lives in `spikes/opencode-native/` and is intentionally model-free.
@@ -51,7 +51,7 @@ It does not establish:
 - provider credential or network isolation for the actual application; or
 - browser-to-native end-to-end product behavior.
 
-The current compatibility driver sends `{model, parts}` and omits the caller `messageID`, so its
+The current pinned driver sends `{model, parts}` and omits the caller `messageID`, so its
 request is not the same request used by this fixture.
 
 ## Retained evidence

@@ -11,7 +11,7 @@ const qp = BACKEND ? `?backend=${BACKEND}` : "";
 // without a click. Caught in the pass: every connect started with an extra tab/click into the field.
 test("the connect gate autofocuses its pass field", async ({ page }) => {
   await page.goto(`/${qp}`);
-  await expect(page.getByLabel("Machine pass")).toBeFocused();
+  await expect(page.getByLabel("Machine pass", { exact: true })).toBeFocused();
 });
 
 // #design-pass: the disabled primary CTA used to render as a dead grey slab indistinguishable from a
@@ -42,26 +42,15 @@ test("the entry CTA meets the 44px touch target", async ({ page }) => {
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
 });
 
-// The keyboard focus ring must stay the contrast-tuned accent-as-text (--accent-text: #7c7ef5 on dark,
-// #4b4ee0 on light), NOT the dimmer --color-accent fill (#5457e8). This is a live regression risk rather
-// than a hypothetical: what draws it is the global :focus-visible rule in viewer.css, and every OTHER rule
-// in that file is migration debt scheduled for deletion as its component moves to Astryx. Deleting this
-// one along with them silently changes the indicator — bite-checked here (removing the rule drops the
-// outline to the inherited text colour). Astryx's own rings would not restore it either: astryx.css draws
-// them as `outline: 2px solid var(--color-accent)` (the fill), which is dimmer (~3.4:1 on the near-black
-// background vs 5.8:1 for #7c7ef5 — still over the 3:1 WCAG 2.2 SC 1.4.11 asks of a non-text indicator,
-// but visibly dimmer). The assertion is mode-agnostic (see the probe below): it pins ring == --accent-text
-// and ring != fill in whichever mode the run is in. On a migrated (Astryx TextArea) control specifically.
-test("keyboard focus rings stay the bright accent on Astryx controls", async ({ page }) => {
+// The credential field has one focus owner: its containing control. This guards both the bright,
+// contrast-tuned accent and the regression that produced nested/doubled outlines around the old textarea.
+test("the pass field has one bright focus treatment", async ({ page }) => {
   await page.goto(`/${qp}`);
-  const field = page.getByLabel("Machine pass");
+  const field = page.getByLabel("Machine pass", { exact: true });
   await field.focus();
-  const ring = await field.evaluate((el) => {
+  const ring = await page.locator(".pass-control").evaluate((el) => {
     const s = getComputedStyle(el);
-    // Resolve --accent-text (the contrast-tuned accent-as-text) and --accent (the fill) in the CURRENT
-    // colour mode via probe elements, so the assertion is mode-agnostic: the ring is #7c7ef5 on dark and
-    // #4b4ee0 on light, but in BOTH it must be --accent-text and NOT the fill (#5457e8 = --color-accent,
-    // which is what a stock Astryx ring would use).
+    const input = el.querySelector("input");
     const probe = (v: string) => {
       const p = document.createElement("span");
       p.style.color = `var(${v})`;
@@ -71,17 +60,15 @@ test("keyboard focus rings stay the bright accent on Astryx controls", async ({ 
       return c;
     };
     return {
-      color: s.outlineColor,
-      width: s.outlineWidth,
-      style: s.outlineStyle,
+      border: s.borderColor,
+      shadow: s.boxShadow,
+      inputOutline: input ? getComputedStyle(input).outlineWidth : "missing",
       accentText: probe("--accent-text"),
-      fill: probe("--accent"),
     };
   });
-  expect(ring.color).toBe(ring.accentText); // the ring IS --accent-text, whatever the mode
-  expect(ring.color).not.toBe(ring.fill); // and NOT the dimmer --color-accent fill
-  expect(ring.style).toBe("solid");
-  expect(Number.parseFloat(ring.width)).toBeGreaterThanOrEqual(2);
+  expect(ring.border).toBe(ring.accentText);
+  expect(ring.shadow).not.toBe("none");
+  expect(Number.parseFloat(ring.inputOutline)).toBe(0);
 });
 
 // #design-pass (#8): the session row truncates its title/cwd to one line; the full identity (title ·
@@ -99,8 +86,33 @@ test("the session row title carries branch + cwd as a hover tooltip", async ({
   expect(title).toContain("rc box"); // the session title
   expect(title).toContain("main"); // the git branch from the announce
   expect(title).toContain("/home/ubuntu/remote-claw"); // the full cwd (the part the ellipsis hides)
-  // The default stable host announces the native-RC harness → the list badge reads "Claude Code · RC" (#164).
-  await expect(row.locator(".agent-badge")).toHaveText("Claude Code · RC");
+  await expect(row.locator(".agent-badge")).toHaveText("Claude Code");
+});
+
+test("the mobile header and session metadata stay inside the viewport", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ harness: "tmux", caps: "tmux" });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  const row = page.locator("button.row", { hasText: "rc box" });
+  await expect(row).toBeVisible();
+
+  const layout = await page.evaluate(() => {
+    const topbar = document.querySelector<HTMLElement>(".topbar");
+    const brand = document.querySelector<HTMLElement>(".topbar .brand");
+    const session = document.querySelector<HTMLElement>("button.row");
+    return {
+      topbarFits: topbar !== null && topbar.scrollWidth <= topbar.clientWidth,
+      brandHeight: brand?.getBoundingClientRect().height ?? 0,
+      sessionFits: session !== null && session.scrollWidth <= session.clientWidth,
+    };
+  });
+  expect(layout.topbarFits).toBe(true);
+  expect(layout.brandHeight).toBeLessThanOrEqual(32);
+  expect(layout.sessionFits).toBe(true);
+  await expect(page.locator(".topbar .count")).toBeHidden();
 });
 
 // #164: the session list labels WHICH agent + bridge mode each session is, so native-RC Claude Code, tmux
@@ -111,9 +123,9 @@ test("the session-list badge labels native RC, tmux, and opencode from the annou
   seedHost,
 }) => {
   for (const [harness, caps, label, agent] of [
-    ["native-rc", "native-rc", "Claude Code · Native RC", "claude-code"],
-    ["tmux", "tmux", "Claude Code · TX", "claude-code"],
-    ["opencode", "opencode-skip", "opencode", "opencode"],
+    ["native-rc", "native-rc", "Claude Code", "claude-code"],
+    ["tmux", "tmux", "Claude Code", "claude-code"],
+    ["opencode", "opencode", "OpenCode", "opencode"],
   ] as const) {
     const { pass } = await seedHost({ harness, caps });
     await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
@@ -126,10 +138,10 @@ test("the session-list badge labels native RC, tmux, and opencode from the annou
   }
 });
 
-// #design-pass: "Forget pass" wipes the credential and bounces to the gate — a single misclick used to
+// #design-pass: Disconnect wipes the credential and bounces to the gate — a single misclick used to
 // drop a live session instantly. It is now a two-step confirm: the first tap only ARMS (relabels), and
 // the session stays connected; only the second tap forgets.
-test("Forget pass is a two-step confirm — one tap arms without dropping the session", async ({
+test("Disconnect is a two-step confirm — one tap arms without dropping the session", async ({
   page,
   seedHost,
 }) => {
@@ -141,13 +153,13 @@ test("Forget pass is a two-step confirm — one tap arms without dropping the se
   // First tap: ARMS (the label/aria-label flips) but does NOT forget. The armed button's presence already
   // proves we didn't bounce to the gate (the gate has no such button), so we assert that and click confirm
   // PROMPTLY — the arm auto-disarms after 4s, so we must not sit on slow intervening assertions here.
-  await page.getByRole("button", { name: "Forget pass", exact: true }).click();
-  const confirm = page.getByRole("button", { name: "Confirm forget pass" });
-  await expect(confirm).toHaveText("Tap again to forget"); // armed, still in the Console (not the gate)
+  await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+  const confirm = page.getByRole("button", { name: "Confirm disconnect" });
+  await expect(confirm).toHaveText("Confirm"); // armed, still in the Console (not the gate)
   await confirm.click(); // second tap forgets
 
   // Now the credential is wiped and we land back on the connect gate.
-  await expect(page.getByLabel("Machine pass")).toBeVisible();
+  await expect(page.getByLabel("Machine pass", { exact: true })).toBeVisible();
 });
 
 // #design-pass (review follow-up): the transcript must FOLLOW to the foot when the reader is pinned there
@@ -224,7 +236,7 @@ test.describe("mobile a11y (#151)", () => {
   test("the connect field is ≥16px (no iOS focus auto-zoom)", async ({ page }) => {
     await page.goto(`/${qp}`);
     const fs = await page
-      .getByLabel("Machine pass")
+      .getByLabel("Machine pass", { exact: true })
       .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
     expect(fs).toBeGreaterThanOrEqual(16);
   });
@@ -254,6 +266,51 @@ test.describe("mobile a11y (#151)", () => {
       const h = await c.evaluate((el) => el.getBoundingClientRect().height);
       expect(h, "composer control height").toBeGreaterThanOrEqual(44);
     }
+  });
+
+  test("expandable transcript rows meet the 44px touch target", async ({ page, seedHost }) => {
+    const { pass } = await seedHost();
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+
+    for (const control of [
+      page.locator(".tool-row-x > summary").first(),
+      page.locator(".tool-result > summary").first(),
+    ]) {
+      await expect(control).toBeVisible();
+      const height = await control.evaluate((el) => el.getBoundingClientRect().height);
+      expect(height).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  test("the question controls have a clear primary action and 44px targets", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost({ askq: true, caps: "compat-mitm" });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+    const field = page.locator(".q-freeform");
+    await expect(field).toBeVisible();
+    const height = await field.evaluate((el) => el.getBoundingClientRect().height);
+    expect(height).toBeGreaterThanOrEqual(44);
+    const fontSize = await field.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize));
+    expect(fontSize).toBeGreaterThanOrEqual(16);
+    const actions = page.locator(".perm-actions");
+    const dismiss = page.getByRole("button", { name: "Dismiss" });
+    const submit = page.locator(".q-submit");
+    const [actionsBox, dismissBox, submitBox] = await Promise.all([
+      actions.boundingBox(),
+      dismiss.boundingBox(),
+      submit.boundingBox(),
+    ]);
+    expect(actionsBox).not.toBeNull();
+    expect(dismissBox).not.toBeNull();
+    expect(submitBox).not.toBeNull();
+    expect(Math.abs((dismissBox?.width ?? 0) - (submitBox?.width ?? 0))).toBeLessThan(2);
+    expect(submitBox?.width ?? 0).toBeGreaterThanOrEqual(((actionsBox?.width ?? 0) - 8) / 2 - 1);
   });
 
   test("on a touch device, Enter inserts a newline (does not send)", async ({ page, seedHost }) => {
@@ -381,29 +438,69 @@ test.describe("capability gating (#149)", () => {
     hasTouch: false,
   });
 
-  test("an opencode-skip host shows the permissions-off badge, a disabled mode button, and no model switcher", async ({
+  test("the supported OpenCode host keeps permissions native and exposes only text plus interrupt", async ({
     page,
     seedHost,
   }) => {
-    const { pass } = await seedHost({ caps: "opencode-skip" });
+    const { pass } = await seedHost({
+      caps: "opencode",
+      harness: "opencode",
+      perm: true,
+      askq: true,
+    });
     await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
     await page.getByRole("button", { name: "Connect" }).click();
-    await page.locator("button.row", { hasText: "rc box" }).click();
+    const sessionRow = page.locator("button.row", { hasText: "rc box" });
+    await expect(sessionRow.locator(".row-sub")).toContainText("online");
+    await expect(sessionRow.locator(".working, .needs-badge")).toHaveCount(0);
+    await sessionRow.click();
 
-    // structuredPermissions:false → the "permissions off" posture badge is shown in the chat header.
-    await expect(page.locator(".perms-bypassed")).toBeVisible();
+    await expect(sessionRow.locator(".agent-badge")).toHaveText("OpenCode");
+    // structuredPermissions:false means permission interaction remains in the native OpenCode TUI. It
+    // must never be presented as disabled/bypassed permission enforcement.
+    await expect(page.locator(".local-input-disclosure")).toContainText(
+      "Permission prompts stay in the OpenCode TUI.",
+    );
+    await expect(page.locator(".perms-bypassed")).toHaveCount(0);
+    await expect(page.locator(".perm-actions, .q-options, .q-submit")).toHaveCount(0);
+    await expect(page.getByText("Which name do you like best?", { exact: true })).toHaveCount(0);
 
-    // controls.setMode:false → the composer's permission-mode button is disabled (read-only display).
+    // Unsupported mode/attachment/model controls are disabled or absent.
     await expect(page.getByTestId("composer-mode")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Attach photos" })).toBeDisabled();
+
+    const composer = page.getByRole("textbox", { name: "Message" });
+    await expect(composer).toHaveAttribute("placeholder", "Message this session");
+    await composer.fill("   ");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await composer.fill("  /compact  ");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await expect(page.getByText(/Use the local OpenCode TUI/)).toBeVisible();
+
+    // Valid OpenCode text is admitted and handed to the viewer send boundary without trimming. This
+    // scripted UI fixture has no native OpenCode history leg, so driver/relay tests and the real M2
+    // acceptance own canonical native correlation rather than this optimistic presentation assertion.
+    await composer.fill("  preserve these edges  ");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const sent = page.locator(".row-user", { hasText: "preserve these edges" });
+    await expect(sent).toHaveCount(1);
+    expect(await sent.locator(".pill").textContent()).toBe("  preserve these edges  ");
 
     // controls.setModel:false → the ⋯ sheet replaces the model rows with an explanatory note.
     await page.locator("button.chat-menu").click();
     const sheet = page.locator(".sheet");
     await expect(sheet).toBeVisible();
+    await expect(sheet).toContainText("OpenCode · Native OpenCode session");
+    await expect(sheet).toContainText("Permission prompts stay in OpenCode");
     await expect(sheet).toContainText("can’t switch model");
     await expect(sheet.locator(".mode-row", { hasText: "Opus" })).toHaveCount(0);
     // interrupt:true → Interrupt is still actionable (not disabled).
-    await expect(sheet.locator(".mode-row-danger")).toBeEnabled();
+    const interrupt = sheet.locator(".mode-row-danger");
+    await expect(interrupt).toBeEnabled();
+    await expect(sheet.getByText(/End session/i)).toHaveCount(0);
+    await interrupt.click();
+    await expect(sheet).not.toBeVisible();
+    await expect(page.locator(".send-err")).toHaveCount(0);
   });
 
   test("a tmux host disables set_mode but keeps the model switcher and shows no permissions-off badge", async ({
@@ -436,9 +533,8 @@ test.describe("capability gating (#149)", () => {
     await page.getByRole("button", { name: "Connect" }).click();
     await page.locator("button.row", { hasText: "rc box" }).click();
 
-    await expect(page.locator(".perms-local")).toHaveText("permissions local");
     await expect(page.locator(".local-input-disclosure")).toContainText(
-      "Prompts entered in the local Claude terminal may not appear here.",
+      "Local terminal prompts may not appear here.",
     );
     await expect(page.locator(".perms-bypassed")).toHaveCount(0);
     await expect(page.locator(".perm-local-only, .perm-local-note")).toHaveCount(0);
@@ -457,6 +553,7 @@ test.describe("capability gating (#149)", () => {
 
     await page.locator("button.chat-menu").click();
     const sheet = page.locator(".sheet");
+    await expect(sheet).toContainText("Permission prompts stay in the local terminal");
     await expect(sheet).toContainText("can’t switch model");
     await expect(sheet.locator(".mode-row", { hasText: "Opus" })).toHaveCount(0);
     await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
@@ -470,11 +567,9 @@ test.describe("capability gating (#149)", () => {
     await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
     await page.getByRole("button", { name: "Connect" }).click();
     const row = page.locator("button.row", { hasText: "rc box" });
-    await expect(row.locator(".agent-badge")).toHaveText("Claude Code · Native RC");
+    await expect(row.locator(".agent-badge")).toHaveText("Claude Code");
     await row.click();
 
-    await expect(page.locator(".chat-head .agent-badge")).toHaveText("Claude Code · Native RC");
-    await expect(page.locator(".perms-local")).toHaveText("permissions local");
     await expect(page.locator(".perms-bypassed")).toHaveCount(0);
     await expect(page.locator(".local-input-disclosure")).toHaveCount(0);
     await expect(page.getByTestId("composer-mode")).toBeDisabled();
@@ -498,6 +593,8 @@ test.describe("capability gating (#149)", () => {
 
     await page.locator("button.chat-menu").click();
     const sheet = page.locator(".sheet");
+    await expect(sheet).toContainText("Claude Code · Anthropic remote control");
+    await expect(sheet).toContainText("Permission prompts stay in the local terminal");
     await expect(sheet).toContainText("can’t switch model");
     await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
   });
@@ -540,7 +637,7 @@ test("stale presence disables every compatibility mutation and action guards pub
   await expect(page.locator('.chat-status[data-state="reconnecting"]')).toBeVisible();
   await page.clock.fastForward(40_000);
   await expect(page.locator('.chat-status[data-state="disconnected"]')).toContainText(
-    "its most recent delivery and output tail may be incomplete",
+    "Recent output may be incomplete",
   );
 
   const composer = page.getByRole("textbox", { name: "Message" });
@@ -606,13 +703,13 @@ test.describe("desktop layout (≥761px)", () => {
     // The in-chat back button is redundant on desktop (sidebar visible) → hidden.
     await expect(page.locator(".back")).toBeHidden();
 
-    // The ⋯ menu IS reachable on desktop and opens the session-actions sheet (model + interrupt).
+    // The ⋯ menu IS reachable on desktop and opens session settings (model + interrupt).
     const menu = page.locator("button.chat-menu");
     await expect(menu).toBeVisible();
     await menu.click();
     const sheet = page.locator(".sheet");
     await expect(sheet).toBeVisible();
-    await expect(sheet).toContainText("Change model");
+    await expect(sheet).toContainText("Model");
     await expect(sheet).toContainText("Interrupt");
   });
 
@@ -632,9 +729,9 @@ test.describe("desktop layout (≥761px)", () => {
     expect(cb).not.toBeNull();
     expect(tb).not.toBeNull();
     if (!cb || !tb) return;
-    // Capped to ~820 (the reading measure), NOT the full ~1120 pane — the full-bleed bug this fixes.
-    expect(cb.width).toBeLessThanOrEqual(821);
-    // Centered on the SAME column as the transcript (both margin-inline:auto at max-width 820).
+    // Capped to the 880px reading measure, NOT the full ~1120 pane — the full-bleed bug this fixes.
+    expect(cb.width).toBeLessThanOrEqual(881);
+    // Centered on the SAME column as the transcript (both margin-inline:auto at max-width 880).
     const composerCenter = cb.x + cb.width / 2;
     const transcriptCenter = tb.x + tb.width / 2;
     expect(Math.abs(composerCenter - transcriptCenter)).toBeLessThan(5);
@@ -671,8 +768,9 @@ test.describe("desktop layout (≥761px)", () => {
 // "light" surface stays dark (and vice-versa) and the luminance assertions fail.
 
 /** Resolved colour-mode signals from the running page: <html>'s data-theme + color-scheme, the Astryx card
- *  surface luminance (proves the theme's light half), and the body text luminance (proves the hand-written
- *  --text token flipped). Relative luminance runs 0 (black) … 1 (white). */
+ *  TOKEN luminance (proves the theme's light half even where mobile intentionally makes the entry card
+ *  transparent), and body text luminance (proves the hand-written --text token flipped). Relative
+ *  luminance runs 0 (black) … 1 (white). */
 async function modeSignals(page: import("@playwright/test").Page) {
   return page.evaluate(() => {
     const lum = (rgb: string) => {
@@ -684,11 +782,15 @@ async function modeSignals(page: import("@playwright/test").Page) {
       return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
     };
     const html = document.documentElement;
-    const card = document.querySelector(".astryx-card");
+    const probe = document.createElement("span");
+    probe.style.backgroundColor = "var(--color-background-card)";
+    document.body.appendChild(probe);
+    const cardLum = lum(getComputedStyle(probe).backgroundColor);
+    probe.remove();
     return {
       dataTheme: html.getAttribute("data-theme"),
       colorScheme: getComputedStyle(html).colorScheme,
-      cardLum: card ? lum(getComputedStyle(card).backgroundColor) : null,
+      cardLum,
       bodyTextLum: lum(getComputedStyle(document.body).color),
     };
   });
@@ -708,7 +810,7 @@ test.describe("colour mode (light / dark)", () => {
       document.cookie = "rc-theme=light; path=/; samesite=lax";
     });
     await page.reload();
-    await expect(page.getByLabel("Machine pass")).toBeVisible();
+    await expect(page.getByLabel("Machine pass", { exact: true })).toBeVisible();
     const s = await modeSignals(page);
     expect(s.dataTheme).toBe("light");
     expect(s.colorScheme).toBe("light");
@@ -723,7 +825,7 @@ test.describe("colour mode (light / dark)", () => {
       document.cookie = "rc-theme=dark; path=/; samesite=lax";
     });
     await page.reload();
-    await expect(page.getByLabel("Machine pass")).toBeVisible();
+    await expect(page.getByLabel("Machine pass", { exact: true })).toBeVisible();
     const s = await modeSignals(page);
     expect(s.dataTheme).toBe("dark");
     expect(s.colorScheme).toBe("dark");

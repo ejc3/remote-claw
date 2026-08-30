@@ -11,6 +11,10 @@ const render = (
 ) =>
   renderToStaticMarkup(
     createElement(SessionSheet, {
+      sessionTitle: "rc box",
+      agentLabel: "Claude Code",
+      connectionLabel: "Private relay",
+      permissionLabel: "Permission prompts stay in the local terminal",
       branch,
       currentModel,
       canModel: caps.canModel ?? true,
@@ -26,7 +30,7 @@ const render = (
 describe("SessionSheet", () => {
   it("offers the model switcher (Default/Opus/Sonnet/Haiku) + Interrupt", () => {
     const html = render("main");
-    expect(html).toContain("Change model");
+    expect(html).toContain("Model");
     for (const m of ["Default", "Opus", "Sonnet", "Haiku"]) expect(html).toContain(m);
     expect(html).toContain("Interrupt");
   });
@@ -53,8 +57,8 @@ describe("SessionSheet", () => {
     // exactly one row is pressed/active
     expect(opus.match(/aria-pressed="true"/g)?.length).toBe(1);
     expect(opus.match(/data-active="true"/g)?.length).toBe(1);
-    // and it's the Opus row (the check ✓ is rendered)
-    expect(opus).toContain("✓");
+    // and the consistent icon vocabulary renders its check mark.
+    expect(opus).toContain('data-icon="check"');
   });
 
   // #design-pass: Interrupt is destructive and must read differently from the benign model/branch rows
@@ -68,7 +72,7 @@ describe("SessionSheet", () => {
   // an explanatory note instead of buttons that silently no-op.
   it("replaces the model rows with a note when the driver can't switch model", () => {
     const html = render("main", null, { canModel: false });
-    expect(html).toContain("Change model"); // the section header stays
+    expect(html).toContain("Model"); // the section header stays
     expect(html).toContain("can’t switch model");
     expect(html).not.toContain("Opus"); // no model buttons rendered
     expect(html).toContain("Interrupt"); // other actions remain

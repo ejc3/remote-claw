@@ -32,8 +32,9 @@ What exists today:
 | <code>--rc-trace</code> | Implemented transparent inspector; the official client works, but no remote-claw browser is connected |
 | Direct Anthropic RC client | Implemented and wired into the Linux/exact-2.1.237 <code>claude-native</code> companion |
 | Claude native collaboration plus multiple remote-claw browsers | M1 complete on Linux/exact-2.1.237: structured provider-ordered text, local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and exact-SHA deployed-broker acceptance |
-| OpenCode server adapter and tmux fallback | Experimental implementations with documented limits |
-| Codex | Pinned app-server multi-client evidence; no product adapter yet |
+| OpenCode server adapter | M2 complete for exact 1.17.5/Linux arm64, the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart |
+| tmux fallback | Experimental lower-fidelity implementation with documented limits |
+| Codex | Codex Remote is a current product and pinned app-server multi-client evidence exists; no remote-claw adapter or same-thread coexistence result yet |
 | Bedrock and no-Anthropic-account launch | Experimental inference/account paths, separate from adapter fidelity |
 
 The current private relay is useful product infrastructure, but no single adapter is the whole
@@ -41,7 +42,7 @@ product.
 
 ## 2. As-built system map
 
-The current supported beta path is:
+The private Claude replacement (`mitm`) path is:
 
 ~~~text
 ┌──────────────── browser ────────────────┐
@@ -70,11 +71,13 @@ The repository has three production components:
 - **packages/clawsec** is the WebCrypto-compatible key, token, AEAD, chunking, handoff, and wire
   package shared by Node and the browser.
 - **packages/cli** is the transparent Claude wrapper, local identity store, broker transport,
-  private RC facade, trace inspector, and provider-native RC companion/client.
+  private RC facade, trace inspector, provider-native RC companion/client, and pinned OpenCode
+  HTTP/SSE companion.
 - **apps/web** is both the authenticated ciphertext broker and the mobile-first viewer.
 
 There is no required host daemon or plaintext cloud service in the current path. Each wrapper process
-owns the native session it is relaying. Sessions sharing one secret are grouped under one logical host
+owns its process-local projection and binding; externally owned Claude-native and OpenCode sessions
+outlive companion failure or restart. Sessions sharing one secret are grouped under one logical host
 identity.
 
 ## 3. Identity and key hierarchy
@@ -298,8 +301,9 @@ state is memory-only. Forgetting the identity removes the wrapped blob, best-eff
 key, and clears live viewer state.
 
 Multiple browsers holding the same pass can subscribe and submit to the same remote-claw session.
-That is implemented for the private relay and native companion. The native API-path run does not by
-itself establish coexistence through the literal official Claude app UI.
+That is implemented for the private relay, Claude native companion, and pinned OpenCode companion. A
+native API-path run alone does not establish coexistence through a literal provider app UI; those
+boundaries need their own acceptance.
 
 The viewer renders only capabilities announced by the active driver. Unsupported controls remain
 disabled instead of producing a false success indication.
@@ -328,7 +332,7 @@ that the link is one-time but the recovered pass grants indefinite machine-wide 
 record-forging authority. The current pairing copy does not yet meet that disclosure gate, so handoff
 must remain disabled even where the external rate limit exists.
 
-## 10. Current Claude modes
+## 10. Current native modes
 
 ### 10.1 Plain wrapper
 
@@ -395,18 +399,42 @@ Claude and its provider session remain alive. The viewer advertises
 <code>{agent:"claude-code",mode:"native-rc"}</code> with permissions, status, controls, and
 attachments all disabled. This surface is Linux-only and pins exact Claude 2.1.237.
 
+### 10.5 Pinned OpenCode text/interrupt companion
+
+<code>--rc-app &lt;origin&gt; --rc-driver=opencode --rc-oc-session &lt;ses_…&gt;</code> attaches to one
+exact already-running OpenCode 1.17.5 session on Linux arm64 through an explicit-port literal HTTP
+loopback origin. It pins <code>amazon-bedrock/global.anthropic.claude-sonnet-4-6</code>, accepts no
+forwarded arguments, performs no attached-root listing, discovery, or creation, and does not own the
+external OpenCode process. The companion follows child sessions announced from that root. The proved
+server environment was <code>AWS_REGION=us-west-1</code> plus explicit temporary SigV4 credential
+values; other regions or credential modes require their own gate.
+
+OpenCode generates the canonical ordered message IDs. Browser text uses an exact
+<code>prt_rc_&lt;compact host UUID&gt;</code> part marker; capture requires that complete marker and the
+complete immutable text before acknowledging the downstream event and publishing the canonical native
+user row. One atomic transport-plus-idle latch serializes browser text FIFO. An observed intervening
+local TUI user, <code>busy</code>, or <code>retry</code> blocks admission; live idle merely triggers
+bounded history plus exact status reproof. The status snapshot is corroboration, not a native atomic
+lock. Reconnect reconciles before writes resume.
+
+Only non-empty non-slash text and interrupt are advertised. Permissions remain native/local and
+structured permissions are false by default; the separate positive permission-mirroring opt-in is
+experimental. Companion teardown and broker/capture loss never abort the native run. Restart against
+the same exact <code>ses_*</code> creates a fresh remote-claw projection and does not consume old broker
+commands.
+
 ## 11. Agent adapters and inference connectors
 
 The adapter seam maps a native harness into the same host session, broker, and viewer contracts.
-The MITM private-relay path is the supported Claude beta; the other implementations have narrower,
-truthfully labeled guarantees and remain in the product plan.
+The MITM private-relay path, Claude native text companion, and exact OpenCode M2 tuple are supported
+at their stated boundaries. Other implementations have narrower, truthfully labeled guarantees.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
 | Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart and literal official-client coexistence | Exact Linux/2.1.237 only; no remote controls, permissions, attachments, or status |
 | tmux | Experimental Claude compatibility driver | Transcript/pane correlation is weaker than native RC; permission mirroring uses hooks |
-| OpenCode | Experimental server driver | Partial history, bounded reconnect dedup, and no proven live reattach |
-| Codex | Research-backed future app-server adapter | Multi-client facts are pinned, but no broker adapter or official-remote coexistence exists |
+| OpenCode | Supported text/interrupt server companion for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; broader tuples and permission mirroring are not graduated |
+| Codex | Research-backed future app-server adapter; Codex Remote is a current product | Multi-client facts are pinned, but no broker adapter or same-thread Remote coexistence result exists |
 | Bedrock inference | Experimental MITM connector | Replaces Anthropic inference while preserving the private local RC facade |
 | Accountless mode | Experimental Bedrock companion | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
 
@@ -504,8 +532,8 @@ The native companion implements this bounded orchestration:
    the retired projection's channel or turn historical backfill into another provider POST.
 
 This remains a bounded adapter milestone. Add more architecture only when a failing acceptance
-scenario demonstrates a concrete need, then reuse the proven pattern for OpenCode and Codex where
-their native protocols support it. Tmux keeps its lower-fidelity contract.
+scenario demonstrates a concrete need, then reuse proven patterns where another native protocol needs
+them. Tmux keeps its lower-fidelity contract.
 
 On 2026-08-30, an exact isolated Claude 2.1.237 run bound ordinary Anthropic RC and kept the local TUI
 active. A local prompt, prompts from two simultaneous remote-claw browsers, and a prompt from an
@@ -537,8 +565,45 @@ provider history/SSE; a separate direct provider-history recount was unavailable
 credential and is not claimed. After the official client disconnected, another browser turn and reply
 appeared once in both views and the native TUI remained live.
 
-M1 is complete. This does not complete the OpenCode, Codex, tmux, Bedrock/accountless, or full-product
-matrix; the bounded OpenCode M2 text/interrupt adapter is next.
+M1 is complete. This does not complete Codex, broader OpenCode tuples, tmux,
+Bedrock/accountless, or the full-product matrix.
+
+## 15. M2 complete: pinned OpenCode text/interrupt companion
+
+The OpenCode companion intentionally reuses the `Session`, relay, broker, and viewer rather than
+introducing a second control plane. Its native boundary is different from Claude's: attach to one exact
+externally owned `ses_*`; subscribe first; reconcile a bounded append-only native message graph; admit
+FIFO browser text only through one atomic transport-plus-idle latch; and use an exact caller part marker
+to bind OpenCode's generated native user coordinate. Native status is an internal admission proof, not
+an advertised viewer capability.
+
+On 2026-08-30, the exact OpenCode 1.17.5/Linux arm64/pinned-Bedrock tuple passed with the real TUI and
+two independent browsers. The OpenCode server used <code>AWS_REGION=us-west-1</code> plus explicit
+temporary SigV4 credential values. The run verified OpenCode-generated IDs, exact markers for browser
+A and B, one copy of each TUI/browser turn, immutable reload, interrupt of a busy turn plus a later
+continuation, and companion-only restart against the same exact session. Native history had the same
+SHA-256 before and after restart, and every old command appeared once. Deterministic tests own
+malformed/reused coordinates, parent and order changes, busy/retry and local-user exclusion, live-idle
+history/status reproof, reconnect-before-write, ambiguous mutations, projection loss, and no teardown
+abort. Other regions or credential modes require their own gate.
+
+The supported path leaves permissions native/local. Experimental permission mirroring, stable same-row
+identity, other OpenCode versions/platforms/models, and richer control families are separate future
+capabilities and do not reopen M2. The next structured milestone is M3a: one current Codex TUI and
+multiple remote-claw browsers on one exact native thread. Codex Remote already exists; M3b asks whether
+that same thread can also preserve the supported provider topology. Official phone pairing begins in
+the ChatGPT desktop app on macOS or Windows, and the desktop app can run projects reached over SSH,
+including a Linux development host. See the official
+[Codex Remote overview](https://learn.chatgpt.com/docs/remote) and
+[Remote connections guide](https://learn.chatgpt.com/docs/remote-connections).
+
+## 16. Post-M2 viewer parity lane
+
+Viewer work may proceed as a small parallel product lane without reopening M1 or M2. Start with a
+compact activity rollup and background-task sheet built from event families already represented by the
+shared transcript. Graduate richer Claude-native command, task-phase, media, and composer families only
+after redacted trace evidence defines their semantics and lifecycle. Visual resemblance is useful UI
+inspiration; it is not a capability or cross-agent parity claim.
 
 ## 17. Claude Remote Control boundary
 

@@ -60,8 +60,10 @@ The smallest Codex adapter should first prove:
 4. explicit request/response ownership for approvals and questions; and
 5. failure isolation that leaves the native TUI usable.
 
-Only after that vertical works should Codex/ChatGPT Remote be added through a supported provider
-boundary. The proof does not justify a generalized coordinator, outward gateway, signing hierarchy,
+Only after that M3a vertical works should M3b test same-thread coexistence with the current Codex
+Remote product through its supported topology. Official phone pairing begins in ChatGPT desktop on
+macOS or Windows, which can run a project reached over SSH; product existence is no longer the open
+question. The proof does not justify a generalized coordinator, outward gateway, signing hierarchy,
 or durable command schema. Add state only for a demonstrated native failure with an executable fault
 test.
 

@@ -35,7 +35,7 @@ Claude config and does not provide a usable Anthropic credential.
 | --- | --- | --- |
 | Claude MITM | `bedrock-mantle` Messages API | Implemented inference translation, control-plane synthesis, and private viewer round-trip |
 | Claude tmux | Native Claude Bedrock configuration | Experimental transcript/pane fallback; no structured RC or official-client semantics |
-| OpenCode | OpenCode `amazon-bedrock` provider | Experimental native HTTP/SSE adapter with the limits in [OpenCode driver](opencode-driver.md) |
+| OpenCode | OpenCode `amazon-bedrock` provider | Supported only for the exact pinned M2 tuple; other models, regions, versions, platforms, and capabilities require separate gates. See [OpenCode driver](opencode-driver.md) |
 | Codex | None advertised | Requires a separately tested provider route before any support claim |
 
 The 2026-06-28 runs observed one real viewer prompt and model response for each of the first three

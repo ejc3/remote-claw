@@ -12,8 +12,6 @@ import { Markdown } from "@astryxdesign/core/Markdown";
 import { Spinner } from "@astryxdesign/core/Spinner";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Text } from "@astryxdesign/core/Text";
-import { TextArea } from "@astryxdesign/core/TextArea";
-import { VStack } from "@astryxdesign/core/VStack";
 import { parsePass, toHex } from "@remote-claw/clawsec";
 import {
   type CSSProperties,
@@ -64,6 +62,7 @@ import {
   Viewer,
 } from "./lib/viewer";
 import { ThemeToggle } from "./theme-toggle";
+import { UiIcon } from "./ui-icon";
 
 export interface TranscriptGap {
   nextSeq: number;
@@ -164,6 +163,35 @@ export function isStableClaudeSurface(
   );
 }
 
+/** The native-ordered OpenCode text tuple. Permission mirroring is orthogonal and experimental: it may
+ * change structuredPermissions without changing caller-ID, slash, or immutable-text semantics. */
+export function isOpenCodeNativeTextSurface(
+  harness: Harness | undefined,
+  capabilities: Capabilities | undefined,
+): boolean {
+  return (
+    harness?.agent === "opencode" &&
+    harness.mode === "opencode" &&
+    capabilities?.status === false &&
+    capabilities.attachments === false &&
+    capabilities.controls.interrupt === true &&
+    capabilities.controls.setModel === false &&
+    capabilities.controls.setMode === false &&
+    capabilities.controls.end === false
+  );
+}
+
+/** The supported default additionally leaves permissions native/local. */
+export function isSupportedOpenCodeSurface(
+  harness: Harness | undefined,
+  capabilities: Capabilities | undefined,
+): boolean {
+  return (
+    isOpenCodeNativeTextSurface(harness, capabilities) &&
+    capabilities?.structuredPermissions === false
+  );
+}
+
 /** Every remote mutation requires both fresh host presence and an advertised capability. */
 export function remoteMutationEnabled(connected: boolean, supported = true): boolean {
   return connected && supported;
@@ -175,16 +203,24 @@ export function reportsWorkerStatus(capabilities: Capabilities | undefined): boo
   return capabilities?.status ?? true;
 }
 
-/** Classify text which the stable Claude composer must not publish. The caller separately accounts for
- * compatibility attachments; stable Claude has none, so an empty trimmed string is never a mutation. */
+/** Classify text which a supported text-only native surface must not publish. The caller separately
+ * accounts for compatibility attachments; these surfaces have none, so trimmed-empty and slash-prefixed
+ * text are never remote mutations. Valid OpenCode text keeps its original bytes at the send boundary. */
 export function stableTextBlockReason(
   text: string,
-  stableClaude: boolean,
+  nativeTextOnly: boolean,
 ): "empty" | "slash" | null {
   const trimmed = text.trim();
   if (trimmed === "") return "empty";
-  if (stableClaude && trimmed.startsWith("/")) return "slash";
+  if (nativeTextOnly && trimmed.startsWith("/")) return "slash";
   return null;
+}
+
+/** Select the exact text bytes passed to sendComposer after admission. OpenCode binds its native
+ * correlation identity to immutable text, so validation may inspect trim() but the send path must not
+ * rewrite admitted bytes. Compatibility surfaces retain their established outer-whitespace trimming. */
+export function composerTextForSend(text: string, preserveOriginal: boolean): string {
+  return preserveOriginal ? text : text.trim();
 }
 
 /** The OPTIMISTIC echo (#113) of a just-sent message — rendered instantly so the user's image/text
@@ -465,14 +501,8 @@ export function Reconnecting() {
 function EntryCard({ children }: { children: ReactNode }) {
   return (
     <main className="connect">
-      {/* `entry-card` carries the drop shadow. Astryx's Card has no elevation prop, and on this
-          near-black palette a card surface sits only 1.14:1 above the body — measured — so with no
-          shadow the screen reads as one flat slab with a button floating on it. */}
-      <Card className="entry-card" width="100%" maxWidth={460} padding={6}>
-        {/* gap={5} (20px) BETWEEN groups; callers nest a tighter VStack around what belongs together.
-            One uniform gap spaced brand, headline, copy, field, button and hint identically, which is
-            what made the stack read as undifferentiated. */}
-        <VStack gap={5}>{children}</VStack>
+      <Card className="entry-card" width="100%" maxWidth={520} padding={6}>
+        <div className="entry-stack">{children}</div>
       </Card>
     </main>
   );
@@ -481,7 +511,9 @@ function EntryCard({ children }: { children: ReactNode }) {
 function Brand() {
   return (
     <span className="brand">
-      <span className="brand-mark">⌘</span>
+      <span className="brand-mark">
+        <UiIcon name="brand" size={18} />
+      </span>
       remote-claw
     </span>
   );
@@ -494,63 +526,81 @@ export function Connect(props: {
   connecting: boolean;
   error: string | null;
 }) {
-  // Only the empty-pass case needs stating: Astryx's Button already treats isLoading as disabling
-  // (disabled = isDisabled || isLoading && !isInterruptible), so `|| props.connecting` would be a
-  // second way of saying the same thing.
+  const [showPass, setShowPass] = useState(false);
+  const passInputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    // This is a dedicated single-field gate; focusing once on mount avoids an extra tap and never
+    // steals focus after the user has begun interacting elsewhere.
+    passInputRef.current?.focus();
+  }, []);
   const disabled = props.pass.trim() === "";
   return (
     <EntryCard>
-      <VStack gap={2}>
+      <div className="entry-intro">
         <Brand />
-        <Heading level={1}>Drive your claude, remotely.</Heading>
-        {/* `body` + secondary, NOT `supporting`: this is the screen's explanatory copy and needs to
-              outrank the --rc-pass hint below it. Both were `supporting` at first, which silently
-              flattened a deliberate 14px/12.5px hierarchy to a uniform 12px. */}
-        <Text type="body" color="secondary" as="p">
-          Paste a machine <strong>pass</strong> to read and steer its sessions — end-to-end
-          encrypted.
+        <Heading className="entry-title" level={1}>
+          Your coding session, anywhere.
+        </Heading>
+        <Text className="entry-copy" type="body" color="secondary" as="p">
+          Paste the machine pass to connect. Your session stays end-to-end encrypted.
         </Text>
-      </VStack>
-      {/* The page's sole input. The label is hidden but real (it was an aria-label before), and
-            hasAutoFocus lands a pasted pass immediately (#design-pass) — a dedicated single-field gate
-            is the canonical autofocus case. TextArea's own ≥16px font size keeps iOS from auto-zooming
-            on focus, which is why we can leave pinch-zoom enabled (see layout.tsx's viewport note). */}
-      <VStack gap={2}>
-        <TextArea
-          label="Machine pass"
-          isLabelHidden
-          value={props.pass}
-          onChange={props.setPass}
-          placeholder="rcp1_…"
-          rows={2}
-          hasSpellCheck={false}
-          hasAutoFocus
-        />
-        {/* isLoading (spinner + aria-busy + non-interactive) replaces swapping the label to
-            "Connecting…" — the accessible name stays stable while the state is announced. */}
-        {/* size="lg": the default md Button renders 32px tall here, under the 44px minimum touch
-            target — and this is the screen's only action. Guarded in viewer-ux.spec.ts. */}
+      </div>
+      <form
+        className="connect-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!disabled && !props.connecting) props.connect(props.pass);
+        }}
+      >
+        <label className="pass-label" htmlFor="machine-pass">
+          Machine pass
+        </label>
+        <div className="pass-control">
+          <input
+            ref={passInputRef}
+            id="machine-pass"
+            className="pass-input"
+            type={showPass ? "text" : "password"}
+            value={props.pass}
+            onChange={(event) => props.setPass(event.target.value)}
+            placeholder="rcp1_…"
+            autoComplete="off"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+          <IconButton
+            className="pass-reveal"
+            variant="ghost"
+            size="sm"
+            icon={<UiIcon name={showPass ? "eye-off" : "eye"} size={18} />}
+            label={showPass ? "Hide machine pass" : "Show machine pass"}
+            tooltip={showPass ? "Hide machine pass" : "Show machine pass"}
+            onClick={() => setShowPass((shown) => !shown)}
+          />
+        </div>
+        {props.error !== null && (
+          <Banner status="error" title={`Couldn’t load that pass: ${props.error}`} />
+        )}
         <Button
+          type="submit"
           label="Connect"
           variant="primary"
           size="lg"
           width="100%"
           isLoading={props.connecting}
           isDisabled={disabled}
-          onClick={() => props.connect(props.pass)}
         />
-      </VStack>
-      {props.error !== null && (
-        <Banner status="error" title={`Couldn’t load that pass: ${props.error}`} />
-      )}
-      {/* No `size` prop here: it is silently INERT on a Text whose `type` the theme styles. The
-            theme's generated `.astryx-text.supporting { font-size: var(--text-supporting-size) }` lands
-            in @layer astryx-theme, which outranks the size class in @layer astryx-base — the `xsm`
-            class is emitted onto the element and changes nothing. `supporting` alone is the 12px this
-            wanted anyway. */}
-      <Text type="supporting" as="p">
-        Get one with <Code>remote-claw --rc-pass</Code> on the machine.
-      </Text>
+      </form>
+      <details className="connect-help">
+        <summary>Where do I find the machine pass?</summary>
+        <div className="connect-help-body">
+          <Text type="supporting" as="p">
+            On the computer running your coding agent, run:
+          </Text>
+          <Code className="connect-command">remote-claw --rc-pass</Code>
+        </div>
+      </details>
     </EntryCard>
   );
 }
@@ -588,13 +638,15 @@ export function Pairing(props: {
 
   return (
     <EntryCard>
-      <VStack gap={2}>
+      <div className="entry-intro">
         <Brand />
-        <Heading level={1}>Pair this device</Heading>
-      </VStack>
+        <Heading className="entry-title" level={1}>
+          Pair this device
+        </Heading>
+      </div>
       {revealed === null ? (
-        <>
-          <Text type="body" color="secondary" as="p">
+        <div className="pairing-content">
+          <Text className="entry-copy" type="body" color="secondary" as="p">
             A <strong>one-time</strong> pairing link — claim it on this device. The key never leaves
             your browser.
           </Text>
@@ -607,8 +659,6 @@ export function Pairing(props: {
             onClick={reveal}
           />
           {error !== null && <Banner status="error" title={error} />}
-          {/* Deliberately a GHOST button, not a second primary: the manual path is the quiet
-                alternative to the one-time link, and two filled buttons would read as equal weight. */}
           <Button
             label="Enter a pass manually instead"
             variant="ghost"
@@ -616,10 +666,10 @@ export function Pairing(props: {
             width="100%"
             onClick={props.onCancel}
           />
-        </>
+        </div>
       ) : (
-        <>
-          <Text type="body" color="secondary" as="p">
+        <div className="pairing-content">
+          <Text className="entry-copy" type="body" color="secondary" as="p">
             Confirm this matches the <Code>identity_id</Code> from{" "}
             <Code>remote-claw --rc-pass</Code>:
           </Text>
@@ -638,7 +688,7 @@ export function Pairing(props: {
             width="100%"
             onClick={() => props.onConnect(revealed.pass)}
           />
-        </>
+        </div>
       )}
     </EntryCard>
   );
@@ -694,10 +744,14 @@ export function transcriptScrollAction(
  *  omits `harness` and falls back to the private-relay RC label. The native companion is named explicitly
  *  so it cannot be mistaken for that replacement relay. */
 function harnessLabel(harness: Harness | undefined): string {
-  if (harness?.agent === "opencode") return "opencode";
-  if (harness?.mode === "native-rc") return "Claude Code · Native RC";
-  const mode = harness?.mode === "tmux" ? "TX" : "RC";
-  return `Claude Code · ${mode}`;
+  return harness?.agent === "opencode" ? "OpenCode" : "Claude Code";
+}
+
+function harnessDetail(harness: Harness | undefined): string {
+  if (harness?.agent === "opencode") return "Native OpenCode session";
+  if (harness?.mode === "native-rc") return "Anthropic remote control";
+  if (harness?.mode === "tmux") return "Terminal bridge";
+  return "Private relay";
 }
 
 /** The session's git context (#49): branch, a dot for uncommitted changes, and ahead/behind vs its
@@ -713,7 +767,10 @@ function GitChip({ git }: { git: GitInfo }) {
     .join(" ");
   return (
     <span className="git-chip" title={title}>
-      <span className="git-branch">⎇ {git.branch}</span>
+      <span className="git-branch">
+        <UiIcon name="branch" size={13} />
+        {git.branch}
+      </span>
       {git.dirty && (
         <span
           className="git-dirty"
@@ -796,6 +853,14 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   const [forgetArmed, setForgetArmed] = useState(false);
   const forgetTimer = useRef<number | undefined>(undefined);
   useEffect(() => () => window.clearTimeout(forgetTimer.current), []);
+  const requestDisconnect = useCallback(() => {
+    if (forgetArmed) {
+      props.onForget();
+      return;
+    }
+    setForgetArmed(true);
+    forgetTimer.current = window.setTimeout(() => setForgetArmed(false), 4000);
+  }, [forgetArmed, props.onForget]);
   const [sessions, setSessions] = useState<Map<string, Announce>>(new Map());
   const [now, setNow] = useState(() => Date.now());
   // Per-session reconnect-attempt anchor (sessionId → when the current stale period began). Set ONCE when
@@ -909,31 +974,27 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
         <span className="count">
           {list.length} session{list.length === 1 ? "" : "s"}
         </span>
-        {/* Colour-mode toggle. `.topbar-theme` carries the lone `margin-left:auto`, so it AND Forget
-            after it cluster at the trailing edge (two auto-margins would split the gap and strand the
-            toggle mid-bar). */}
         <ThemeToggle className="topbar-theme" />
-        {/* Armed maps to Astryx's `destructive` variant — the two-step confirm is exactly what that
-            variant is for, so the red state is now the component's. Idle is `secondary`, not `ghost`: the
-            original was a quiet OUTLINED button, and Astryx's ghost is borderless — it read as plain text
-            in the topbar and lost its affordance (caught in the zoom review). Right-pinning moved to the
-            theme toggle above, so this no longer needs a className. */}
-        <Button
-          variant={forgetArmed ? "destructive" : "secondary"}
-          size="sm"
-          label={forgetArmed ? "Tap again to forget" : "Forget pass"}
-          aria-label={forgetArmed ? "Confirm forget pass" : "Forget pass"}
-          onClick={() => {
-            if (forgetArmed) {
-              props.onForget();
-              return;
-            }
-            setForgetArmed(true);
-            // Only reachable while disarmed (the armed path returns above), so no timer is outstanding;
-            // the unmount cleanup effect handles the confirm-within-4s case.
-            forgetTimer.current = window.setTimeout(() => setForgetArmed(false), 4000);
-          }}
-        />
+        {forgetArmed ? (
+          <Button
+            className="disconnect-button"
+            variant="destructive"
+            size="sm"
+            label="Confirm"
+            aria-label="Confirm disconnect"
+            onClick={requestDisconnect}
+          />
+        ) : (
+          <IconButton
+            className="disconnect-button"
+            variant="ghost"
+            size="sm"
+            icon={<UiIcon name="disconnect" size={18} />}
+            label="Disconnect"
+            tooltip="Disconnect"
+            onClick={requestDisconnect}
+          />
+        )}
       </header>
 
       <div className="panes" data-view={selected === null ? "list" : "chat"}>
@@ -1126,7 +1187,15 @@ function Transcript(props: {
   // that control so it never shows a "✓" the worker never applied.
   const caps = announce?.capabilities;
   const stableClaude = isStableClaudeSurface(announce?.harness, caps);
-  const showPrivateRelayDisclosure = stableClaude && announce?.harness?.mode === "rc";
+  const openCode = announce?.harness?.agent === "opencode" && announce.harness.mode === "opencode";
+  const nativeOpenCode = isOpenCodeNativeTextSurface(announce?.harness, caps);
+  const supportedOpenCode = isSupportedOpenCodeSurface(announce?.harness, caps);
+  const nativeTextOnly = stableClaude || nativeOpenCode;
+  const localInputDisclosure = supportedOpenCode
+    ? "Permission prompts stay in the OpenCode TUI."
+    : stableClaude && announce?.harness?.mode === "rc"
+      ? "Local terminal prompts may not appear here."
+      : null;
   const supportsSetMode = caps?.controls.setMode ?? true;
   const supportsSetModel = caps?.controls.setModel ?? true;
   const supportsInterrupt = caps?.controls.interrupt ?? true;
@@ -1137,11 +1206,13 @@ function Transcript(props: {
   const canInterrupt = remoteMutationEnabled(connected, supportsInterrupt);
   const canAttach = remoteMutationEnabled(connected, supportsAttachments);
   const canGrantPermissions = remoteMutationEnabled(connected, supportsRemotePermissions);
-  // `structuredPermissions:false` means only that the BROWSER cannot answer. Stable Claude keeps its
-  // gates in the local TUI; an explicit compatibility bypass posture is a different claim.
-  const permissionsLocal = stableClaude;
+  // `structuredPermissions:false` means only that the BROWSER cannot answer. Stable Claude and the exact
+  // supported OpenCode tuple keep gates in their native/local UI; an explicit compatibility bypass
+  // posture is a different claim.
+  const permissionsLocal = stableClaude || supportedOpenCode;
+  const permissionAgent: "Claude" | "OpenCode" = supportedOpenCode ? "OpenCode" : "Claude";
   const permsBypassed = caps?.structuredPermissions === false && !permissionsLocal;
-  const textBlockReason = stableTextBlockReason(input, stableClaude);
+  const textBlockReason = stableTextBlockReason(input, nativeTextOnly);
   const slashBlocked = textBlockReason === "slash";
   const composerHasPayload =
     textBlockReason === null ||
@@ -1374,15 +1445,17 @@ function Transcript(props: {
   );
 
   const send = useCallback(async () => {
-    const text = input.trim();
+    // OpenCode's native message identity binds immutable text. Validate with trim, but preserve every
+    // original text byte for an admitted prompt; other surfaces retain their established trim behavior.
+    const text = composerTextForSend(input, nativeOpenCode);
     // Mutation gates are repeated at the action boundary: disabled controls are presentation, not proof.
     if (!connected) return;
     if (!supportsAttachments && staged.length > 0) {
       clearStaged();
       return;
     }
-    if (stableTextBlockReason(text, stableClaude) === "slash") return;
-    if (text === "" && staged.length === 0) return;
+    const blockReason = stableTextBlockReason(text, nativeTextOnly);
+    if (blockReason === "slash" || (blockReason === "empty" && staged.length === 0)) return;
     // Synchronous re-entry guard (#H): a double-tap Send / Enter-mash fires send() twice in the same tick,
     // before React commits setSending — so the async `sending` state can't block the second call, but this
     // ref can. Released in `finally`. Without it, both calls mint different clientMsgIds → two messages sent.
@@ -1411,7 +1484,17 @@ function Transcript(props: {
       setSending(false);
       sendingRef.current = false;
     }
-  }, [input, staged, sessionId, viewer, clearStaged, connected, supportsAttachments, stableClaude]);
+  }, [
+    input,
+    staged,
+    sessionId,
+    viewer,
+    clearStaged,
+    connected,
+    supportsAttachments,
+    nativeOpenCode,
+    nativeTextOnly,
+  ]);
 
   // Auto-grow the composer textarea up to a cap; recompute whenever the text changes (incl. on clear).
   const taRef = useRef<HTMLTextAreaElement | null>(null);
@@ -1515,34 +1598,24 @@ function Transcript(props: {
           className="back"
           variant="ghost"
           size="sm"
-          label="‹ Sessions"
+          icon={<UiIcon name="arrow-left" size={17} />}
+          label="Sessions"
           onClick={props.onBack}
         />
         <span className="row-title">{props.title}</span>
-        <span className="agent-badge" data-agent={announce?.harness?.agent ?? "claude-code"}>
-          {harnessLabel(announce?.harness)}
-        </span>
-        {announce?.git && <GitChip git={announce.git} />}
-        {permissionsLocal && (
-          <span
-            className="perms-local"
-            title="Permission prompts stay in the local Claude terminal and cannot be answered here."
-          >
-            permissions local
-          </span>
-        )}
         {permsBypassed && (
           <span
             className="perms-bypassed"
             title="This harness runs without per-tool permission gating — tools execute without asking."
           >
-            ⚠ permissions off
+            <UiIcon name="error" size={13} />
+            Permissions off
           </span>
         )}
         <IconButton
           className="chat-menu"
           variant="ghost"
-          icon={<span aria-hidden>⋯</span>}
+          icon={<UiIcon name="more" size={20} />}
           label="Session actions"
           tooltip="Session actions"
           aria-haspopup="dialog"
@@ -1550,14 +1623,6 @@ function Transcript(props: {
           onClick={() => setSessionSheet(true)}
         />
       </div>
-
-      {showPrivateRelayDisclosure && (
-        <Banner
-          className="local-input-disclosure"
-          status="info"
-          title="Prompts entered in the local Claude terminal may not appear here."
-        />
-      )}
 
       {/* role=log + aria-live so a screen reader announces assistant turns / tool rows as they stream in
           (additions only — presence ticks don't re-read the whole log). Without this the transcript was
@@ -1570,6 +1635,12 @@ function Transcript(props: {
         aria-live="polite"
         aria-relevant="additions"
       >
+        {localInputDisclosure !== null && (
+          <div className="local-input-disclosure" role="note">
+            <UiIcon name="info" size={16} />
+            <span>{localInputDisclosure}</span>
+          </div>
+        )}
         {showGapRecovery && gap !== null && (
           <GapRecovery gap={gap} retrying={gapRetrying} onRetry={() => void retryGap()} />
         )}
@@ -1583,6 +1654,7 @@ function Transcript(props: {
             onGrant={grant}
             canGrant={canGrantPermissions}
             permissionsLocal={permissionsLocal}
+            permissionAgent={permissionAgent}
             hostConnected={connected}
             resolved={resolved}
             resolvedAnswers={resolvedAnswers}
@@ -1607,6 +1679,7 @@ function Transcript(props: {
         needs={needs}
         interrupting={interrupting}
         permissionsLocal={permissionsLocal}
+        workerLabel={supportedOpenCode ? "OpenCode" : "Claude"}
       />
       {/* Both this and .bus-error render CONDITIONALLY (on !== null), so Banner's internal isDismissed
           state can't leak across a re-open — a fresh error mounts a fresh Banner. If either is ever made
@@ -1638,7 +1711,7 @@ function Transcript(props: {
                   className="staged-remove"
                   variant="secondary"
                   size="sm"
-                  icon={<span aria-hidden>×</span>}
+                  icon={<UiIcon name="close" size={15} />}
                   label={`Remove ${s.name}`}
                   onClick={() => removeStaged(s.id)}
                 />
@@ -1653,103 +1726,96 @@ function Transcript(props: {
         )}
         {slashBlocked && (
           <p className="staged-notice" role="status">
-            Slash commands aren’t available remotely. Use the local Claude terminal.
+            Slash commands aren’t available remotely. Use the local{" "}
+            {openCode ? "OpenCode TUI" : "Claude terminal"}.
           </p>
         )}
-        {/* Prompt field on top, controls below (mirrors the native app composer). */}
-        <textarea
-          ref={taRef}
-          className="composer-input"
-          value={input}
-          rows={1}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            // Desktop: Enter sends, Shift+Enter is a line break. Touch: Enter is always a line break (the
-            // Send button sends) so a soft-keyboard Return doesn't strand a multi-line prompt (#151).
-            // `nativeEvent.isComposing` is the reliable IME-composition signal (React's synthetic event
-            // doesn't surface it as a typed field).
-            if (
-              enterShouldSend(
-                { key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing },
-                coarsePointer,
-              )
-            ) {
-              e.preventDefault();
-              void send();
+        <div className="composer-shell">
+          <textarea
+            ref={taRef}
+            className="composer-input"
+            value={input}
+            rows={1}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (
+                enterShouldSend(
+                  { key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing },
+                  coarsePointer,
+                )
+              ) {
+                e.preventDefault();
+                void send();
+              }
+            }}
+            aria-label="Message"
+            placeholder={
+              nativeTextOnly ? "Message this session" : "Message this session or enter a command"
             }
-          }}
-          // The accessible name stays stable when the placeholder disappears on input. Compatibility
-          // harnesses retain slash commands; the exact stable Claude surface advertises plain text only.
-          aria-label="Message"
-          placeholder={stableClaude ? "Send a text prompt" : "Send a prompt — or /compact, /clear…"}
-          // Match the actual Enter behavior: a "send" return key on desktop, a newline key on touch.
-          enterKeyHint={coarsePointer ? "enter" : "send"}
-        />
-        {/* The composer INPUT stays a hand-written <textarea>: Astryx's ChatComposerInput is a
-            contentEditable div that hard-codes Enter→submit with no coarse-pointer branch, which would
-            regress the touch behavior (#151: Enter inserts a newline on a phone) and replace our
-            controlled-value + auto-grow + IME model. The three CONTROLS below do map cleanly, so they
-            migrate to Astryx Button/IconButton; the 44px touch floor for them lives on
-            `.composer-row .astryx-button` (Astryx buttons are 32–36px). */}
-        <div className="composer-row">
-          {/* mode + attach spread props onto their <button>, so aria-haspopup/expanded and the disabled
+            enterKeyHint={coarsePointer ? "enter" : "send"}
+          />
+          <div className="composer-row">
+            {/* mode + attach spread props onto their <button>, so aria-haspopup/expanded and the disabled
               state land on the real element (capability gating asserts `disabled`). The label carries
               the current mode; the glyph is the icon. */}
-          <Button
-            variant="secondary"
-            data-testid="composer-mode"
-            icon={<span aria-hidden>{modeGlyph(displayedMode)}</span>}
-            label={modeLabel(displayedMode)}
-            isDisabled={!canSetMode}
-            aria-haspopup="dialog"
-            aria-expanded={modeSheet}
-            tooltip={
-              canSetMode
-                ? "Permission mode"
-                : connected
-                  ? "This harness can't switch permission mode — showing the worker's current mode (read-only)"
-                  : "Reconnect to the host before changing permission mode"
-            }
-            onClick={() => canSetMode && setModeSheet(true)}
-          />
-          <IconButton
-            variant="secondary"
-            icon={<span aria-hidden>📎</span>}
-            label="Attach photos"
-            tooltip={
-              canAttach
-                ? "Attach photos"
-                : connected
-                  ? "Attachments aren’t available for this session"
-                  : "Reconnect to the host before attaching photos"
-            }
-            isDisabled={sending || !canAttach}
-            onClick={() => canAttach && fileRef.current?.click()}
-          />
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            multiple
-            hidden
-            disabled={!canAttach}
-            onChange={(e) => {
-              addStaged(e.target.files);
-              e.target.value = ""; // allow re-picking the same file(s)
-            }}
-          />
-          {/* isLoading (spinner + aria-busy + non-interactive) rather than swapping the label to
+            <Button
+              variant="ghost"
+              data-testid="composer-mode"
+              icon={<UiIcon name={modeIcon(displayedMode)} size={17} />}
+              label={modeLabel(displayedMode)}
+              isDisabled={!canSetMode}
+              aria-haspopup="dialog"
+              aria-expanded={modeSheet}
+              tooltip={
+                canSetMode
+                  ? "Permission mode"
+                  : connected
+                    ? "This harness can't switch permission mode — showing the worker's current mode (read-only)"
+                    : "Reconnect to the host before changing permission mode"
+              }
+              onClick={() => canSetMode && setModeSheet(true)}
+            />
+            <IconButton
+              variant="ghost"
+              icon={<UiIcon name="attach" size={18} />}
+              label="Attach photos"
+              tooltip={
+                canAttach
+                  ? "Attach photos"
+                  : connected
+                    ? "Attachments aren’t available for this session"
+                    : "Reconnect to the host before attaching photos"
+              }
+              isDisabled={sending || !canAttach}
+              onClick={() => canAttach && fileRef.current?.click()}
+            />
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              disabled={!canAttach}
+              onChange={(e) => {
+                addStaged(e.target.files);
+                e.target.value = ""; // allow re-picking the same file(s)
+              }}
+            />
+            {/* isLoading (spinner + aria-busy + non-interactive) rather than swapping the label to
               "Sending…" — the accessible name stays "Send" so getByRole finds it throughout a send, and
               the double-send guard reads the native disabled state. `.composer-send` carries only the
               margin-left:auto that right-pins it (real layout, not a test hook). */}
-          <Button
-            type="submit"
-            variant="primary"
-            className="composer-send"
-            label="Send"
-            isLoading={sending}
-            isDisabled={sending || !canSend}
-          />
+            <IconButton
+              type="submit"
+              variant="primary"
+              className="composer-send"
+              icon={<UiIcon name="send" size={18} />}
+              label="Send"
+              tooltip="Send"
+              isLoading={sending}
+              isDisabled={sending || !canSend}
+            />
+          </div>
         </div>
       </form>
 
@@ -1762,6 +1828,18 @@ function Transcript(props: {
       )}
       {sessionSheet && (
         <SessionSheet
+          sessionTitle={props.title}
+          agentLabel={harnessLabel(announce?.harness)}
+          connectionLabel={harnessDetail(announce?.harness)}
+          permissionLabel={
+            permsBypassed
+              ? "Per-tool permissions are off"
+              : permissionsLocal
+                ? supportedOpenCode
+                  ? "Permission prompts stay in OpenCode"
+                  : "Permission prompts stay in the local terminal"
+                : "Permission prompts can be answered here"
+          }
           branch={announce?.git?.branch ?? null}
           currentModel={optimisticModel}
           canModel={canSetModel}
@@ -1813,46 +1891,63 @@ function StatusStrip({
   needs,
   interrupting,
   permissionsLocal,
+  workerLabel,
 }: {
   conn: ConnState | null;
   phase: "idle" | "thinking";
   needs: boolean;
   interrupting: boolean;
   permissionsLocal: boolean;
+  workerLabel: "Claude" | "OpenCode";
 }) {
   // role="alert" (assertive) for states that need attention now; role="status" (polite) for ambient
   // activity — so a screen reader announces the flip to disconnected / needs-you / working (#58 a11y).
   if (conn === "disconnected")
     return (
       <div className="chat-status" data-state="disconnected" role="alert">
-        Host disconnected — its most recent delivery and output tail may be incomplete; the session
-        may have ended.
+        <UiIcon name="disconnect" size={17} />
+        <span className="status-copy">
+          <strong>Disconnected</strong>
+          <small>Waiting for the host. Recent output may be incomplete.</small>
+        </span>
       </div>
     );
   if (conn === "reconnecting")
     return (
       <div className="chat-status" data-state="reconnecting" role="status">
-        Reconnecting to the host… <Working />
+        <UiIcon name="retry" size={17} />
+        <span className="status-copy">
+          <strong>Reconnecting</strong>
+          <small>Waiting for the host to come back.</small>
+        </span>
+        <Working />
       </div>
     );
   if (conn === "connected" && interrupting)
     return (
       <div className="chat-status" data-state="thinking" role="status">
-        Interrupting… <Working />
+        <UiIcon name="stop" size={17} />
+        <span>Interrupting…</span>
+        <Working />
       </div>
     );
   if (conn === "connected" && needs)
     return (
       <div className="chat-status" data-state="needs" role="alert">
-        {permissionsLocal
-          ? "🔔 Claude needs input in the local terminal"
-          : "🔔 Claude needs your input"}
+        <UiIcon name="bell" size={17} />
+        <span>
+          {permissionsLocal
+            ? "Input needed in the local terminal"
+            : `${workerLabel} needs your input`}
+        </span>
       </div>
     );
   if (conn === "connected" && phase === "thinking")
     return (
       <div className="chat-status" data-state="thinking" role="status">
-        Claude is working… <Working />
+        <UiIcon name="thinking" size={17} />
+        <span>{workerLabel} is working…</span>
+        <Working />
       </div>
     );
   return null;
@@ -1865,14 +1960,14 @@ const MODES = [
   {
     id: "auto",
     label: "Auto",
-    glyph: "⚡",
+    icon: "auto",
     desc: "Claude decides which actions need confirmation",
   },
-  { id: "default", label: "Code", glyph: "⌨", desc: "Claude writes and edits code directly" },
+  { id: "default", label: "Code", icon: "code", desc: "Claude writes and edits code directly" },
   {
     id: "plan",
     label: "Plan",
-    glyph: "◑",
+    icon: "plan",
     desc: "Claude explores code and presents a plan before making edits",
   },
 ] as const;
@@ -1880,8 +1975,8 @@ const MODES = [
 function modeLabel(id: string | null): string {
   return MODES.find((m) => m.id === id)?.label ?? "Mode";
 }
-function modeGlyph(id: string | null): string {
-  return MODES.find((m) => m.id === id)?.glyph ?? "⚙";
+function modeIcon(id: string | null): "auto" | "code" | "plan" | "model" {
+  return MODES.find((m) => m.id === id)?.icon ?? "model";
 }
 
 export function displayedPermissionMode(
@@ -2019,6 +2114,17 @@ function Sheet({
         aria-label={label}
       >
         {!anchored && <div className="sheet-handle" />}
+        <div className="sheet-header">
+          <div className="sheet-heading">{label}</div>
+          <IconButton
+            className="sheet-close"
+            variant="ghost"
+            size="sm"
+            icon={<UiIcon name="close" size={17} />}
+            label={`Close ${label}`}
+            onClick={onClose}
+          />
+        </div>
         {children}
       </div>
     </div>
@@ -2036,8 +2142,7 @@ function ModeSheet({
   onClose: () => void;
 }) {
   return (
-    <Sheet label="Select mode" onClose={onClose}>
-      <div className="sheet-title">Select mode</div>
+    <Sheet label="Permission mode" onClose={onClose}>
       {MODES.map((m) => (
         <button
           key={m.id}
@@ -2047,14 +2152,16 @@ function ModeSheet({
           aria-pressed={m.id === current}
           onClick={() => onPick(m.id)}
         >
-          <span className="mode-row-glyph">{m.glyph}</span>
+          <span className="mode-row-glyph">
+            <UiIcon name={m.icon} size={19} />
+          </span>
           <span className="mode-row-main">
             <span className="mode-row-label">{m.label}</span>
             <span className="mode-row-desc">{m.desc}</span>
           </span>
           {m.id === current && (
             <span className="mode-check" aria-hidden>
-              ✓
+              <UiIcon name="check" size={18} />
             </span>
           )}
         </button>
@@ -2069,16 +2176,20 @@ function ModeSheet({
 // self-report (it answers its launch identity), so the tick reflects the viewer's OWN last choice
 // (optimisticModel) rather than a server-confirmed value.
 const MODELS = [
-  { id: "default", label: "Default", glyph: "⌘", desc: "The machine's configured model" },
-  { id: "opus", label: "Opus", glyph: "◆", desc: "Most capable — complex work" },
-  { id: "sonnet", label: "Sonnet", glyph: "◇", desc: "Balanced — everyday tasks" },
-  { id: "haiku", label: "Haiku", glyph: "▪", desc: "Fastest — quick answers" },
+  { id: "default", label: "Default", desc: "The machine's configured model" },
+  { id: "opus", label: "Opus", desc: "Most capable — complex work" },
+  { id: "sonnet", label: "Sonnet", desc: "Balanced — everyday tasks" },
+  { id: "haiku", label: "Haiku", desc: "Fastest — quick answers" },
 ] as const;
 
 /** The session ⋯ sheet: switch model (set_model), interrupt the current turn, copy the git branch.
  *  `canModel`/`canInterrupt` reflect the host driver's capabilities (#149): a driver that can't honor a
  *  verb gets that control disabled with an explanatory note, never a button that silently no-ops. */
 export function SessionSheet({
+  sessionTitle,
+  agentLabel,
+  connectionLabel,
+  permissionLabel,
   branch,
   currentModel,
   canModel,
@@ -2089,6 +2200,10 @@ export function SessionSheet({
   onCopyBranch,
   onClose,
 }: {
+  sessionTitle: string;
+  agentLabel: string;
+  connectionLabel: string;
+  permissionLabel: string;
   branch: string | null;
   /** The optimistically-selected model (set_model isn't self-reported), or null until one is chosen. */
   currentModel: string | null;
@@ -2104,8 +2219,8 @@ export function SessionSheet({
   onClose: () => void;
 }) {
   return (
-    <Sheet label="Session actions" onClose={onClose}>
-      <div className="sheet-title">Change model</div>
+    <Sheet label="Session settings" onClose={onClose}>
+      <div className="sheet-title">Model</div>
       {canModel ? (
         MODELS.map((m) => (
           <button
@@ -2116,14 +2231,16 @@ export function SessionSheet({
             aria-pressed={m.id === currentModel}
             onClick={() => onModel(m.id)}
           >
-            <span className="mode-row-glyph">{m.glyph}</span>
+            <span className="mode-row-glyph">
+              <UiIcon name="model" size={19} />
+            </span>
             <span className="mode-row-main">
               <span className="mode-row-label">{m.label}</span>
               <span className="mode-row-desc">{m.desc}</span>
             </span>
             {m.id === currentModel && (
               <span className="mode-check" aria-hidden>
-                ✓
+                <UiIcon name="check" size={18} />
               </span>
             )}
           </button>
@@ -2135,14 +2252,16 @@ export function SessionSheet({
             : "Reconnect to the host before changing model."}
         </p>
       )}
-      <div className="sheet-title">Session</div>
+      <div className="sheet-title">Controls</div>
       <button
         type="button"
         className="mode-row mode-row-danger"
         disabled={!canInterrupt}
         onClick={onInterrupt}
       >
-        <span className="mode-row-glyph">⏹</span>
+        <span className="mode-row-glyph">
+          <UiIcon name="stop" size={19} />
+        </span>
         <span className="mode-row-main">
           <span className="mode-row-label">Interrupt</span>
           <span className="mode-row-desc">
@@ -2156,13 +2275,31 @@ export function SessionSheet({
       </button>
       {branch !== null && (
         <button type="button" className="mode-row" onClick={onCopyBranch}>
-          <span className="mode-row-glyph">⎇</span>
+          <span className="mode-row-glyph">
+            <UiIcon name="branch" size={19} />
+          </span>
           <span className="mode-row-main">
             <span className="mode-row-label">Copy branch</span>
             <span className="mode-row-desc">{branch}</span>
           </span>
         </button>
       )}
+      <div className="sheet-title">Details</div>
+      <div className="session-details">
+        <div className="session-detail">
+          <UiIcon name="session" size={18} />
+          <span>
+            <strong>{sessionTitle}</strong>
+            <small>
+              {agentLabel} · {connectionLabel}
+            </small>
+          </span>
+        </div>
+        <div className="session-detail">
+          <UiIcon name="shield" size={18} />
+          <span>{permissionLabel}</span>
+        </div>
+      </div>
     </Sheet>
   );
 }
@@ -2179,6 +2316,7 @@ export function Bubble({
   onGrant,
   canGrant,
   permissionsLocal,
+  permissionAgent = "Claude",
   hostConnected,
   resolved,
   resolvedAnswers,
@@ -2187,6 +2325,7 @@ export function Bubble({
   onGrant: GrantFn;
   canGrant: boolean;
   permissionsLocal: boolean;
+  permissionAgent?: "Claude" | "OpenCode";
   hostConnected: boolean;
   resolved: Map<string, "allow" | "deny">;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
@@ -2200,7 +2339,9 @@ export function Bubble({
       return isSlashCommand(message.text) ? (
         <div className="row-command">
           <span className="cmd-chip">
-            <span className="cmd-glyph">⌘</span>
+            <span className="cmd-glyph">
+              <UiIcon name="terminal" size={14} />
+            </span>
             {message.text.trim()}
           </span>
         </div>
@@ -2250,6 +2391,7 @@ export function Bubble({
           onGrant={onGrant}
           canGrant={canGrant}
           permissionsLocal={permissionsLocal}
+          permissionAgent={permissionAgent}
           hostConnected={hostConnected}
           resolved={resolved}
           resolvedAnswers={resolvedAnswers}
@@ -2267,9 +2409,14 @@ function ThinkingRow({ text, sub }: { text: string; sub: boolean }) {
   return (
     <details className="thinking" data-sub={sub}>
       <summary>
-        <span>💭 {sub ? "sub-agent thinking" : "thought"}</span>
-        <span className="chev" aria-hidden>
-          ›
+        <span className="tool-line">
+          <span className="tool-glyph">
+            <UiIcon name="thinking" size={16} />
+          </span>
+          <span>{sub ? "Sub-agent thinking" : "Thinking"}</span>
+        </span>
+        <span className="chev">
+          <UiIcon name="chevron-right" size={16} />
         </span>
       </summary>
       <div className="thinking-body">{text}</div>
@@ -2287,6 +2434,7 @@ function PermissionRow({
   onGrant,
   canGrant,
   permissionsLocal,
+  permissionAgent,
   hostConnected,
   resolved,
   resolvedAnswers,
@@ -2295,6 +2443,7 @@ function PermissionRow({
   onGrant: GrantFn;
   canGrant: boolean;
   permissionsLocal: boolean;
+  permissionAgent: "Claude" | "OpenCode";
   hostConnected: boolean;
   resolved: Map<string, "allow" | "deny">;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
@@ -2333,23 +2482,26 @@ function PermissionRow({
     [req.requestId, onGrant, canGrant],
   );
 
-  // Stable Claude keeps permission/question interaction in its local TUI. A replayed compatibility
-  // frame must never resurrect remote Allow/Deny controls or present permission_resolved as a stable
-  // native answer.
+  // Supported native/local permission surfaces keep permission/question interaction in their own TUI.
+  // A replayed compatibility frame must never resurrect remote Allow/Deny controls or present a
+  // permission_resolved frame as a native answer.
   if (permissionsLocal) {
+    const localUi = permissionAgent === "OpenCode" ? "OpenCode TUI" : "Claude terminal";
     return (
       <div className="perm perm-local-only">
         <div className="perm-head">
-          <span className="tool-glyph">🔐</span>
+          <span className="perm-icon">
+            <UiIcon name="shield" size={18} />
+          </span>
           <span className="perm-label">
             {req.questions.length > 0
-              ? "Claude has a local question"
+              ? `${permissionAgent} has a local question`
               : `${req.tool} needs local input`}
           </span>
         </div>
         {req.hint !== "" && <div className="perm-hint">{req.hint}</div>}
         <div className="perm-local-note">
-          Permission prompts are local to Claude. Answer in the local Claude terminal.
+          Permission prompts are local to {permissionAgent}. Answer in the local {localUi}.
         </div>
       </div>
     );
@@ -2373,8 +2525,11 @@ function PermissionRow({
 
   return (
     <div className="perm">
+      <div className="perm-eyebrow">Action required</div>
       <div className="perm-head">
-        <span className="tool-glyph">🔐</span>
+        <span className="perm-icon">
+          <UiIcon name="shield" size={18} />
+        </span>
         <span className="perm-label">
           Allow <strong>{req.tool}</strong>?
         </span>
@@ -2382,18 +2537,6 @@ function PermissionRow({
       {req.hint !== "" && <div className="perm-hint">{req.hint}</div>}
       {effective === null ? (
         <div className="perm-actions">
-          {/* Astryx has no "constructive"/success Button variant (only primary/secondary/ghost/
-              destructive — see finding L), and the green Allow / red Deny is a deliberate security-UX
-              signal for an irreversible grant. So these are secondary Buttons carrying the semantic
-              tint via .perm-allow / .perm-deny — the chrome (focus ring, press, disabled a11y) comes
-              from Astryx; only the meaning-color stays app CSS. */}
-          <Button
-            variant="secondary"
-            className="perm-allow"
-            label="Allow"
-            isDisabled={busy || req.requestId === "" || !canGrant}
-            onClick={() => void decide("allow")}
-          />
           <Button
             variant="secondary"
             className="perm-deny"
@@ -2401,10 +2544,18 @@ function PermissionRow({
             isDisabled={busy || req.requestId === "" || !canGrant}
             onClick={() => void decide("deny")}
           />
+          <Button
+            variant="secondary"
+            className="perm-allow"
+            label="Allow"
+            isDisabled={busy || req.requestId === "" || !canGrant}
+            onClick={() => void decide("allow")}
+          />
         </div>
       ) : (
         <div className="perm-resolved" data-behavior={effective}>
-          {effective === "allow" ? "✓ Allowed" : "✕ Denied"}
+          <UiIcon name={effective === "allow" ? "check" : "error"} size={16} />
+          {effective === "allow" ? "Allowed" : "Denied"}
         </div>
       )}
       {req.requestId === "" && effective === null && (
@@ -2572,7 +2723,8 @@ function QuestionCard({
     return (
       <div className="perm perm-q">
         <div className="perm-resolved" data-behavior={resolvedBehavior ?? "allow"}>
-          {denied ? "✕ Skipped" : "✓ Answered"}
+          <UiIcon name={denied ? "error" : "check"} size={16} />
+          {denied ? "Dismissed" : "Answered"}
           {summary !== "" && <span className="q-answer">{summary}</span>}
         </div>
       </div>
@@ -2581,8 +2733,11 @@ function QuestionCard({
 
   return (
     <div className="perm perm-q">
+      <div className="perm-eyebrow">Action required</div>
       <div className="perm-head">
-        <span className="tool-glyph">❓</span>
+        <span className="perm-icon">
+          <UiIcon name="question" size={18} />
+        </span>
         <span className="perm-label">Claude is asking</span>
       </div>
       {req.questions.map((q) => (
@@ -2621,23 +2776,20 @@ function QuestionCard({
         </div>
       ))}
       <div className="perm-actions">
-        {/* Submit is the constructive action, so it shares the green .perm-allow tint (see the
-            permission-row note above). isLoading keeps the "Submit answers" accessible name stable
-            through the send instead of swapping to "Sending…". */}
-        <Button
-          variant="secondary"
-          className="perm-allow q-submit"
-          label="Submit answers"
-          isLoading={busy}
-          isDisabled={busy || !allAnswered || req.requestId === "" || !canGrant}
-          onClick={() => void submit()}
-        />
         <Button
           variant="secondary"
           className="perm-deny"
-          label="Skip / answer in chat"
+          label="Dismiss"
           isDisabled={busy || req.requestId === "" || !canGrant}
           onClick={() => void dismiss()}
+        />
+        <Button
+          variant="secondary"
+          className="perm-allow q-submit"
+          label="Submit"
+          isLoading={busy}
+          isDisabled={busy || !allAnswered || req.requestId === "" || !canGrant}
+          onClick={() => void submit()}
         />
       </div>
       {req.requestId === "" && (
@@ -2686,7 +2838,7 @@ function ToolRow({ text }: { text: string }) {
   const file = input.file_path ? basename(input.file_path) : null;
   const stat = isEdit ? editStat(input) : null;
   const verb = isTask
-    ? `Ran a sub-agent${input.description ? `: ${input.description}` : ""}`
+    ? `Delegated${input.description ? `: ${input.description}` : " to a sub-agent"}`
     : isEdit && file
       ? `Edited ${file}`
       : name === "Read" && file
@@ -2698,11 +2850,21 @@ function ToolRow({ text }: { text: string }) {
   // Only expandable when the detail body will actually render something. `description` is already in
   // the label, and a Task's prompt is the only prompt we render — so don't open to an empty box.
   const hasDetail = Boolean(input.command || isEdit || (isTask && input.prompt));
-  const glyph = isTask ? "🤖" : isEdit ? "✏️" : name === "Read" ? "📄" : name === "Bash" ? "❯" : "⚙";
+  const icon = isTask
+    ? "task"
+    : isEdit
+      ? "edit"
+      : name === "Read"
+        ? "file"
+        : name === "Bash"
+          ? "terminal"
+          : "tool";
 
   const row = (
     <span className="tool-line">
-      <span className="tool-glyph">{glyph}</span>
+      <span className="tool-glyph">
+        <UiIcon name={icon} size={16} />
+      </span>
       <span className="tool-label">{verb}</span>
       {stat && (
         <span className="tool-stat">
@@ -2724,7 +2886,9 @@ function ToolRow({ text }: { text: string }) {
     <details className="tool-row tool-row-x" data-sub={sub}>
       <summary>
         {row}
-        <span className="chev">›</span>
+        <span className="chev">
+          <UiIcon name="chevron-right" size={16} />
+        </span>
       </summary>
       <div className="tool-detail">
         {input.command && (
@@ -2760,9 +2924,13 @@ function ToolResultRow({ text }: { text: string }) {
   return (
     <details className="tool-result" data-error={r.isError} data-sub={r.sub}>
       <summary>
-        <span className="tool-glyph">{r.isError ? "✕" : "↳"}</span>
-        <span className="tool-label">{r.isError ? "Error" : "Output"}</span>
-        <span className="chev">›</span>
+        <span className="tool-glyph">
+          <UiIcon name={r.isError ? "error" : "output"} size={16} />
+        </span>
+        <span className="tool-label">{r.isError ? "View error" : "View output"}</span>
+        <span className="chev">
+          <UiIcon name="chevron-right" size={16} />
+        </span>
       </summary>
       <pre className="code-block tool-output">{r.output}</pre>
     </details>
@@ -2775,18 +2943,20 @@ function TaskRow({ text }: { text: string }) {
   const t = parseTask(text);
   const verb =
     t.subtype === "task_started"
-      ? "Task started"
+      ? "Sub-agent is running"
       : t.subtype === "task_notification"
-        ? "Task update"
+        ? "Sub-agent update"
         : t.subtype === "task_updated"
-          ? "Task progress"
-          : "Task";
+          ? "Sub-agent progress"
+          : "Sub-agent";
   return (
     <div className="task-row" data-sub>
-      <span className="tool-glyph">🤖</span>
+      <span className="tool-glyph">
+        <UiIcon name="task" size={16} />
+      </span>
       <span className="tool-label">
         {verb}
-        {t.description ? `: ${t.description}` : ""}
+        {t.description && t.subtype !== "task_started" ? `: ${t.description}` : ""}
       </span>
     </div>
   );

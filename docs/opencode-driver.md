@@ -1,221 +1,248 @@
-# Experimental OpenCode compatibility driver
+# OpenCode 1.17.5 text/interrupt driver
 
-`--rc-driver=opencode` bridges one `opencode serve` session into the existing encrypted
-remote-claw broker. It is implemented and tested as an experimental adapter. OpenCode is an intended
-product surface; this implementation is not yet the durable, coexistence-tested release version.
+`--rc-driver=opencode` attaches remote-claw to one already-running OpenCode session through the
+OpenCode HTTP/SSE server. M2 is complete for one frozen tuple:
 
-OpenCode owns the native `ses_*` conversation. remote-claw creates a separate synthetic `cse_*` for
-the broker channel and viewer row. Reattaching the same `ses_*` after a wrapper restart can backfill
-native history into a new `cse_*`; it does not preserve one durable remote-claw chat identity or a
-restart-safe writable binding.
+- Linux arm64;
+- exact OpenCode 1.17.5;
+- `amazon-bedrock/global.anthropic.claude-sonnet-4-6`;
+- `AWS_REGION=us-west-1` plus explicit temporary SigV4 credential environment values in the OpenCode
+  server process;
+- one caller-supplied existing canonical `ses_*` over literal loopback; and
+- non-empty non-slash browser text plus interrupt.
 
-## 1. Topology and options
+Other OpenCode versions, platforms, models, permission graduation, controls, and collaboration
+surfaces are not implied by that support claim. The external OpenCode process owns the native
+conversation and TUI. remote-claw creates a fresh synthetic `cse_*` projection for its broker and
+viewers; restarting the companion against the same `ses_*` creates another fresh projection of the
+same bounded native history.
+
+## 1. Topology and configuration
 
 ```text
 OpenCode TUI ─┐
-              ├─ opencode serve ⇄ OpencodeDriver ⇄ Session ⇄ encrypted broker/viewer
+              ├─ opencode serve ⇄ OpencodeDriver ⇄ Session ⇄ encrypted broker/viewers
 model provider┘
 ```
 
-The driver uses OpenCode's HTTP and SSE API directly. It does not start the Claude MITM and does not
-spawn or manage `opencode serve`. The server continues to own its native UI, model-provider access,
-sessions, and history.
+The driver neither starts nor stops `opencode serve`, and it does not use the Claude MITM. It accepts
+no forwarded Claude or OpenCode arguments. The supported configuration is:
 
-Relevant options are:
+- `--rc-oc-url` or `OPENCODE_URL` — an explicit-port `http://127.0.0.1:<port>` or
+  `http://[::1]:<port>` origin; default `http://127.0.0.1:4096`. Credentials, query, fragment,
+  redirects, hostnames, non-loopback addresses, non-root paths, and HTTPS are rejected. A trailing root
+  slash is accepted and normalized away.
+- `--rc-oc-session` or `RC_OC_SESSION` — required exact existing canonical `ses_*`.
+- `--rc-oc-model` or `RC_OC_MODEL` — must be exactly
+  `amazon-bedrock/global.anthropic.claude-sonnet-4-6`.
+- `OPENCODE_SERVER_USERNAME` — Basic-auth username; default `opencode`.
+- `OPENCODE_SERVER_PASSWORD` — optional Basic-auth password. Its bytes are preserved and never
+  logged. No Authorization header is sent when it is absent.
+- `--rc-oc-mirror-permissions` or `RC_OC_MIRROR_PERMISSIONS=1` — experimental positive opt-in to
+  policy mutation and browser permission replies. It is off by default and outside M2.
 
-- `--rc-oc-url` or `OPENCODE_URL` — server origin; default `http://127.0.0.1:4096`.
-- `--rc-oc-session` or `RC_OC_SESSION` — exact existing canonical `ses_*` to attach.
-- `--rc-oc-model` or `RC_OC_MODEL` — `providerID/modelID` used for remote turns.
-- `OPENCODE_SERVER_PASSWORD` — optional HTTP Basic password with an empty username.
-- `--rc-oc-skip-permissions` or `RC_OC_SKIP_PERMISSIONS` — leave native permission rules unchanged.
+`--rc-oc-skip-permissions` is retired and is a usage error. Permissions remain native/local by
+default, so an inverse flag is unnecessary.
 
-The default model is
-`amazon-bedrock/global.anthropic.claude-sonnet-4-6`. The OpenCode server process must have whatever
-provider credentials that model needs; remote-claw does not acquire or pass them through the browser.
+The OpenCode server process must receive the region and credentials its model provider requires.
+The `global.` Bedrock inference profile selects a cross-region model, but the AWS SDK still requires
+a region. OpenCode 1.17.5 did not consume the normal shared AWS configuration in the acceptance run.
+Other regions or credential modes require their own gate. remote-claw does not acquire provider
+credentials or send them through the browser.
 
-## 2. Fail-closed attachment
+## 2. Fail-closed exact attachment
 
-The driver creates its synthetic `Session` privately and constructs `ReadyBridge` in `starting`. No
-broker client or presence announcement exists until native setup succeeds.
+The supported path never lists, discovers, selects, or creates the attached root native session. It
+does follow child sessions announced from that root. Before publishing presence it:
 
-Session selection is strict:
+1. proves exact OpenCode version 1.17.5 through `GET /global/health`;
+2. confirms that `GET /session/{id}` returns the exact configured `ses_*`;
+3. opens the server-wide SSE stream and requires `server.connected` as its first event;
+4. re-proves the exact version and session behind that live stream;
+5. strictly reconciles bounded history, message order, assistant parents, and the exact session's
+   status; and
+6. starts the broker bridge once with the final capability vector.
 
-1. `GET /session` must return an array of unique canonical `ses_*` IDs.
-2. A configured `--rc-oc-session` must appear exactly in that snapshot.
-3. Without a configured ID, any non-empty snapshot is ambiguous and startup fails. Only a valid empty
-   snapshot permits one `POST /session`.
-4. `GET /session/{id}` must then return the exact selected ID and either no permission field or a fully
-   valid permission-rule vector.
-5. With permission mirroring enabled, the parent session's catch-all ask rule must be present on a
-   complete read-back before `ReadyBridge.start()` may run.
+Until all six steps pass, no broker client or presence announcement exists and no browser write can
+reach OpenCode. A malformed response, changed identity, unsupported version, over-limit history,
+missing SSE readiness marker, or indeterminate status fails closed.
 
-The driver never selects “most recent.” A malformed response is not treated as an empty list. A lost
-create response can leave an unannounced native session; the driver does not guess which session it
-was or blindly delete another one.
-
-After setup, the driver calls `ReadyBridge.start()` once with the final conservative viewer
-capabilities. Only that call creates `HostRcRelay`, starts the broker bridge, and publishes presence.
+The client retains strict create, list, and summarize helpers as research/test plumbing. None is a
+capability or code path of the supported M2 companion.
 
 ## 3. Native HTTP and SSE surface
 
-`packages/cli/src/host/rc/opencode/client.ts` is a small dependency-free client built on Node's
-`fetch`:
+The release path uses this subset:
 
-| Operation | Route |
+| Purpose | Native route |
 | --- | --- |
-| List sessions | `GET /session` |
-| Create one session | `POST /session` with optional `{title}` |
-| Confirm/read policy | `GET /session/{id}` |
-| Read history | `GET /session/{id}/message` |
-| Send a turn | `POST /session/{id}/prompt_async` with `{model, parts}`; success is an empty `204` |
+| Pin version | `GET /global/health` |
+| Confirm exact session | `GET /session/{id}` |
+| Reconcile exact status | `GET /session/status` |
+| Read bounded history | `GET /session/{id}/message?limit=4097` |
+| Send text | `POST /session/{id}/prompt_async` |
 | Interrupt | `POST /session/{id}/abort` |
-| Compact | `POST /session/{id}/summarize` with `{providerID, modelID, auto:false}` |
-| Update policy | `PATCH /session/{id}` with `{permission: rules}` |
-| Answer permission | `POST /permission/{requestID}/reply` with `once` or `reject` |
-| Follow events | `GET /event` server-wide SSE |
+| Follow native events | `GET /event` |
 
-HTTP errors expose only a stable operation and status. Native response bodies and provider messages do
-not enter local diagnostics. The visible E2E `session.error` result may contain a human-readable
-provider error for the viewer; the local trace records only narrow structural fields such as numeric
-status and retryability.
+History accepts at most 4,096 messages and 4,096 total parts. OpenCode 1.17.5 omits idle sessions
+from `/session/status`, so an absent exact key means idle; a present value must be exactly `idle`,
+`busy`, or `retry`. That snapshot corroborates history but is not treated as a native atomic lock.
 
-The SSE client filters by the session ID carried in event, message, or part shapes. Global connection
-and heartbeat events pass through. `session.created` events are also observed so the driver can follow
-children whose `parentID` belongs to an already-followed session.
+HTTP errors expose only stable operation and status information. Native response bodies, credentials,
+and provider messages do not enter diagnostics. The SSE reader is bounded, filters exact session
+identity from all supported event shapes, and follows child sessions discovered from a followed
+parent. Session-less events other than `server.*` are dropped rather than broadcast across sessions;
+the deliberate predicate-stream exception is `session.created`, which can carry a new child's identity
+only inside that event.
 
-## 4. Capture and translation
+## 4. Canonical capture
 
-On each SSE connection, the driver waits for the first live event, then reads native history before
-processing subsequent live events. Reconnects use capped exponential backoff and repeat history
-backfill.
+OpenCode generates the canonical native message IDs. The accepted form is
+`msg_<12 lowercase hex><14 Base62>`, and their lexical order is the native chronological order. The
+driver never supplies a message ID for a browser turn. It preserves a projection-long immutable
+ledger and requires every reconciliation to retain all prior coordinates and append only a new suffix.
+Changed, removed, reordered, cross-session-reused, or behind-order coordinates terminate the
+projection. An exact repeated live coordinate with the same retained projection semantics is a no-op;
+a duplicated row inside one history response is malformed.
 
-This subscribe-first sequence narrows a snapshot race, but it is not a durable transaction: the SSE
-has no replay cursor, process loss can discard buffered bytes, and recent-ID dedup is bounded to 4,096
-entries. A history replay larger than that window can re-emit an evicted message.
+Every new assistant must name the latest preceding native user as its `parentID`. An already-known
+assistant may continue receiving part updates after a later steering user appears, but its parent may
+not change. OpenCode emits whole part replacements rather than token deltas; the driver buffers one
+message and emits it once complete. A mid-turn attach waits for completion rather than publishing a
+partial assistant as final.
 
-OpenCode sends whole part replacements, not token deltas. The driver buffers parts by message ID and
-emits a message once it is complete. A mid-turn history attach seeds an incomplete assistant into the
-buffer and waits for its live completion instead of freezing a partial response as delivered.
+For browser text, the host derives an exact part marker from its canonical downstream event UUID:
 
-`packages/cli/src/host/rc/opencode/translate.ts` maps only the understood subset:
+```text
+prt_rc_<32 lowercase hexadecimal UUID characters, without hyphens>
+```
 
-| OpenCode part | Canonical relay block |
+`prompt_async` sends that marker as the text-part ID and deliberately omits `messageID`. The browser
+turn is correlated only after capture observes one complete OpenCode-generated user message whose
+marker's text and full user-message text both equal the original accepted bytes. A missing, changed,
+merged, repeated, or partial marker fails closed. The marker is a correlation coordinate, not an
+idempotency key.
+
+Both browser-origin and TUI-origin user rows enter the shared transcript at this canonical native
+observation. The browser's authenticated `client_msg_id` is retained only as a viewer reconciliation
+coordinate. Canonical transcript order and UUID come from OpenCode.
+
+The understood part translation remains intentionally bounded:
+
+| OpenCode part | Canonical viewer block |
 | --- | --- |
 | text | `text` |
 | reasoning | `thinking` |
 | pending/running tool | `tool_use` |
-| completed/failed tool | `tool_use`, followed by user-role `tool_result` |
+| completed/failed tool | `tool_use`, then user-role `tool_result` |
 | subtask | `Task` `tool_use` anchor |
-| housekeeping or unknown part | dropped |
+| housekeeping or unknown | dropped |
 
-Child sessions are followed while live. Their assistant output is tagged with the parent Task anchor
-so the viewer nests it. The parent subtask part does not contain the child session ID, so correlation
-uses parent session, agent, and FIFO order. Concurrent same-agent child sessions can therefore be
-mis-nested for display. Finished children are removed from the live follow set; complete historical
-child discovery is not implemented.
+Live child sessions are nested under a parent Task when the observed parent, agent, and FIFO anchor
+can be matched. The native subtask part carries no child-session ID, so concurrent same-agent children
+under one parent can still be display-misnested. This limitation does not drop or reroute a native
+mutation and is not a richer subagent-parity claim.
 
-Main-session user messages are matched against a bounded multiset of text the driver injected. A match
-is the remote prompt echo and is suppressed because the relay already rendered it. An unmatched user
-message is marked `local_prompt:true` and shown in the viewer. Concurrent identical text from the TUI
-and browser can be misattributed; that changes display attribution, not what OpenCode executes.
+## 5. Text and interrupt admission
 
-## 5. Injection and controls
+The relay rejects blank text and text whose trimmed start begins with `/`; all other accepted text
+bytes are preserved. Unsupported control families are capability-gated and harmless if an old or
+handcrafted client sends them. The supported actions are:
 
-The injection pump serially drains `Session.followDownstream`:
-
-| Session event | OpenCode action |
+| Browser event | Native result |
 | --- | --- |
-| blank `user` text | no-op, then acknowledge |
-| ordinary `user` text | `prompt_async`, then acknowledge the session event |
-| exact `/compact` | dispatch `summarize` without blocking later interrupt handling |
-| `initialize` | no-op, then acknowledge |
-| `interrupt` | await native `abort`, then acknowledge |
-| internal `set_model` | accept only `providerID/modelID` for later prompts |
-| `set_permission_mode`, `end`, unknown control | safe no-op, then acknowledge |
-| permission response | send one native permission reply, then acknowledge |
+| ordinary text | FIFO wait, atomic transport+idle claim, one `prompt_async`, exact marker+text correlation, then downstream event acknowledgement |
+| interrupt | wait for trustworthy transport, one `abort`, require literal JSON `true`, then downstream event acknowledgement |
+| initialize | no native mutation |
+| model, mode, status, end, attachment, slash command | unsupported; no native mutation |
 
-The viewer advertises model switching as false because its ordinary model aliases do not match the
-OpenCode `providerID/modelID` contract. The internal handler remains defensive for old/custom clients.
+One process-local latch owns both transport trust and native-idle admission. A text writer claims both
+conditions synchronously and consumes idle before posting. Browser turns wait FIFO. A newly observed
+local native user closes admission immediately; native `busy` and `retry` never open it.
 
-A failed `prompt_async` rolls back its echo-suppression token and withholds the session acknowledgement.
-The empty `204` is a transport receipt, not proof that OpenCode applied the turn. If OpenCode accepted
-the request and its response was lost, a later retry can duplicate work. The current compatibility
-driver does not provide durable exactly-once input or safe ambiguous-outcome recovery.
+A live `session.idle` event is only a trigger. The capture owner must re-read strict bounded history
+and `/session/status`. For an active browser turn, the exact marker must remain the latest native user
+and the turn must have crossed a native busy epoch before live idle releases the next writer. This
+prevents a stale or unrelated idle event from admitting concurrent text.
 
-`/compact` is dispatched in the background because awaiting the whole summarize operation would block
-an interrupt behind it. A dispatch failure becomes a visible result and returns the displayed status to
-idle.
+SSE loss pauses transport admission and marks the session non-idle. Before any write resumes, reconnect
+must establish a new ready stream and re-prove exact version, exact session, strict history and parents,
+browser correlation, and exact status. Failure to prove continuity closes the writable projection.
 
-## 6. Permissions
+Prompt and interrupt are separate irreversible native HTTP boundaries. Each receives one attempt. A
+rejection, timeout, malformed acknowledgement, or response-unknown outcome is never retried and fences
+the projection. This is fail-closed ambiguous-outcome handling, not native idempotency.
 
-Permission mirroring is on by default. Before readiness, the driver:
+## 6. Permission posture
 
-1. reads the complete parent policy;
-2. skips mutation if the exact `{permission:"*", pattern:"*", action:"ask"}` rule already exists;
-3. otherwise places that catch-all before existing rules so later specific rules still win;
-4. patches the session; and
-5. requires a complete read-back containing the catch-all.
+The supported M2 path leaves OpenCode's native policy unchanged and advertises structured permissions
+as false. That means the browser cannot answer native gates; it does not mean “permissions off,” “all
+tools allowed,” or “remote-claw bypasses policy.” OpenCode and its local UI remain authoritative.
 
-A parent read, patch, or read-back failure prevents announcement. Newly discovered children receive
-the same setup best-effort, but OpenCode can execute a child's first tool before that asynchronous
-setup lands. Parent readiness does not prove child gating.
-
-OpenCode's observed policy PATCH behavior is append-only: empty or null updates do not clear the old
-rules. The driver therefore does not attempt a misleading restore on teardown. A catch-all it added can
-persist on a borrowed session until the user changes the native policy. The skip-permissions flag avoids
-that mutation and advertises structured permissions false.
-
-`permission.asked` becomes the shared relay's `permission_request`. Only explicit allow maps to native
-`once`; deny or malformed behavior maps to `reject`. The native reply must return JSON literal `true`.
-The driver does not use `permission.replied` to arbitrate a race with the native TUI, so a viewer gate
-can remain open after a local answer and a later remote answer can be stale.
+The positive `--rc-oc-mirror-permissions` opt-in is experimental. It adds a catch-all `ask` rule to the
+parent and best-effort followed children, exposes `permission.asked`, and maps explicit viewer allow to
+native `once`; deny or malformed input maps to `reject`. OpenCode's policy update is append-only, so a
+rule the driver adds can persist after teardown. Child first-tool and competing-local-answer races also
+remain. These limits are why mirroring is default-off and outside M2.
 
 ## 7. Advertised capabilities
 
-| Capability | Value | Reason |
+The default supported vector is:
+
+| Capability | Value | Meaning |
 | --- | --- | --- |
-| Structured permissions | true after parent setup; false with opt-out | parent catch-all is read back, but child and local-answer races remain |
-| Status | false | no proven initial status snapshot; later SSE status is useful but incomplete |
-| Interrupt | true | native abort route |
-| Set model | false | viewer alias format is incompatible |
-| Set mode | false | no faithful mapping |
-| End | false | no native session-end mapping |
-| Attachments | false | Claude-style local-file injection is not native OpenCode file-part fidelity |
+| Structured permissions | false | policy and gates stay native/local |
+| Status | false | status is an internal write-admission proof, not a viewer status contract |
+| Interrupt | true | exact-session native abort |
+| Set model | false | tuple is pinned |
+| Set mode | false | no graduated mapping |
+| End | false | companion does not own the native session |
+| Attachments | false | no proved native file-part fidelity |
 
-The relay rejects attachments before reassembly or file writes when this vector is active.
+Experimental permission mirroring changes only `structuredPermissions` to true after its parent rule
+is installed and read back. It does not graduate any other capability. Attachment rejection happens
+before reassembly or file writes.
 
-## 8. Teardown and recovery limits
+## 8. Teardown and restart
 
-Parent cancellation closes `ReadyBridge` and the synthetic `Session`, stops capture and injection,
-best-effort aborts the attached OpenCode run, and joins tracked child-policy tasks. These share one
-two-second deadline. The driver does not stop the external server.
+The external OpenCode session is never companion-owned. Only an admitted authenticated browser
+interrupt calls native `/abort`. Cancellation, broker loss, capture failure, companion restart, and
+ordinary teardown close the remote-claw projection without aborting the native turn or stopping the
+server.
 
-A fatal broker relay failure closes only the compatibility projection and its injection pump. The
-driver keeps the attached native turn and external OpenCode server alive until parent cancellation or a
-native pump failure. Viewer `end` does not trigger teardown and is disabled.
+A restart must name the same exact `ses_*`. It creates a fresh `cse_*`, opens a fresh stream, and
+reconciles the same bounded native history before publishing presence or accepting writes. Old broker
+commands are not consumed by the new projection. Stable same-row adoption, a durable native binding,
+and history beyond the current bound are future capabilities, not hidden M2 claims.
 
-Current recovery does not preserve a durable bridge/native binding, input journal, permission gates,
-SSE cursor, complete child lineage, or provider isolation. A native crash can also leave an incomplete
-assistant message without a future completion event; the driver will not invent a terminal message.
+## 9. Acceptance and deterministic ownership
 
-The small retained protocol fixture in [opencode-native-proof.md](opencode-native-proof.md) documents
-caller-supplied message-ID behavior for OpenCode 1.17.5. It is research evidence, not a release gate or
-runtime authority.
+The 2026-08-30 release acceptance passed on the exact supported tuple with the real OpenCode TUI and
+two independent browser contexts. It verified:
 
-## 9. Tests
+- OpenCode-generated native message IDs and exact `prt_rc_*` marker correlation for browser A and B;
+- TUI and browser turns appearing once in native order on both browsers;
+- an immutable reload with an unchanged native-history SHA-256;
+- interrupt of a genuinely busy turn followed by a successful continuation;
+- companion-only restart against the same exact `ses_*`, a fresh projection, and identical history
+  SHA-256; and
+- every old command appearing once after restart.
 
-Tests beside `packages/cli/src/host/rc/opencode/**` cover strict HTTP/SSE parsing, attachment selection,
-translation, message coalescing, bounded dedup, history backfill, reconnect, local-prompt attribution,
-controls, permissions, visible errors, and child nesting.
+Focused client, driver, relay, and viewer tests own malformed or reused coordinates, parent/order
+invariants, FIFO and busy/retry admission, local-user exclusion, live-idle reproof, reconnect-before-
+write, ambiguous mutation fencing, broker-projection loss, and no teardown abort.
 
-The optional live suite is:
+The optional package live suite remains a narrower driver/native-seam check:
 
 ```bash
 OPENCODE_URL=http://127.0.0.1:4096 \
+RC_OPENCODE_E2E_SESSION=ses_0123456789abcdef \
 pnpm --filter @remote-claw/cli run test:opencode-live
 ```
 
-The script sets the required `RC_OPENCODE_E2E_RUN=1` opt-in. Ordinary CLI tests never probe port 4096,
-even if an OpenCode server happens to be running. The live suite fails if the explicit target is
-unavailable. It proves the model-free caller-ID/ambiguous-retry observation and one real
-`OpencodeDriver` text turn. It does not prove coexistence with the real OpenCode TUI.
+It requires the script's explicit `RC_OPENCODE_E2E_RUN=1` opt-in and never probes a coincidental local
+server during ordinary tests. That suite is useful regression evidence, but the real-TUI/two-browser
+acceptance above is the M2 product proof.
+
+The retained [OpenCode protocol fixture](opencode-native-proof.md) records narrower 1.17.5 API
+observations. It is research evidence, not runtime authority or a broader compatibility promise.

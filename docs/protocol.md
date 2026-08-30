@@ -14,7 +14,10 @@ Anthropic but does not bridge the session to remote-claw. The Linux/exact-2.1.23
 `--rc-driver=claude-native` path now keeps ordinary Anthropic Remote Control active while projecting
 provider-ordered text to remote-claw, including an explicit exact-session restart attachment. Literal
 official Claude web UI acceptance and the Graduate commit's separate exact-SHA deployed-broker
-gate passed.
+gate passed. The exact OpenCode 1.17.5/Linux arm64/pinned-Bedrock text-and-interrupt tuple is also a
+supported adapter after its real-TUI/two-browser M2 acceptance. Its proved server environment was
+`AWS_REGION=us-west-1` plus explicit temporary SigV4 credential values; other regions or credential
+modes remain outside that claim, as do broader OpenCode tuples.
 
 ## 1. Topology
 
@@ -35,8 +38,8 @@ translates inference to Bedrock and synthesizes the required Anthropic control p
 reaches Anthropic. The `claude-native` launch form instead uses the proxy transparently to observe one
 exact successful bridge, then uses Anthropic history/SSE/text POST as an app client. Its attach-only
 form accepts an explicit exact native session ID and starts no interactive Claude session or proxy;
-the pinned-version probe still runs. The experimental
-OpenCode adapter and tmux fallback reach the same `Session` seam through their own native surfaces.
+the pinned-version probe still runs. The pinned OpenCode adapter and experimental tmux fallback reach
+the same `Session` seam through their own native surfaces.
 See
 [pluggable-harness.md](pluggable-harness.md).
 
@@ -126,7 +129,7 @@ Large messages are split into independently authenticated parts with one `msg_id
 is zero-based and `parts` is the total count. The receiver opens every part and the complete group
 before using the reassembled plaintext.
 
-## 4. The Claude Remote Control adapter
+## 4. Native adapters
 
 ### 4.1 Private facade
 
@@ -195,6 +198,31 @@ failure closes only that remote-claw projection. In launch form the transparent 
 Claude child remain running; in attach-only form the companion exits nonzero while the independently
 owned native session remains live.
 
+### 4.3 Pinned OpenCode text/interrupt companion
+
+The supported OpenCode path requires exact version 1.17.5 on Linux arm64, the pinned
+`amazon-bedrock/global.anthropic.claude-sonnet-4-6` model, one explicit existing `ses_*`, and a literal
+HTTP loopback origin. It never discovers or creates the attached root native session, but follows
+children announced from that root. Before presence, it opens SSE, requires `server.connected`,
+re-proves version and exact session, then reconciles bounded exact history, assistant parents, and
+`/session/status`.
+
+OpenCode generates canonical ordered `msg_<12 lowercase hex><14 Base62>` message IDs. For browser text,
+the host derives `prt_rc_<32 lowercase compact UUID>` as the text-part marker and omits `messageID`
+from `prompt_async`. Capture correlates only the complete marker plus complete immutable native user
+text, then publishes that native row with its original browser coordinate. Every new assistant must
+name the latest preceding native user as parent; an existing assistant can continue updating after a
+later user without changing parent.
+
+One atomic latch admits FIFO browser text only while transport is trustworthy and the exact native
+session is re-proved idle. `busy`, `retry`, and a newly observed local user close admission. A live idle
+event is merely a trigger for strict history plus exact `/session/status` reproof; an active browser
+turn must remain the latest native user and must have crossed a busy epoch. Reconnect reconciles before
+writes resume. Prompt and interrupt get one attempt each; ambiguous outcomes fence the projection.
+Only an authenticated browser interrupt calls native `/abort`. Teardown, broker/capture loss, and
+companion restart do not abort the externally owned OpenCode run. Restart is a fresh projection against
+the same exact `ses_*` and consumes no commands from the old broker session.
+
 ## 5. `Session` and the relay
 
 `packages/cli/src/host/rc/session.ts` is one in-memory event bus:
@@ -215,9 +243,10 @@ local adapter.
    input or controls.
 
 For a browser `user` frame on the private facade, one queued unit publishes `accepted`, publishes the
-canonical `user` echo, and only then calls `Session.pushUserInput`. Native-companion text instead
-publishes only a seq-less pending admission before delivery; provider history/SSE later owns the
-canonical accepted coordinate and user row. A failed required publication prevents the native side
+canonical `user` echo, and only then calls `Session.pushUserInput`. Claude-native and OpenCode text
+instead publish only a seq-less pending admission before delivery; native history/SSE later owns the
+canonical coordinate and user row. OpenCode additionally waits for exact marker-plus-text correlation
+before acknowledging the downstream event. A failed required publication prevents the native side
 effect. Permission resolution uses the private-facade ordering: publish `permission_resolved`, then
 deliver the worker response. Both pumps share the queue so a later native action cannot overtake an
 earlier frame whose publication fails.
@@ -291,7 +320,8 @@ cannot bypass a disabled button:
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
 | Claude native companion | no | no | no | no | no | no | no |
 | Experimental tmux, default mirroring | yes | no | yes | yes | no | no | yes |
-| Experimental OpenCode, default mirroring | yes | no | yes | no | no | no | no |
+| Pinned OpenCode M2, default native/local permissions | no | no | yes | no | no | no | no |
+| OpenCode experimental permission opt-in | yes | no | yes | no | no | no | no |
 
 The stable Claude surface accepts only non-empty, non-slash text. Its internal compatibility plumbing
 can translate more RC features, but those mutations are not advertised or accepted on the supported
@@ -303,6 +333,11 @@ A worker `can_use_tool` request becomes `permission_request`. The relay records 
 publishing it. A matching viewer answer publishes `permission_resolved` before the worker response;
 only explicit `allow` grants, while malformed behavior denies. Worker cancellation, interrupt, or
 teardown clears abandoned gates so presence cannot remain stuck on `needs`.
+
+The supported OpenCode M2 path does not mutate native policy and exposes no browser permission answer;
+OpenCode and its local UI remain authoritative. Its separate positive mirroring opt-in is experimental,
+append-only, and carries documented child-first-tool and competing-local-answer races. “Structured
+permissions false” means native/local handling, not that permissions are disabled.
 
 ## 10. Attachments
 
@@ -349,7 +384,7 @@ capability vector currently advertises all three false.
 Claude's REPL bridge has no working remote `end_session`; the official RC server's request is rejected
 by Claude too. The current `end` action therefore only clears abandoned permission state and is
 advertised false by every driver. Slash commands use ordinary `user` input, but the stable Claude
-surface rejects slash-leading text.
+surface and pinned OpenCode M2 surface reject slash-leading text.
 
 `catch_up` is a separate replay request, not a native control verb. The viewer currently stamps it
 with an expiry, but the host's replay branch does not enforce that expiry. Stable sequence and message
@@ -371,18 +406,19 @@ does not claim durable exactly-once collaboration:
    worker bearer, its downstream SSE carries new input, and the worker posts only new output. A resumed
    conversation's pre-resume transcript therefore cannot be recovered from the RC wire.
 5. The process-local readiness bridge has no durable host-wide inventory and cannot recover all old
-   driver bindings or resume an old writable bridge. Claude-native alone can attach a **new** projection
-   when the operator supplies one exact still-live native `cse_*`; it does not discover or persist that
-   ID.
+   driver bindings or resume an old writable bridge. Claude-native and OpenCode can attach a **new**
+   projection only when the operator supplies one exact still-live native `cse_*` or `ses_*`; neither
+   discovers or persists that ID.
 6. Presence proves recent authenticated publication, not delivery, native application, or a complete
    final tail.
 7. Session logs, inbound dedup, and the identity bus have no general compaction policy and can grow
    with a long-lived session.
-8. Tmux and OpenCode can recognize local prompts only after native observation, with documented
-   correlation limits. Stable MITM intentionally drops ordinary native user echoes to avoid duplicating
-   remote prompts, so a local Claude TUI prompt may execute without appearing in the viewer. The native
-   companion projects pinned top-level provider user events from both local-worker and app-client
-   sources.
+8. Tmux recognizes local prompts only after terminal observation and retains its documented text-ledger
+   limits. Pinned OpenCode instead publishes both TUI and browser prompts only at their immutable native
+   message coordinates; browser attribution requires the exact host marker and full text. Stable MITM
+   intentionally drops ordinary native user echoes to avoid duplicating remote prompts, so a local
+   Claude TUI prompt may execute without appearing in the viewer. The native Claude companion projects
+   pinned top-level provider user events from both local-worker and app-client sources.
 9. The default `--rc-driver=mitm` topology replaces Anthropic Remote Control. The native companion
    preserves that provider topology, and packed-install restart plus broker-loss isolation are locally
    proven. Literal official web UI coexistence and the Graduate commit's separate exact-SHA
@@ -393,8 +429,8 @@ and invalid-success parse details are discarded before errors reach normal relay
 publish and recovery-cursor bodies are shape-checked. The exact `410 + channel_storage_lost` pair
 remains the only typed permanent channel-loss response.
 
-These are product limits, not invitations to rebuild a second protocol stack. M1 is complete; add more
-protocol machinery only for a concrete later capability failure.
+These are product limits, not invitations to rebuild a second protocol stack. M1 and the pinned M2
+tuple are complete; add more protocol machinery only for a concrete later capability failure.
 
 ## 13. Code and test map
 
@@ -406,6 +442,8 @@ The active protocol is concentrated in these paths:
 - `packages/cli/src/host/rc/{session,relay,mitm,launch}.ts` — Claude adapter and host relay.
 - `packages/cli/src/host/rc/anthropic/{client,driver,transport,credentials}.ts` — provider-native
   history/SSE/text transport, exact binding, and projection lifecycle.
+- `packages/cli/src/host/rc/opencode/{client,driver,translate}.ts` — pinned exact-session HTTP/SSE
+  capture, native admission, marker correlation, and bounded part translation.
 - `packages/cli/src/host/rc/drivers/{bridge,ready-bridge}.ts` — process-local readiness and broker
   bridge lifecycle shared by current adapters.
 - `apps/web/app/api/{relay,stream,seq,frame-count}/route.ts` — broker API.

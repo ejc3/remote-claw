@@ -6,14 +6,17 @@ multiple remote-claw browsers and preserves official provider collaboration wher
 Inference routing (Anthropic/OpenAI/Bedrock) is an orthogonal axis. “Accountless” means no Anthropic
 account, not no AWS/provider or remote-claw credentials.
 
-**Current truth:** the private Claude replacement relay and narrower OpenCode/tmux adapters work. The
-Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text to remote-claw while
+**Current truth:** the private Claude replacement relay, the pinned OpenCode 1.17.5/Linux arm64/
+Bedrock global Sonnet 4.6/`us-west-1`/explicit temporary SigV4 environment credentials/explicit
+`ses_*`/loopback text-and-interrupt adapter, and the narrower tmux adapter work. The
+Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text to
+remote-claw while
 ordinary Anthropic Remote Control remains active. Its packed-install restart, broker-loss, and
 credential/log checks passed. The literal logged-in official Claude web UI on the user's phone, the
 local TUI, and two remote-claw browsers then completed the bounded coexistence run, including liveness
 after the official client disconnected. The Graduate commit's separate exact-SHA deployed-broker gate
-passed. M1 is complete and OpenCode M2 is active. The production Codex adapter is not implemented. The
-supported durable broker is
+passed. M1 and OpenCode M2 are complete; structured Codex M3a is next. The production Codex adapter
+is not implemented. The supported durable broker is
 SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Design lives in
 `docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI is `packages/cli`.
 Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-architecture.md` §17.

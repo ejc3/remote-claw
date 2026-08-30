@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Viewer } from "../app/lib/viewer.js";
 import {
+  composerTextForSend,
   enterShouldSend,
   fitStaged,
+  isOpenCodeNativeTextSurface,
   isStableClaudeSurface,
+  isSupportedOpenCodeSurface,
   remoteMutationEnabled,
   reportsWorkerStatus,
   sendComposer,
@@ -133,6 +136,57 @@ describe("stable Claude mutation surface", () => {
     expect(reportsWorkerStatus(nativeCompanionCaps)).toBe(false);
     expect(reportsWorkerStatus(privateRelayCaps)).toBe(true);
     expect(reportsWorkerStatus(undefined)).toBe(true);
+  });
+});
+
+describe("supported OpenCode mutation surface", () => {
+  const caps = {
+    structuredPermissions: false,
+    status: false,
+    controls: { interrupt: true, setModel: false, setMode: false, end: false },
+    attachments: false,
+  };
+  const harness = { agent: "opencode", mode: "opencode" } as const;
+
+  it("recognizes only the exact native text-plus-interrupt tuple", () => {
+    expect(isOpenCodeNativeTextSurface(harness, caps)).toBe(true);
+    expect(isSupportedOpenCodeSurface(harness, caps)).toBe(true);
+    expect(reportsWorkerStatus(caps)).toBe(false);
+    expect(isSupportedOpenCodeSurface({ agent: "claude-code", mode: "rc" }, caps)).toBe(false);
+    expect(isSupportedOpenCodeSurface(harness, { ...caps, structuredPermissions: true })).toBe(
+      false,
+    );
+    expect(isOpenCodeNativeTextSurface(harness, { ...caps, structuredPermissions: true })).toBe(
+      true,
+    );
+    expect(isSupportedOpenCodeSurface(harness, { ...caps, status: true })).toBe(false);
+    expect(isSupportedOpenCodeSurface(harness, { ...caps, attachments: true })).toBe(false);
+    for (const control of ["setModel", "setMode", "end"] as const) {
+      expect(
+        isSupportedOpenCodeSurface(harness, {
+          ...caps,
+          controls: { ...caps.controls, [control]: true },
+        }),
+      ).toBe(false);
+    }
+    expect(
+      isSupportedOpenCodeSurface(harness, {
+        ...caps,
+        controls: { ...caps.controls, interrupt: false },
+      }),
+    ).toBe(false);
+    expect(isSupportedOpenCodeSurface(harness, undefined)).toBe(false);
+  });
+
+  it("blocks trimmed-empty and slash-prefixed input while admitting ordinary text", () => {
+    expect(stableTextBlockReason(" \n\t ", true)).toBe("empty");
+    expect(stableTextBlockReason(" \t/compact \n", true)).toBe("slash");
+    expect(stableTextBlockReason("  preserve these edges  ", true)).toBeNull();
+  });
+
+  it("preserves every admitted OpenCode text byte at the send boundary", () => {
+    expect(composerTextForSend(" \tkeep both edges\n ", true)).toBe(" \tkeep both edges\n ");
+    expect(composerTextForSend("  compatibility trim  ", false)).toBe("compatibility trim");
   });
 });
 

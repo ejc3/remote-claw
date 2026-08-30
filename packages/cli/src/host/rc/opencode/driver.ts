@@ -1,8 +1,8 @@
 // The OpenCode driver: bridges an `opencode serve` session to our broker via the SAME Session/relay
 // contract the MITM uses (driver.ts seam). It does NOT stand up the MITM — it talks straight to the
-// OpenCode HTTP+SSE server. Startup creates a private compatibility Session, proves one exact native
-// session and (unless explicitly skipped) its permission policy. Only then does one readiness latch
-// start the broker bridge and the concurrent CAPTURE + INJECT pumps.
+// OpenCode HTTP+SSE server. Startup creates a private compatibility Session, proves the frozen native
+// tuple and one exact caller-selected session, then subscribes and reconciles bounded history before
+// one readiness latch starts the broker bridge and the concurrent CAPTURE + INJECT pumps.
 //
 // The three driver obligations from the adversarial review (driver.ts "DRIVER OBLIGATIONS") are the
 // load-bearing logic here:
@@ -10,13 +10,12 @@
 //                  transcript seq per pushUpstream. So we BUFFER parts per messageID and pushUpstream
 //                  ONCE per completed message (on session.idle / an assistant message.updated with
 //                  time.completed), never per part.updated.
-//   #2 DEDUP     — re-pushing a uuid does NOT dedup at the relay. We track a bounded recent window of
-//                  emitted message IDs, suppressing ordinary SSE reconnect overlap while each ID
-//                  remains present; a replay larger than that window can re-emit an evicted message.
+//   #2 DEDUP     — re-pushing a uuid does NOT dedup at the relay. One projection-long bounded ledger
+//                  admits each immutable native message coordinate once and rejects changed reuse.
 //   #5 ACK       — followDownstream only suppresses replay for ids in #acked; a non-MITM driver has no
-//                  /worker/events/delivery, so we call session.ack(ev.eventId) after EVERY successful
-//                  transport inject, INCLUDING the leading `initialize` control_request. This ACK does
-//                  not prove OpenCode applied or ordered the native action.
+//                  /worker/events/delivery. Browser text is ACKed only after exact marker+full-text
+//                  correlation in native capture; supported controls are ACKed after their one native
+//                  transport response, and initialize after its no-op. None is a durable native receipt.
 //
 // SUB-AGENTS (Task) ARE BRIDGED (#102). OpenCode spawns a Task/subagent as a CHILD session
 // (Session.parentID → the parent) and emits a `subtask` part on the parent message. translate.ts renders
@@ -29,14 +28,9 @@
 //     message (an unmatched child just stays top-level). Revisit if opencode exposes a part→child id link.
 //
 // OTHER V1 LIMITATIONS (documented, intentional — not bugs):
-//   • RELAY DEATH closes the compatibility Session/projection and its injection pump. It does not abort
-//     the attached native turn or stop the external server; those remain owned until parent cancellation
-//     or a native-pump failure. The projection itself has no durable restart/reconciliation policy.
-//   • IDENTICAL-PROMPT COLLISION (review #9). Echo suppression correlates a flushed OpenCode user message
-//     to a driver-injected prompt by TEXT (the #injectedTexts multiset). If a web prompt "X" and a TUI
-//     prompt "X" race before the first echo flushes, the driver can mis-attribute one for the other
-//     (suppress the local one / surface the injected one). Rare and self-limited to identical text;
-//     revisit with message-id correlation if OpenCode exposes the prompt's resulting message id.
+//   • RELAY DEATH closes only the compatibility projection. It never aborts the externally owned native
+//     turn or stops the OpenCode server. A wrapper restart intentionally creates a fresh projection and
+//     observes the same bounded native history without replaying commands from the old broker session.
 
 import type { BrokerClient } from "../../../broker/client.js";
 import { type Tracer, tracerFromEnv } from "../../../trace.js";
@@ -47,43 +41,201 @@ import {
   OPENCODE_HARNESS,
 } from "../driver.js";
 import { ReadyBridge } from "../drivers/ready-bridge.js";
-import { RelayCore, type Session } from "../session.js";
+import { type RcEvent, RelayCore, type Session } from "../session.js";
 import {
   DEFAULT_OPENCODE_URL,
   eventSessionId,
   type HistoryMessage,
+  isOpencodeMessageId,
   isOpencodeSessionId,
+  isValidOpencodeMessageInfo,
+  isValidOpencodePart,
+  OPENCODE_HISTORY_LIMIT,
   OpencodeClient,
   type OpencodeClientOptions,
+  OpencodeError,
   type OpencodeEvent,
   type OpencodeModel,
+  type OpencodeSessionStatus,
   type PermissionRule,
 } from "./client.js";
 import {
   coalesceMessage,
   type Part,
+  partToBlocks,
   type SubtaskPart,
   userPartsText,
   userText,
 } from "./translate.js";
 
 // Bedrock Claude Sonnet is the default model path: a reliable tool-caller, so the permission/tool
-// round-trips actually exercise (no flaky tiny-model fallback). The `global.` inference profile is
-// region-agnostic, so there is no region to configure. The opencode SERVER must have the `amazon-bedrock`
-// provider + AWS credentials in ITS process env — opencode's AI-SDK Bedrock client does NOT walk the IMDS
-// instance-role chain (verified on 1.17.5), so it needs STATIC creds (e.g. exported from the instance
-// role via `aws configure export-credentials --format env`) or AWS_BEARER_TOKEN_BEDROCK. See
+// round-trips actually exercise (no flaky tiny-model fallback). The `global.` inference profile selects
+// the cross-region model, but the AWS SDK still requires a region. The opencode SERVER must have the
+// `amazon-bedrock` region + credentials in ITS process env — opencode's AI-SDK Bedrock client does NOT
+// walk the IMDS instance-role chain (verified on 1.17.5), so it needs explicit credentials (for example,
+// short-lived values from `aws configure export-credentials --format env`) or
+// AWS_BEARER_TOKEN_BEDROCK. See
 // docs/opencode-driver.md.
 export const DEFAULT_OPENCODE_MODEL: OpencodeModel = {
   providerID: "amazon-bedrock",
   modelID: "global.anthropic.claude-sonnet-4-6",
 };
 
+export class OpencodeProjectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpencodeProjectionError";
+  }
+}
+
+/** Derive the exact caller-owned text-part marker from the host-minted downstream UUID. */
+export function opencodePartId(eventId: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(eventId)) {
+    throw new OpencodeProjectionError("downstream event has a noncanonical host identity");
+  }
+  return `prt_rc_${eventId.replaceAll("-", "")}`;
+}
+
+/** One atomic admission latch: text claims transport+idle in one synchronous edge; interrupt and
+ * permission replies wait only for a trustworthy transport. */
+class NativeAdmission {
+  #transportReady = false;
+  #nativeIdle = false;
+  #next = Promise.withResolvers<void>();
+
+  #changed(): void {
+    const next = this.#next;
+    this.#next = Promise.withResolvers<void>();
+    next.resolve();
+  }
+
+  pauseTransport(): void {
+    if (!this.#transportReady) return;
+    this.#transportReady = false;
+    this.#changed();
+  }
+
+  resumeTransport(): void {
+    if (this.#transportReady) return;
+    this.#transportReady = true;
+    this.#changed();
+  }
+
+  markNativeBusy(): void {
+    if (!this.#nativeIdle) return;
+    this.#nativeIdle = false;
+    this.#changed();
+  }
+
+  markNativeIdle(): void {
+    if (this.#nativeIdle) return;
+    this.#nativeIdle = true;
+    this.#changed();
+  }
+
+  async waitTransport(signal: AbortSignal): Promise<void> {
+    while (!this.#transportReady) {
+      throwIfAborted(signal);
+      await Promise.race([this.#next.promise, waitAbort(signal)]);
+    }
+    throwIfAborted(signal);
+  }
+
+  /** Node's synchronous run-to-completion makes the final check→busy transition one atomic claim. */
+  tryClaimTurn(): boolean {
+    if (!this.#transportReady || !this.#nativeIdle) return false;
+    this.#nativeIdle = false;
+    return true;
+  }
+
+  async claimTurn(signal: AbortSignal): Promise<void> {
+    for (;;) {
+      throwIfAborted(signal);
+      if (this.tryClaimTurn()) return;
+      await Promise.race([this.#next.promise, waitAbort(signal)]);
+    }
+  }
+}
+
+/** A projection-long immutable message ledger; exhaustion or changed reuse is terminal. */
+class CanonicalMessageLedger {
+  readonly #fingerprints = new Map<string, string>();
+
+  admit(messageId: string, fingerprint: string): boolean {
+    const previous = this.#fingerprints.get(messageId);
+    if (previous !== undefined) {
+      if (previous !== fingerprint) {
+        throw new OpencodeProjectionError("OpenCode reused a message id with changed content");
+      }
+      return false;
+    }
+    if (this.#fingerprints.size >= OPENCODE_HISTORY_LIMIT) {
+      throw new OpencodeProjectionError("OpenCode projection exceeds the message-coordinate limit");
+    }
+    this.#fingerprints.set(messageId, fingerprint);
+    return true;
+  }
+
+  has(messageId: string): boolean {
+    return this.#fingerprints.has(messageId);
+  }
+}
+
+interface BrowserMutation {
+  text: string;
+  clientMsgId?: string;
+}
+
+interface Deferred {
+  promise: Promise<void>;
+  resolve(): void;
+}
+
+interface ActiveBrowserTurn {
+  eventId: string;
+  partId: string;
+  text: string;
+  nativeUserId?: string;
+  sawBusy: boolean;
+  correlated: Deferred;
+}
+
+/** A bounded FIFO above OpenCode's single native runner. Reading the broker stream stays independent so
+ * an interrupt can still reach a running turn while later browser text waits here. */
+class BrowserTurnQueue {
+  readonly #items: RcEvent[] = [];
+  #wake = Promise.withResolvers<void>();
+
+  push(event: RcEvent): void {
+    if (this.#items.length >= OPENCODE_HISTORY_LIMIT) {
+      throw new OpencodeProjectionError("OpenCode browser-turn queue exceeded its bound");
+    }
+    this.#items.push(event);
+    const wake = this.#wake;
+    this.#wake = Promise.withResolvers<void>();
+    wake.resolve();
+  }
+
+  async shift(signal: AbortSignal): Promise<RcEvent | undefined> {
+    while (this.#items.length === 0) {
+      if (signal.aborted) return undefined;
+      await Promise.race([this.#wake.promise, waitAbort(signal)]);
+    }
+    return this.#items.shift();
+  }
+}
+
+interface OpencodeConnection {
+  iterator: AsyncIterator<OpencodeEvent>;
+  first: IteratorResult<OpencodeEvent>;
+  close(): void;
+}
+
 function opencodeViewerCapabilities(structuredPermissions: boolean): DriverCapabilities {
   return {
     structuredPermissions,
-    // There is no proven initial GET /session/status snapshot; later SSE status events do not make the
-    // initial announcement truthful.
+    // Startup/reconnect status snapshots are sufficient for conservative write admission, but not a
+    // continuous viewer-status contract across every SSE edge.
     status: false,
     controls: { interrupt: true, setModel: false, setMode: false, end: false },
     // The compatibility prompt translator has no proved native OpenCode file-part fidelity.
@@ -99,15 +251,14 @@ export interface OpencodeExtra {
   model?: OpencodeModel;
   /** Optional HTTP Basic password (OPENCODE_SERVER_PASSWORD). */
   password?: string;
-  /** Explicit OpenCode session to attach to (`--rc-oc-session`). It must be canonical and appear in a
-   *  valid discovery snapshot. Without one, only a valid empty snapshot permits creating one session;
-   *  a non-empty snapshot is ambiguous and fails closed. */
+  /** HTTP Basic username (OPENCODE_SERVER_USERNAME, default `opencode`). */
+  username?: string;
+  /** Explicit OpenCode session to attach to (`--rc-oc-session`). Required on the supported path. */
   sessionId?: string;
-  /** MIRROR tool permissions to the viewer (B2 parity, DEFAULT ON). When on, the driver adds a catch-all
+  /** MIRROR tool permissions to the viewer (experimental, DEFAULT OFF). When on, the driver adds a catch-all
    *  "ask" rule to the bridged session (and each followed child), so otherwise-unconfigured tools raise
    *  a `permission.asked` gate the viewer answers instead of taking OpenCode's default. Existing later
-   *  specific allow/deny rules remain authoritative. Off (`--rc-oc-skip-permissions`) leaves the
-   *  session's own permission config untouched.
+   *  specific allow/deny rules remain authoritative. Off leaves native policy untouched.
    *
    *  PERSISTENCE (documented limitation): opencode's PATCH /session/{id} { permission } is APPEND-ONLY
    *  (verified live: rules concatenate; null/[]/{} are no-ops) — there is NO clear/replace. So once we
@@ -126,6 +277,7 @@ function readExtra(extra: Record<string, unknown> | undefined): OpencodeExtra {
   const out: OpencodeExtra = {};
   if (typeof extra.baseUrl === "string") out.baseUrl = extra.baseUrl;
   if (typeof extra.password === "string") out.password = extra.password;
+  if (typeof extra.username === "string") out.username = extra.username;
   if (typeof extra.sessionId === "string" && extra.sessionId !== "")
     out.sessionId = extra.sessionId;
   if (typeof extra.mirrorPermissions === "boolean") out.mirrorPermissions = extra.mirrorPermissions;
@@ -148,27 +300,6 @@ export function hasRemoteClawAskRule(rules: readonly PermissionRule[]): boolean 
       rule.pattern === ASK_ALL_RULE.pattern &&
       rule.action === ASK_ALL_RULE.action,
   );
-}
-
-function requireDiscoveredSessions(value: unknown): Array<{ id: string }> {
-  if (!Array.isArray(value)) {
-    throw new Error("OpenCode discovery did not return a session array");
-  }
-  const sessions: Array<{ id: string }> = [];
-  const seen = new Set<string>();
-  for (const item of value) {
-    const id =
-      typeof item === "object" && item !== null ? (item as { id?: unknown }).id : undefined;
-    if (!isOpencodeSessionId(id)) {
-      throw new Error("OpenCode discovery returned a noncanonical session entry");
-    }
-    if (seen.has(id)) {
-      throw new Error("OpenCode discovery returned a duplicate session id");
-    }
-    seen.add(id);
-    sessions.push({ id });
-  }
-  return sessions;
 }
 
 /** Merge the catch-all ask with a session's EXISTING permission rules, preserving the existing policy —
@@ -194,11 +325,8 @@ interface MessageBuffer {
   order: string[];
 }
 
-/** Default cap for the bounded dedup/correlation structures (#emitted, #injectedTexts, #roles).
- *  A single turn touches O(1) ids, so 4096 covers thousands of recent turns without unbounded growth.
- *  This is only a recent window: a history replay larger than the window can re-emit evicted messages
- *  after reconnect, so it is not a durable no-duplicates guarantee. */
-const DEFAULT_EMITTED_CAP = 4096;
+/** Shared bound for projection-local correlation structures. */
+const DEFAULT_EMITTED_CAP = OPENCODE_HISTORY_LIMIT;
 
 /** Best-effort human-readable text from a `session.error` payload (OpenCode sends `error.toObject()`,
  *  typically `{ name, data: { message } }`, but shapes vary by provider). Falls back through message →
@@ -251,6 +379,8 @@ function sessionErrorTraceFields(
  *  lived (a clean EOF), so a healthy-then-blip reconnect is fast. */
 const RECONNECT_BACKOFF_MIN_MS = 250;
 const RECONNECT_BACKOFF_MAX_MS = 5000;
+const RECONNECT_ATTEMPTS = 5;
+const OPENCODE_MUTATION_TIMEOUT_MS = 15_000;
 
 /** Let native abort and the bridge's final broker flush settle, but never let either unresponsive
  * endpoint prevent OpenCode attach-failure or normal driver teardown from returning. */
@@ -335,42 +465,42 @@ class BoundedMap<V> {
 }
 
 export class OpencodeDriver implements Driver {
-  /** Conservative until setup proves permission mirroring. No bridge can observe this object before the
-   *  ready transition; a successful read/install/read-back flips only structuredPermissions. */
+  /** Conservative until setup; the supported default never claims browser permission handling. */
   readonly capabilities: DriverCapabilities;
 
   readonly #ctx: DriverContext;
   readonly #extra: OpencodeExtra;
-  /** Mirror tool permissions to the viewer (default on; `--rc-oc-skip-permissions` opts out). */
+  /** Experimental permission mirroring (default off; positive opt-in only). */
   readonly #mirror: boolean;
   readonly #model: OpencodeModel;
   readonly #client: OpencodeClient;
   readonly #tracer: Tracer;
 
-  /** Buffered in-flight assistant messages, keyed by OpenCode messageID. Flushed (and removed) on
-   *  session.idle / a completed assistant message.updated. Self-bounded (cleared on flush / re-seeded
-   *  per incomplete message), so it never needs an explicit cap. */
+  /** Buffered in-flight messages, keyed by OpenCode messageID. New coordinates are hard-bounded. */
   readonly #buffers = new Map<string, MessageBuffer>();
-  /** Recently pushUpstream-ed message IDs. This suppresses ordinary SSE/backfill overlap while an ID
-   *  remains in the FIFO-bounded window, without growing for the bridge's whole lifetime. It is not a
-   *  durable exactly-once set: a reconnect whose history exceeds the window can re-emit an evicted ID. */
-  readonly #emitted = new BoundedSet(DEFAULT_EMITTED_CAP);
-  /** messageID → role, learned from `message.updated` (and backfilled history). An ASSISTANT message is
-   *  pushed upstream as an `assistant` payload. A USER message is handled by origin (see #injectedTexts):
-   *  one WE injected is the echo of a viewer prompt (the relay's inbound pump already surfaced it) and is
-   *  SUPPRESSED; one we did NOT inject was typed at the OpenCode TUI / by another client and is surfaced
-   *  as a `local_prompt` `user` payload so it shows in the web viewer. FIFO-bounded (review #6). */
+  /** Projection-long immutable native message coordinates. */
+  readonly #emitted = new CanonicalMessageLedger();
+  /** Projected message → exact per-part display semantics, for subscribe-before-history overlap. */
+  readonly #emittedParts = new Map<string, Map<string, string>>();
+  #emittedPartCount = 0;
+  /** Caller-owned text-part id → authenticated browser mutation awaiting its canonical native echo. */
+  readonly #browserMutations = new Map<string, BrowserMutation>();
+  /** Every native part coordinate has one immutable containing message, including consumed markers. */
+  readonly #partOwner = new Map<string, string>();
+  #partCoordinateCount = 0;
+  /** Per-native-session chronological message identities used to detect inserts behind projected order. */
+  readonly #messageOrder = new Map<string, string[]>();
+  readonly #messageOwner = new Map<string, string>();
+  #messageCoordinateCount = 0;
+  readonly #admission = new NativeAdmission();
+  readonly #browserTurns = new BrowserTurnQueue();
+  #activeBrowserTurn: ActiveBrowserTurn | undefined;
+  /** messageID → role, learned from `message.updated` and strict history. */
   readonly #roles = new BoundedMap<string>(DEFAULT_EMITTED_CAP);
-  /** Multiset of prompt texts the INJECT pump sent via prompt_async, keyed by text → count. When a
-   *  user-role message flushes we decrement the matching entry and SUPPRESS it (it's our own echo); a
-   *  user message with no matching entry is a LOCAL prompt (TUI / other client) → emitted `local_prompt`.
-   *  A multiset (not a set) so two identical prompts each suppress exactly one echo. Bounded: entries are
-   *  decremented+deleted on a matched echo, and a failed inject ROLLS BACK its entry (review #3), so this
-   *  only holds in-flight (un-echoed) prompts — naturally small. */
-  readonly #injectedTexts = new Map<string, number>();
-  /** The active model to use for the next prompt_async; updated by a set_model control verb. */
-  #activeModel: OpencodeModel;
-
+  /** Assistant messageID → immutable required parent user messageID. */
+  readonly #assistantParents = new BoundedMap<string>(DEFAULT_EMITTED_CAP);
+  /** The newest user observed in each native session; new assistants must bind to that exact user. */
+  readonly #latestUser = new BoundedMap<string>(DEFAULT_EMITTED_CAP);
   // ── Sub-agent (Task) bridging (#102) ──────────────────────────────────────────────────────────────
   // OpenCode spawns a Task/subagent as a CHILD session (Session.parentID → the parent) and emits a
   // `subtask` part on the parent message (rendered as a Task tool_use anchor in translate.ts). We FOLLOW
@@ -404,15 +534,15 @@ export class OpencodeDriver implements Driver {
   constructor(ctx: DriverContext) {
     this.#ctx = ctx;
     this.#extra = readExtra(ctx.extra);
-    this.#mirror = this.#extra.mirrorPermissions ?? true; // DEFAULT ON (tmux parity)
+    this.#mirror = this.#extra.mirrorPermissions ?? false;
     this.capabilities = opencodeViewerCapabilities(false);
     this.#model = this.#extra.model ?? DEFAULT_OPENCODE_MODEL;
-    this.#activeModel = this.#model;
     this.#tracer = (ctx.tracer ?? tracerFromEnv("rc.opencode")).child({ driver: "opencode" });
     this.#client =
       this.#extra.client ??
       new OpencodeClient({
         baseUrl: this.#extra.baseUrl ?? DEFAULT_OPENCODE_URL,
+        ...(this.#extra.username !== undefined ? { username: this.#extra.username } : {}),
         ...(this.#extra.password !== undefined ? { password: this.#extra.password } : {}),
       } satisfies OpencodeClientOptions);
   }
@@ -443,13 +573,33 @@ export class OpencodeDriver implements Driver {
     const stop = bridge.signal;
 
     let ocSessionId: string;
+    let firstConnection: OpencodeConnection | undefined;
     try {
+      throwIfAborted(stop);
+
+      if (
+        this.#model.providerID !== DEFAULT_OPENCODE_MODEL.providerID ||
+        this.#model.modelID !== DEFAULT_OPENCODE_MODEL.modelID
+      ) {
+        throw new Error("the supported OpenCode path requires the pinned Bedrock Sonnet model");
+      }
+      await this.#client.requireSupportedVersion(stop);
       throwIfAborted(stop);
 
       ocSessionId = await this.#attach(stop);
       throwIfAborted(stop);
 
+      // A writable projection exists only after the stream is live and a strict bounded history
+      // snapshot has reconciled behind it. Events arriving during history stay queued on this iterator.
+      this.#mainSessionId = ocSessionId;
+      this.#followed.add(ocSessionId);
+      firstConnection = await this.#openConnection(ocSessionId, stop);
+      // Re-prove the pinned tuple after the stream opens. A server replacement between the first
+      // health/identity checks and GET /event must never inherit a writable projection.
+      await this.#client.requireSupportedVersion(stop);
+      await this.#requireExactSession(ocSessionId, stop);
       if (this.#mirror) await this.#requireAskMirroring(ocSessionId, stop);
+      await this.#reconcileNativeTurnState(session, ocSessionId, stop);
       throwIfAborted(stop);
 
       const readyCapabilities = opencodeViewerCapabilities(this.#mirror);
@@ -462,7 +612,9 @@ export class OpencodeDriver implements Driver {
       });
       throwIfAborted(stop);
       Object.assign(this.capabilities, readyCapabilities);
+      this.#admission.resumeTransport();
     } catch (e) {
+      firstConnection?.close();
       const cancelled = stop.aborted;
       if (cancelled) this.#tracer.debug("opencode startup cancelled");
       else this.#tracer.error("opencode registration failed", { error: String(e) });
@@ -472,223 +624,379 @@ export class OpencodeDriver implements Driver {
       );
       return cancelled ? 0 : 1;
     }
+    if (firstConnection === undefined) return 1;
     this.#tracer.info("opencode session attached", { session: session.id, opencode: ocSessionId });
-
-    // HISTORY BACKFILL / RESUME runs INSIDE #capturePump, on the first SSE event (when the subscription
-    // is LIVE) — NOT here. Backfilling before subscribing would leave an obvious event gap because SSE
-    // has no replay. Subscribe-first narrows that gap, but paused generator buffering is not a durable
-    // boundary and the bounded #emitted window cannot prove lossless/exactly-once recovery.
 
     try {
       await Promise.race([
-        projectionPumpLifetime(this.#capturePump(session, ocSessionId, stop), session, stop),
-        projectionPumpLifetime(this.#injectPump(session, ocSessionId, stop), session, stop),
+        projectionPumpLifetime(
+          this.#capturePump(session, ocSessionId, firstConnection, stop),
+          session,
+        ),
+        projectionPumpLifetime(this.#injectPump(session, ocSessionId, stop), session),
+        projectionPumpLifetime(this.#browserTurnPump(session, ocSessionId, stop), session),
         waitAbort(stop),
       ]);
       return 0;
     } finally {
-      // Fence local work before touching the native run: no capture/inject pump may race a teardown
-      // abort. A broker-owned Session failure ends only the remote projection; it must not cancel an
-      // otherwise healthy native turn. Explicit owner teardown or a native-pump failure still aborts
-      // the selected turn. Native abort and relay settlement share one deadline.
-      const abortNative = signal.aborted || !session.closed;
+      // The native session is externally owned. Only an authenticated browser interrupt calls /abort;
+      // cancellation, broker/capture failure, restart, and ordinary teardown stop this companion only.
       const bridgeTeardown = bridge.close("driver teardown");
       session.workerStatus = "idle";
       const childPermissionTasks = [...this.#childPermissionTasks];
       await boundedTeardownWait(
-        (deadlineSignal) =>
-          Promise.allSettled([
-            ...childPermissionTasks,
-            ...(abortNative ? [this.#client.abort(ocSessionId, deadlineSignal)] : []),
-            bridgeTeardown,
-          ]),
+        () => Promise.allSettled([...childPermissionTasks, bridgeTeardown]),
         OPENCODE_TEARDOWN_FLUSH_MS,
       );
     }
   }
 
   /**
-   * Resolve one exact native identity. Discovery errors/malformed results fail; a configured target must
-   * exist exactly; a missing target creates only from a positively empty list. “Most recent” is never
-   * identity evidence. The final exact GET closes list/create response races before readiness.
+   * Resolve one exact externally owned native identity. The release path never discovers, selects, or
+   * creates a session; the final exact GET confirms the caller's explicit coordinate before readiness.
    */
   async #attach(signal: AbortSignal): Promise<string> {
     throwIfAborted(signal);
-    const discovered: unknown = await this.#client.listSessions(signal);
-    throwIfAborted(signal);
-    const sessions = requireDiscoveredSessions(discovered);
-
-    let selected: string;
-    if (this.#extra.sessionId !== undefined) {
-      if (!isOpencodeSessionId(this.#extra.sessionId)) {
-        throw new Error("configured OpenCode session must be a canonical ses_* id");
-      }
-      if (!sessions.some((session) => session.id === this.#extra.sessionId)) {
-        throw new Error("configured OpenCode session does not exist in the discovery snapshot");
-      }
-      selected = this.#extra.sessionId;
-    } else {
-      if (sessions.length !== 0) {
-        throw new Error("OpenCode session selection is ambiguous; configure --rc-oc-session");
-      }
-      selected = await this.#client.createSession(this.#ctx.title, signal);
-      throwIfAborted(signal);
-      if (!isOpencodeSessionId(selected)) {
-        throw new Error("OpenCode create returned a noncanonical native session id");
-      }
-      this.#tracer.debug("positive empty discovery; created one session", { opencode: selected });
+    const selected = this.#extra.sessionId;
+    if (!isOpencodeSessionId(selected)) {
+      throw new Error("configured OpenCode session must be a canonical ses_* id");
     }
 
-    const confirmed = await this.#client.getSession(selected, signal);
-    throwIfAborted(signal);
-    if (confirmed.id !== selected)
-      throw new Error("OpenCode exact session confirmation mismatched");
+    await this.#requireExactSession(selected, signal);
     this.#tracer.debug("confirmed exact OpenCode session", { opencode: selected });
     return selected;
   }
 
+  /** Re-prove the exact externally owned session after every native transport establishment. */
+  async #requireExactSession(sessionId: string, signal: AbortSignal): Promise<void> {
+    const confirmed = await this.#client.getSession(sessionId, signal);
+    throwIfAborted(signal);
+    if (confirmed.id !== sessionId) {
+      throw new Error("OpenCode exact session confirmation mismatched");
+    }
+  }
+
+  /** Open the sole server-wide SSE reader and require OpenCode's readiness marker as its first event. */
+  async #openConnection(ocSessionId: string, signal: AbortSignal): Promise<OpencodeConnection> {
+    const owner = new AbortController();
+    const connectionSignal = AbortSignal.any([signal, owner.signal]);
+    const iterator = this.#client
+      .events((id) => id !== undefined && this.#followed.has(id), connectionSignal)
+      [Symbol.asyncIterator]();
+    let first: IteratorResult<OpencodeEvent>;
+    try {
+      first = await iterator.next();
+    } catch (error) {
+      owner.abort();
+      throw error;
+    }
+    if (first.done) {
+      owner.abort();
+      throw new Error("OpenCode event stream ended before readiness");
+    }
+    if (first.value.type !== "server.connected") {
+      owner.abort();
+      throw new OpencodeProjectionError("OpenCode event stream lacked its readiness marker");
+    }
+    this.#tracer.debug("OpenCode event stream connected", { sessionId: ocSessionId });
+    return { iterator, first, close: () => owner.abort() };
+  }
+
+  /** Claim one live-observed message coordinate in that native session's chronological order. */
+  #recordLiveMessage(ocSessionId: string, messageId: string): void {
+    if (!isOpencodeMessageId(messageId)) {
+      throw new OpencodeProjectionError("OpenCode emitted a noncanonical message id");
+    }
+    const owner = this.#messageOwner.get(messageId);
+    if (owner !== undefined && owner !== ocSessionId) {
+      throw new OpencodeProjectionError("OpenCode reused a message id across native sessions");
+    }
+    const order = this.#messageOrder.get(ocSessionId) ?? [];
+    if (order.includes(messageId)) return;
+    const previous = order.at(-1);
+    if (previous !== undefined && messageId <= previous) {
+      throw new OpencodeProjectionError("OpenCode message ids violated native chronological order");
+    }
+    if (this.#messageCoordinateCount >= OPENCODE_HISTORY_LIMIT) {
+      throw new OpencodeProjectionError("OpenCode projection exceeds the message-coordinate limit");
+    }
+    this.#messageCoordinateCount += 1;
+    this.#messageOwner.set(messageId, ocSessionId);
+    order.push(messageId);
+    this.#messageOrder.set(ocSessionId, order);
+  }
+
   /**
-   * HISTORY BACKFILL / RESUME: fetch the attached session's full message history (GET /…/message) and
-   * replay it through the SAME flush path as the live stream — coalesce per message, dedup by messageID
-   * (#emitted), emit assistant turns as `assistant` and locally-typed user turns as `local_prompt`. Run on
-   * attach AND after EACH (re)connect (review #2). #emitted suppresses messages still in its recent
-   * window; a longer replay can re-emit evicted IDs. A wrapper restart has a fresh window and a fresh
-   * compatibility broker session, so it replays native history rather than claiming cross-process
-   * duplicate suppression.
-   *
-   * MID-TURN ATTACH (review #1, CRITICAL): an ASSISTANT message is flushed here ONLY when it is COMPLETE
-   * (`info.time.completed`). If we attach while an assistant message is still streaming, flushing the
-   * partial would mark it #emitted and the LIVE completion would then be deduped away — the viewer would
-   * be stuck with truncated output forever. So for an INCOMPLETE assistant we SEED its parts into #buffers
-   * + record its role WITHOUT touching #emitted; the live `message.updated` (completed) / `session.idle`
-   * then flushes the full message once within this live capture/dedup window. User messages carry no
-   * `completed` flag (they settle the moment the model starts) — they flush as before.
+   * Require each prior native coordinate in the same order and allow only an appended suffix. An unseen
+   * message inserted behind an already projected coordinate would make the shared transcript order false.
    */
-  async #backfillHistory(session: Session, ocSessionId: string): Promise<void> {
-    const messages: HistoryMessage[] = await this.#client.getMessages(ocSessionId);
-    let count = 0;
-    for (const m of messages) {
-      const id = m.info.id;
-      if (typeof id !== "string" || id === "") continue;
-      const role = typeof m.info.role === "string" ? m.info.role : undefined;
-      if (role !== undefined) this.#roles.set(id, role);
-      if (this.#emitted.has(id)) continue; // already emitted on a prior connection's backfill / live
-      // Seed the buffer from the history parts (shared with the live path: coalesce + later flush). The
-      // backfilled session (ocSessionId — main OR a followed child) is the authoritative message owner.
-      for (const part of m.parts) {
-        if (part && typeof part.id === "string") this.#bufferPart(id, part, ocSessionId);
+  #reconcileMessageOrder(ocSessionId: string, messageIds: readonly string[]): void {
+    const previous = this.#messageOrder.get(ocSessionId) ?? [];
+    for (let index = 0; index < previous.length; index += 1) {
+      if (messageIds[index] !== previous[index]) {
+        throw new OpencodeProjectionError("OpenCode history changed behind projected order");
       }
-      // An INCOMPLETE assistant message (mid-turn attach) is left BUFFERED, not flushed — the live
-      // completion flushes the full text. Everything else (a completed assistant, or a user message that
-      // has no `completed` flag) flushes now via the shared path (dedup + coalesce + local_prompt origin).
-      if (role === "assistant" && m.info.time?.completed === undefined) {
-        this.#tracer.debug("backfill: buffering incomplete assistant for live completion", { id });
+    }
+    if (messageIds.length < previous.length) {
+      throw new OpencodeProjectionError("OpenCode history omitted a projected message");
+    }
+    for (let index = previous.length; index < messageIds.length; index += 1) {
+      const messageId = messageIds[index];
+      if (messageId === undefined) continue;
+      this.#recordLiveMessage(ocSessionId, messageId);
+    }
+  }
+
+  /** Require each new assistant to retain the latest preceding user as its canonical parent. Existing
+   * assistants may continue receiving updates after a later steering user is appended. */
+  #reconcileMessageParents(ocSessionId: string, messages: readonly HistoryMessage[]): void {
+    let latestUser: string | undefined;
+    for (const message of messages) {
+      if (message.info.role === "user") {
+        latestUser = message.info.id;
         continue;
       }
-      const before = session.snapshotUpstream().length;
-      this.#flushMessage(session, id);
-      if (session.snapshotUpstream().length > before) count++;
-    }
-    if (count > 0) this.#tracer.info("history backfilled", { messages: count });
-  }
-
-  /**
-   * CAPTURE: subscribe to GET /event (filtered to our ses_), buffer parts per messageID, and flush a
-   * COMPLETED message to pushUpstream ONCE (review #1 coalesce, #2 dedup). Completion is signalled by
-   * `session.idle` (turn end) or an assistant `message.updated` carrying `time.completed`, subject to
-   * the bounded recent-ID window described above.
-   *
-   * RECONNECT LOOP (review #2, CRITICAL): the SSE connection can EOF/error transiently (a proxy timeout,
-   * the server restarting, a dropped TCP). A single subscription ending used to end run() → teardown →
-   * client.abort(), CANCELLING the user's active OpenCode turn. Instead we wrap one connection in a loop
-   * that RECONNECTS with capped backoff and ONLY ends when the parent signal aborts. Each (re)connect
-   * re-runs backfill on its first event (deduped by the bounded #emitted window; with fix #1 an
-   * incomplete assistant re-seeds and completes live). This narrows ordinary reconnect gaps but does
-   * not prove no loss or duplication across a process failure or a replay larger than the window.
-   */
-  async #capturePump(session: Session, ocSessionId: string, signal: AbortSignal): Promise<void> {
-    // Seed the followed-session set with the main session; child sub-agent sessions are added live as
-    // `session.created` events with a matching parentID arrive (#102). Children persist across reconnects.
-    this.#mainSessionId = ocSessionId;
-    this.#followed.add(ocSessionId);
-    let backoffMs = RECONNECT_BACKOFF_MIN_MS;
-    while (!signal.aborted) {
-      try {
-        await this.#captureConnection(session, ocSessionId, signal);
-        // A clean EOF (the generator returned). If the parent hasn't aborted, this was a transient close
-        // — reconnect immediately (reset backoff; a healthy connection lived its life).
-        backoffMs = RECONNECT_BACKOFF_MIN_MS;
-      } catch (e) {
-        // A connect/transport error (the server is down / restarting). Back off before retrying so we
-        // don't hot-loop; the parent abort still wins (the sleep is abort-aware).
-        if (signal.aborted) return;
-        this.#tracer.warn("opencode SSE connection dropped; reconnecting", {
-          error: String(e),
-          backoffMs,
-        });
+      const parentId = message.info.parentID;
+      if (!isOpencodeMessageId(parentId) || parentId !== latestUser) {
+        throw new OpencodeProjectionError("OpenCode assistant did not bind the latest native user");
       }
-      if (signal.aborted) return;
-      // Mark the bridge as "reconnecting" so presence reflects the gap rather than a stale "running".
-      session.workerStatus = "idle";
-      session.wake();
-      await sleepAbortable(backoffMs, signal);
-      backoffMs = Math.min(backoffMs * 2, RECONNECT_BACKOFF_MAX_MS);
+      const previous = this.#assistantParents.get(message.info.id);
+      if (previous !== undefined && previous !== parentId) {
+        throw new OpencodeProjectionError("OpenCode changed an assistant parent");
+      }
+      this.#assistantParents.set(message.info.id, parentId);
     }
+    if (latestUser !== undefined) this.#latestUser.set(ocSessionId, latestUser);
   }
 
-  /** Drive ONE SSE connection (one `events()` generator): backfill on the first event, then dispatch.
-   *  Returns on a clean EOF, throws on a transport error — #capturePump decides whether to reconnect. */
-  async #captureConnection(
+  /** Bind one live assistant only after its parent user has been observed in the same native session. */
+  #recordAssistantParent(ocSessionId: string, messageId: string, parentId: string): void {
+    const previous = this.#assistantParents.get(messageId);
+    if (previous !== undefined) {
+      if (previous !== parentId) {
+        throw new OpencodeProjectionError("OpenCode changed an assistant parent");
+      }
+      return;
+    }
+    if (this.#latestUser.get(ocSessionId) !== parentId) {
+      throw new OpencodeProjectionError("OpenCode assistant did not bind the latest native user");
+    }
+    this.#assistantParents.set(messageId, parentId);
+  }
+
+  /** A live duplicate user update must not move the session's latest-user pointer backwards. */
+  #recordLatestUser(ocSessionId: string, messageId: string): void {
+    const previous = this.#latestUser.get(ocSessionId);
+    if (previous === undefined || messageId > previous)
+      this.#latestUser.set(ocSessionId, messageId);
+  }
+
+  /** Strict bounded history reconciliation shared by startup and every SSE recovery. */
+  async #backfillHistory(
     session: Session,
     ocSessionId: string,
     signal: AbortSignal,
-  ): Promise<void> {
-    let backfilled = false;
-    // Follow the main session AND any child sub-agent sessions added to #followed live (#102). The
-    // predicate reads #followed each event, so a child added mid-stream starts being delivered at once.
-    for await (const ev of this.#client.events(
-      (id) => id !== undefined && this.#followed.has(id),
-      signal,
-    )) {
-      if (signal.aborted) return;
-      if (!backfilled) {
-        // The SSE is now LIVE (we received the first event — OpenCode sends `server.connected` on
-        // connect). Backfill history NOW, before handling any live data event, so prior turns land
-        // first and NOTHING is lost to a backfill-then-subscribe gap; #emitted dedups any message that
-        // also appears in the live stream (and is re-run on EACH reconnect — review #2). Best-effort: a
-        // backfill failure must not stop the bridge.
-        backfilled = true;
-        try {
-          await this.#backfillHistory(session, ocSessionId);
-          // Re-backfill any IN-FLIGHT followed child sub-agent sessions too: GET /event has no replay, so a
-          // child that produced output during the SSE drop would otherwise be lost (codex review). #emitted
-          // dedups what already landed, and finished children were unfollowed on their session.idle, so this
-          // set holds only still-running children — small. On the FIRST connect #followed is just the main
-          // (no children yet), so this is a no-op then. (#102)
-          for (const childId of [...this.#followed]) {
-            if (childId === this.#mainSessionId) continue;
-            try {
-              await this.#backfillHistory(session, childId);
-            } catch (e) {
-              this.#tracer.warn("opencode child backfill failed", {
-                childId,
-                error: String(e),
-              });
-            }
-          }
-        } catch (e) {
-          this.#tracer.warn("opencode history backfill failed", { error: String(e) });
+  ): Promise<HistoryMessage[]> {
+    let messages: HistoryMessage[];
+    try {
+      messages = await this.#client.getMessages(ocSessionId, signal);
+    } catch (error) {
+      if (error instanceof OpencodeError) {
+        throw new OpencodeProjectionError("OpenCode history could not be reconciled");
+      }
+      throw error;
+    }
+    this.#reconcileMessageOrder(
+      ocSessionId,
+      messages.map((message) => message.info.id),
+    );
+    this.#reconcileMessageParents(ocSessionId, messages);
+    let count = 0;
+    for (const message of messages) {
+      const id = message.info.id;
+      this.#msgSession.set(id, ocSessionId);
+      const previousRole = this.#roles.get(id);
+      if (previousRole !== undefined && previousRole !== message.info.role) {
+        throw new OpencodeProjectionError("OpenCode changed a native message role");
+      }
+      this.#roles.set(id, message.info.role);
+      // The strict history row is authoritative at this instant. Replace, rather than merge with, any
+      // pre-drop partial so a part removed during the SSE gap cannot survive into the final transcript.
+      this.#buffers.delete(id);
+      for (const part of message.parts) this.#bufferPart(id, part, ocSessionId);
+      this.#tryBindBrowserMutation(id);
+      if (message.info.role === "assistant" && message.info.time?.completed === undefined) {
+        if (this.#emitted.has(id)) {
+          throw new OpencodeProjectionError("OpenCode regressed a completed message");
         }
+        continue;
+      }
+      if (this.#flushMessage(session, id)) count += 1;
+    }
+    if (count > 0) this.#tracer.info("OpenCode history reconciled", { messages: count });
+    return messages;
+  }
+
+  /** Bind the one pending browser marker to OpenCode's generated user message coordinate. */
+  #tryBindBrowserMutation(messageId: string): void {
+    const active = this.#activeBrowserTurn;
+    if (active === undefined || this.#roles.get(messageId) !== "user") return;
+    const mutation = this.#browserMutations.get(active.partId);
+    const buffer = this.#buffers.get(messageId);
+    const marker = buffer?.parts.get(active.partId);
+    if (mutation === undefined || marker === undefined) return;
+    if (textPartValue(marker) !== mutation.text || mutation.text !== active.text) {
+      throw new OpencodeProjectionError("OpenCode changed the browser correlation marker");
+    }
+    const parts = (buffer?.order ?? [])
+      .map((id) => buffer?.parts.get(id))
+      .filter((part): part is Part => part !== undefined);
+    if (userPartsText(parts) !== active.text) {
+      throw new OpencodeProjectionError("OpenCode changed the browser message text");
+    }
+    if (active.nativeUserId !== undefined && active.nativeUserId !== messageId) {
+      throw new OpencodeProjectionError("OpenCode reused a browser marker across messages");
+    }
+    active.nativeUserId = messageId;
+    active.correlated.resolve();
+  }
+
+  /** Capture-owned startup/reconnect reconciliation. GET status corroborates bounded strict history; it
+   * never acts as an atomic lock against a literally simultaneous native-TUI writer. */
+  async #reconcileNativeTurnState(
+    session: Session,
+    ocSessionId: string,
+    signal: AbortSignal,
+    mode: "strict" | "live-idle" = "strict",
+  ): Promise<void> {
+    const messages = await this.#backfillHistory(session, ocSessionId, signal);
+    const status: OpencodeSessionStatus = await this.#client.getSessionStatus(ocSessionId, signal);
+
+    if (status === "busy" || status === "retry") {
+      this.#admission.markNativeBusy();
+      if (this.#activeBrowserTurn !== undefined) this.#activeBrowserTurn.sawBusy = true;
+      session.workerStatus = "running";
+      session.wake();
+      return;
+    }
+
+    const active = this.#activeBrowserTurn;
+    if (active !== undefined) {
+      const user = messages.find(
+        (message) =>
+          message.info.role === "user" && message.parts.some((part) => part.id === active.partId),
+      );
+      if (user === undefined) {
+        this.#admission.markNativeBusy();
+        if (mode === "live-idle" && !active.sawBusy) return;
+        throw new OpencodeProjectionError("OpenCode lost the active browser correlation marker");
+      }
+      const marker = user.parts.find((part) => part.id === active.partId);
+      if (
+        textPartValue(marker) !== active.text ||
+        userPartsText(user.parts) !== active.text ||
+        (active.nativeUserId !== undefined && active.nativeUserId !== user.info.id)
+      ) {
+        throw new OpencodeProjectionError("OpenCode changed the active browser turn");
+      }
+      active.nativeUserId = user.info.id;
+      active.correlated.resolve();
+      if (this.#latestUser.get(ocSessionId) !== user.info.id) {
+        throw new OpencodeProjectionError("OpenCode advanced past the active browser turn");
+      }
+      if (mode === "live-idle" && !active.sawBusy) {
+        this.#admission.markNativeBusy();
+        return;
+      }
+      this.#activeBrowserTurn = undefined;
+    }
+    this.#admission.markNativeIdle();
+    session.workerStatus = "idle";
+    session.wake();
+  }
+
+  /** Consume one already-open connection, including its retained readiness marker. */
+  async #consumeConnection(
+    session: Session,
+    connection: OpencodeConnection,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let next = connection.first;
+    for (;;) {
+      if (signal.aborted || session.closed) return;
+      if (next.done) return;
+      await this.#onEvent(session, next.value, signal);
+      next = await connection.iterator.next();
+    }
+  }
+
+  /** Pause writes on loss, reconnect one reader, and reconcile all known active sessions before resume. */
+  async #capturePump(
+    session: Session,
+    ocSessionId: string,
+    firstConnection: OpencodeConnection,
+    signal: AbortSignal,
+  ): Promise<void> {
+    let connection = firstConnection;
+    try {
+      while (!signal.aborted && !session.closed) {
+        try {
+          await this.#consumeConnection(session, connection, signal);
+        } catch (error) {
+          if (signal.aborted || session.closed) return;
+          if (error instanceof OpencodeProjectionError) {
+            this.#admission.pauseTransport();
+            throw error;
+          }
+          this.#tracer.warn("OpenCode event stream dropped; reconciling");
+        }
+        connection.close();
+        if (signal.aborted || session.closed) return;
+        this.#admission.pauseTransport();
+        this.#admission.markNativeBusy();
         session.workerStatus = "running";
         session.wake();
-        if (ev.type === "server.connected") continue; // pure marker — nothing to process
+
+        let recovered = false;
+        let backoffMs = RECONNECT_BACKOFF_MIN_MS;
+        for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS; attempt += 1) {
+          await sleepAbortable(backoffMs, signal);
+          if (signal.aborted || session.closed) return;
+          let candidate: OpencodeConnection | undefined;
+          try {
+            candidate = await this.#openConnection(ocSessionId, signal);
+            await this.#client.requireSupportedVersion(signal);
+            await this.#requireExactSession(ocSessionId, signal);
+            if (this.#mirror) await this.#requireAskMirroring(ocSessionId, signal);
+            await this.#reconcileNativeTurnState(session, ocSessionId, signal);
+            for (const followedId of this.#followed) {
+              if (followedId !== ocSessionId) {
+                await this.#backfillHistory(session, followedId, signal);
+              }
+            }
+            connection = candidate;
+            this.#admission.resumeTransport();
+            recovered = true;
+            break;
+          } catch (error) {
+            candidate?.close();
+            if (signal.aborted || session.closed) return;
+            if (error instanceof OpencodeProjectionError) throw error;
+            this.#tracer.warn("OpenCode event stream reconnect failed", { attempt });
+          }
+          backoffMs = Math.min(backoffMs * 2, RECONNECT_BACKOFF_MAX_MS);
+        }
+        if (!recovered) {
+          throw new OpencodeProjectionError("OpenCode event stream could not be reconciled");
+        }
       }
-      this.#onEvent(session, ev, signal);
+    } finally {
+      connection.close();
     }
   }
 
   /** Route one OpenCode SSE event. Pure dispatch — all the buffering/coalescing lives in the helpers. */
-  #onEvent(session: Session, ev: OpencodeEvent, signal: AbortSignal): void {
+  async #onEvent(session: Session, ev: OpencodeEvent, signal: AbortSignal): Promise<void> {
     // Which OpenCode session this event is for (main or a followed child) — drives per-session status/idle
     // routing so a child going idle doesn't flip the whole bridge idle while the parent waits (#102).
     // Shared derivation with the client filter (eventSessionId) so the two never drift. (undefined for
@@ -697,39 +1005,109 @@ export class OpencodeDriver implements Driver {
     switch (ev.type) {
       case "message.part.updated": {
         const part = ev.properties.part;
-        if (part && typeof part.messageID === "string") {
-          // Record the message→session map from the EVENT's session (authoritative; the part's own
-          // sessionID field may be absent — codex review). For a child part this is the child session.
-          this.#bufferPart(part.messageID, part, evSession);
-          // Note a subtask anchor ONLY on the LIVE stream, keyed by the PARENT (= this event's session).
-          // Backfill must NOT enqueue historical anchors — their children already exist, so a stale anchor
-          // would be popped by the next same-agent child and mis-nest it (codex review).
-          if (part.type === "subtask" && evSession !== undefined) {
-            this.#noteSubtask(part as SubtaskPart, evSession);
+        const messageId = part?.messageID;
+        if (
+          !isOpencodeSessionId(evSession) ||
+          !isOpencodeMessageId(messageId) ||
+          !isValidOpencodePart(part, messageId, evSession)
+        ) {
+          throw new OpencodeProjectionError("OpenCode emitted an invalid message part");
+        }
+        if (this.#emitted.has(messageId)) {
+          const expected = this.#emittedParts.get(messageId)?.get(part.id);
+          if (expected !== partFingerprint(part)) {
+            throw new OpencodeProjectionError("OpenCode changed content already projected");
           }
+          break;
+        }
+        this.#recordLiveMessage(evSession, messageId);
+        // Record the message→session map from the EVENT's session (authoritative; the part's own
+        // sessionID field may be absent). For a child part this is the child session.
+        this.#bufferPart(messageId, part, evSession);
+        // Note a subtask anchor ONLY on the LIVE stream, keyed by the PARENT (= this event's session).
+        // Backfill must NOT enqueue historical anchors — their children already exist, so a stale anchor
+        // would be popped by the next same-agent child and mis-nest it.
+        if (part.type === "subtask") {
+          this.#noteSubtask(part as SubtaskPart, evSession);
         }
         break;
       }
       case "message.part.removed": {
-        // A dropped part: forget it so it doesn't render in the eventual flush.
-        const part = ev.properties.part;
-        if (part && typeof part.messageID === "string" && typeof part.id === "string") {
-          this.#buffers.get(part.messageID)?.parts.delete(part.id);
+        const messageId = ev.properties.messageID;
+        const partId = ev.properties.partID;
+        if (
+          !isOpencodeSessionId(evSession) ||
+          !isOpencodeMessageId(messageId) ||
+          typeof partId !== "string" ||
+          partId === ""
+        ) {
+          throw new OpencodeProjectionError("OpenCode emitted an invalid part removal");
         }
+        if (this.#browserMutations.has(partId)) {
+          throw new OpencodeProjectionError(
+            "OpenCode removed a pending browser correlation marker",
+          );
+        }
+        if (this.#emitted.has(messageId)) {
+          if (this.#emittedParts.get(messageId)?.has(partId) === false) break;
+          throw new OpencodeProjectionError("OpenCode removed already projected content");
+        }
+        this.#buffers.get(messageId)?.parts.delete(partId);
         break;
+      }
+      case "message.removed": {
+        if (!isOpencodeSessionId(evSession) || !isOpencodeMessageId(ev.properties.messageID)) {
+          throw new OpencodeProjectionError("OpenCode emitted an invalid message removal");
+        }
+        // A removal queued before the strict snapshot is redundant when that native coordinate was never
+        // observed. Once known, a whole-message removal changes chronology with no append-only mapping.
+        if (
+          !this.#emitted.has(ev.properties.messageID) &&
+          !this.#messageOwner.has(ev.properties.messageID) &&
+          this.#browserMutations.size === 0
+        ) {
+          break;
+        }
+        throw new OpencodeProjectionError("OpenCode removed a native message");
+      }
+      case "session.deleted": {
+        if (!isOpencodeSessionId(evSession)) {
+          throw new OpencodeProjectionError("OpenCode emitted an invalid session deletion");
+        }
+        throw new OpencodeProjectionError("OpenCode deleted an attached native session");
       }
       case "message.updated": {
         const info = ev.properties.info;
-        if (typeof info?.id === "string" && typeof info.role === "string") {
-          this.#roles.set(info.id, info.role);
+        if (!isOpencodeSessionId(evSession) || !isValidOpencodeMessageInfo(info, evSession)) {
+          throw new OpencodeProjectionError("OpenCode emitted an invalid message update");
+        }
+        const previousRole = this.#roles.get(info.id);
+        if (previousRole !== undefined && previousRole !== info.role) {
+          throw new OpencodeProjectionError("OpenCode changed a native message role");
+        }
+        this.#recordLiveMessage(evSession, info.id);
+        this.#msgSession.set(info.id, evSession);
+        this.#roles.set(info.id, info.role);
+        if (info.role === "user") {
+          if (previousRole === undefined && evSession === this.#mainSessionId) {
+            this.#admission.markNativeBusy();
+            session.workerStatus = "running";
+            session.wake();
+          }
+          this.#recordLatestUser(evSession, info.id);
+        } else {
+          if (!isOpencodeMessageId(info.parentID)) {
+            throw new OpencodeProjectionError("OpenCode assistant lacked a native parent");
+          }
+          this.#recordAssistantParent(evSession, info.id, info.parentID);
         }
         // The user message never carries time.completed (verified live) — it's settled the moment the
         // model starts responding. So when an ASSISTANT message appears, flush any buffered USER messages
         // FIRST: the prompt (the local_prompt frame) must precede the assistant reply in the transcript.
-        if (info?.role === "assistant") this.#flushBufferedUsers(session);
+        if (info.role === "assistant") this.#flushBufferedUsers(session);
         // An assistant message with time.completed is done — flush it now (don't wait for idle, so a
         // multi-message turn surfaces each message as it completes).
-        if (info?.role === "assistant" && typeof info.id === "string" && info.time?.completed) {
+        if (info.role === "assistant" && info.time?.completed !== undefined) {
           this.#flushMessage(session, info.id);
         }
         break;
@@ -773,20 +1151,25 @@ export class OpencodeDriver implements Driver {
         // not flip presence while the parent is mid-turn waiting on the subagent (#102).
         if (evSession === this.#mainSessionId) {
           const status = ev.properties.status?.type;
-          // "busy"/"running" → thinking; anything else → idle. The relay's phaseFor reads running/busy.
-          session.workerStatus = status === "busy" || status === "running" ? "running" : "idle";
+          if (status !== "busy" && status !== "retry" && status !== "idle") {
+            throw new OpencodeProjectionError("OpenCode emitted an invalid native status");
+          }
+          if (status === "busy" || status === "retry") {
+            this.#admission.markNativeBusy();
+            if (this.#activeBrowserTurn !== undefined) this.#activeBrowserTurn.sawBusy = true;
+            session.workerStatus = "running";
+          }
           session.wake();
         }
         break;
       }
       case "session.idle": {
-        // Turn complete for THIS session: flush only ITS still-buffered messages (a child idle must not
-        // prematurely flush the parent's in-flight message). Only the main idle marks the bridge idle.
-        this.#flushSessionBuffers(session, evSession);
         if (evSession === this.#mainSessionId) {
-          session.workerStatus = "idle";
-          session.wake();
+          // The event is a trigger, not proof by itself. One capture-owned history/status pass both
+          // settles projection bytes and decides whether the next queued browser turn may enter.
+          await this.#reconcileNativeTurnState(session, this.#mainSessionId, signal, "live-idle");
         } else if (evSession !== undefined && this.#followed.has(evSession)) {
+          this.#flushSessionBuffers(session, evSession);
           // A followed CHILD finished: drop it from the follow-set AFTER flushing its buffers, so #followed
           // (the one unbounded structure) stays bounded by IN-FLIGHT children, not lifetime children (codex
           // review). Its tag in #childTag (a BoundedMap) is harmless once unfollowed and ages out.
@@ -807,14 +1190,11 @@ export class OpencodeDriver implements Driver {
           sessionErrorTraceFields(ev.properties.error, evSession),
         );
         session.pushUpstream({ type: "result", result: `⚠ OpenCode error: ${msg}` });
-        if (evSession === this.#mainSessionId) {
-          session.workerStatus = "idle";
-          session.wake();
-        }
+        if (evSession === this.#mainSessionId) session.wake();
         break;
       }
       case "permission.asked":
-        this.#onPermissionAsked(session, ev);
+        if (this.#mirror) this.#onPermissionAsked(session, ev);
         break;
       case "server.heartbeat":
       case "server.connected":
@@ -849,7 +1229,20 @@ export class OpencodeDriver implements Driver {
    *  update for the same partID REPLACES the earlier one — that's the coalesce. `ocSession` is the EVENT's
    *  session (the authoritative owner of this message — see #onEvent / #backfillHistory). */
   #bufferPart(messageId: string, part: Part, ocSession?: string): void {
-    if (this.#emitted.has(messageId)) return; // already flushed — ignore late/duplicate parts (#2)
+    if (!isValidOpencodePart(part)) {
+      throw new OpencodeProjectionError("OpenCode emitted a part without an immutable identity");
+    }
+    const previousOwner = this.#partOwner.get(part.id);
+    if (previousOwner !== undefined && previousOwner !== messageId) {
+      throw new OpencodeProjectionError("OpenCode reused a part id across native messages");
+    }
+    if (previousOwner === undefined) {
+      if (this.#partCoordinateCount >= OPENCODE_HISTORY_LIMIT) {
+        throw new OpencodeProjectionError("OpenCode projection exceeds the native-part limit");
+      }
+      this.#partOwner.set(part.id, messageId);
+      this.#partCoordinateCount += 1;
+    }
     // Record which OpenCode session this message belongs to so flush can look up its Task nesting tag. The
     // EVENT's session (ocSession) is authoritative — the part's own `sessionID` field is absent on some
     // shapes, which would otherwise mis-file a child message under the main session (codex review). Fall
@@ -860,6 +1253,9 @@ export class OpencodeDriver implements Driver {
     // doesn't enqueue stale historical anchors that would mis-nest the next same-agent child. #102/codex.)
     let buf = this.#buffers.get(messageId);
     if (!buf) {
+      if (this.#buffers.size >= OPENCODE_HISTORY_LIMIT) {
+        throw new OpencodeProjectionError("OpenCode in-flight message buffer limit exceeded");
+      }
       buf = { parts: new Map(), order: [] };
       this.#buffers.set(messageId, buf);
     }
@@ -867,48 +1263,79 @@ export class OpencodeDriver implements Driver {
     buf.parts.set(part.id, part);
   }
 
-  /** Flush ONE completed message: coalesce its buffered parts and pushUpstream ONCE. Dedups by messageID
-   *  (#2) and clears the buffer. Routing by role:
-   *   • assistant → an `assistant` (and, for completed tools, a `user` tool_result) payload (coalesce #1).
-   *   • user that WE injected → SUPPRESSED (the relay's inbound pump already echoed the viewer prompt;
-   *     pushing our echo would double it). We consume one matching entry from #injectedTexts.
-   *   • user we did NOT inject (TUI / another client / history) → a `local_prompt` `user` payload so it
-   *     shows in the web viewer (the relay's local_prompt branch renders it without double-echoing).
-   *   • unknown role → defaults to the assistant path so a real turn is never silently lost. */
-  #flushMessage(session: Session, messageId: string): void {
-    if (this.#emitted.has(messageId)) return; // DEDUP (#2): never emit a message twice
+  /** Flush one completed native message after immutable-ID/content admission. */
+  #flushMessage(session: Session, messageId: string): boolean {
     const buf = this.#buffers.get(messageId);
-    if (!buf) return;
+    // Subscribe-before-history can leave a queued completion event behind a history snapshot that
+    // already emitted the exact message. With no late part buffer, that completion is a duplicate no-op.
+    if (buf === undefined && this.#emitted.has(messageId)) return false;
     this.#buffers.delete(messageId);
-    this.#emitted.add(messageId);
-    const parts = buf.order
-      .map((id) => buf.parts.get(id))
+    const parts = (buf?.order ?? [])
+      .map((id) => buf?.parts.get(id))
       .filter((p): p is Part => p !== undefined);
 
     // Is this message from a followed CHILD sub-agent session? If so, nest it under its spawning Task by
     // tagging parent_tool_use_id = the subtask part's id (#102). undefined → a top-level (main) message.
     const ocSession = this.#msgSession.get(messageId) ?? this.#mainSessionId;
     const childTag = this.#childTag.get(ocSession);
+    const role = this.#roles.get(messageId);
+    if (role !== "user" && role !== "assistant") {
+      throw new OpencodeProjectionError("OpenCode completed a message without a valid role");
+    }
 
-    if (this.#roles.get(messageId) === "user") {
+    if (role === "user") {
+      this.#tryBindBrowserMutation(messageId);
+      const text = userPartsText(parts);
+      const fresh = this.#emitted.admit(
+        messageId,
+        JSON.stringify({ role: "user", session: ocSession, text }),
+      );
+      if (!fresh) return false;
+      this.#rememberEmittedParts(messageId, parts);
       // A followed CHILD (non-main) session's user message is the subagent's INTERNAL prompt (the Task
       // input) — already shown via the Task tool_use anchor's `prompt`. Suppress it whether or not we
       // managed to TAG the child: an untagged child (e.g. its session.created raced ahead of the subtask
       // part) still must not leak its internal prompt as a top-level local_prompt (codex review). (#102)
-      if (ocSession !== this.#mainSessionId && this.#followed.has(ocSession)) return;
-      const text = userPartsText(parts);
-      if (text !== "" && this.#consumeInjected(text)) return; // our own echo — suppress
-      if (text === "") return; // an empty/synthetic-only user message — nothing to surface
-      // A LOCAL prompt (typed at the OpenCode TUI / another client / history). Surface it as a
-      // local_prompt `user` payload so the web viewer renders it (relay.ts local_prompt branch).
+      if (ocSession !== this.#mainSessionId && this.#followed.has(ocSession)) return false;
+      const markerParts = parts.filter((part) => this.#browserMutations.has(part.id));
+      if (markerParts.length > 1) {
+        throw new OpencodeProjectionError("OpenCode merged browser correlation markers");
+      }
+      const marker = markerParts[0];
+      const mutation = marker === undefined ? undefined : this.#browserMutations.get(marker.id);
+      if (mutation !== undefined && mutation.text !== text) {
+        throw new OpencodeProjectionError("OpenCode browser message echo changed immutable text");
+      }
+      if (mutation !== undefined) {
+        if (marker === undefined || textPartValue(marker) !== mutation.text) {
+          throw new OpencodeProjectionError("OpenCode browser part marker changed immutable text");
+        }
+        if (this.#activeBrowserTurn?.partId !== marker.id) {
+          throw new OpencodeProjectionError("OpenCode surfaced an unowned browser marker");
+        }
+      }
+      if (text === "") {
+        if (mutation !== undefined) {
+          throw new OpencodeProjectionError("OpenCode browser message echo had no text");
+        }
+        return false;
+      }
+      // Both browser-origin and TUI-origin prompts enter the shared order only at this canonical native
+      // observation. The authenticated browser coordinate rides only its exact caller-assigned PART id.
       session.pushUpstream({
         type: "user",
         uuid: messageId,
         local_prompt: true,
+        ...(mutation?.clientMsgId !== undefined ? { client_msg_id: mutation.clientMsgId } : {}),
         message: { role: "user", content: text },
       });
-      this.#tracer.debug("surfaced local prompt", { messageId, bytes: text.length });
-      return;
+      if (mutation !== undefined && marker !== undefined) this.#browserMutations.delete(marker.id);
+      this.#tracer.debug("surfaced canonical native prompt", {
+        messageId,
+        bytes: text.length,
+        browser: mutation !== undefined,
+      });
+      return true;
     }
 
     const payloads = coalesceMessage(
@@ -916,6 +1343,12 @@ export class OpencodeDriver implements Driver {
       parts,
       childTag !== undefined ? { parentToolUseId: childTag } : {},
     );
+    const fresh = this.#emitted.admit(
+      messageId,
+      JSON.stringify({ role: "assistant", session: ocSession, payloads }),
+    );
+    if (!fresh) return false;
+    this.#rememberEmittedParts(messageId, parts);
     for (const p of payloads) {
       session.pushUpstream(p as unknown as Record<string, unknown>); // COALESCE (#1): once per message
     }
@@ -926,20 +1359,19 @@ export class OpencodeDriver implements Driver {
         ...(childTag !== undefined ? { nestedUnder: childTag } : {}),
       });
     }
+    return payloads.length > 0;
   }
 
-  /** Record a prompt text the inject pump sent (multiset += 1) so its OpenCode user-message echo is
-   *  suppressed when it flushes. */
-  #recordInjected(text: string): void {
-    this.#injectedTexts.set(text, (this.#injectedTexts.get(text) ?? 0) + 1);
-  }
-
-  /** Roll back a recorded injected-text entry (multiset -= 1) when the prompt POST FAILED so no echo will
-   *  arrive (review #3). Symmetric with #recordInjected; the count never goes negative. */
-  #unrecordInjected(text: string): void {
-    const n = this.#injectedTexts.get(text) ?? 0;
-    if (n <= 1) this.#injectedTexts.delete(text);
-    else this.#injectedTexts.set(text, n - 1);
+  /** Retain only projection-relevant per-part semantics, under the same global native-part bound. */
+  #rememberEmittedParts(messageId: string, parts: readonly Part[]): void {
+    if (this.#emittedParts.has(messageId)) return;
+    if (this.#emittedPartCount + parts.length > OPENCODE_HISTORY_LIMIT) {
+      throw new OpencodeProjectionError("OpenCode projection exceeds the native-part limit");
+    }
+    const fingerprints = new Map<string, string>();
+    for (const part of parts) fingerprints.set(part.id, partFingerprint(part));
+    this.#emittedPartCount += fingerprints.size;
+    this.#emittedParts.set(messageId, fingerprints);
   }
 
   /** Note a `subtask` part seen on a PARENT message: enqueue its id under (parentSession, agent) so the
@@ -969,123 +1401,130 @@ export class OpencodeDriver implements Driver {
     return prt;
   }
 
-  /** Consume one injected-text entry matching `text`. Returns true (and decrements) if this user message
-   *  is the echo of a prompt WE injected — caller suppresses it. False ⇒ a local/foreign prompt. */
-  #consumeInjected(text: string): boolean {
-    const n = this.#injectedTexts.get(text) ?? 0;
-    if (n <= 0) return false;
-    if (n === 1) this.#injectedTexts.delete(text);
-    else this.#injectedTexts.set(text, n - 1);
-    return true;
+  /** Apply queued browser text one turn at a time. The downstream reader remains free to deliver an
+   * interrupt or permission answer while this worker waits for native idle. */
+  async #browserTurnPump(
+    session: Session,
+    ocSessionId: string,
+    signal: AbortSignal,
+  ): Promise<void> {
+    while (!signal.aborted && !session.closed) {
+      const event = await this.#browserTurns.shift(signal);
+      if (event === undefined || signal.aborted || session.closed) return;
+      await this.#admission.claimTurn(signal);
+      if (this.#activeBrowserTurn !== undefined) {
+        throw new OpencodeProjectionError("OpenCode admitted overlapping browser turns");
+      }
+
+      const text = userText(event.payload);
+      if (text.trim() === "" || text.trimStart().startsWith("/")) {
+        throw new OpencodeProjectionError("unsupported browser text reached the OpenCode writer");
+      }
+      const partId = opencodePartId(event.eventId);
+      this.#activeBrowserTurn = {
+        eventId: event.eventId,
+        partId,
+        text,
+        sawBusy: false,
+        correlated: Promise.withResolvers<void>(),
+      };
+
+      try {
+        await this.#inject(ocSessionId, event, signal);
+      } catch (error) {
+        if (signal.aborted || session.closed) return;
+        if (error instanceof OpencodeProjectionError) throw error;
+        throw new OpencodeProjectionError("OpenCode text outcome is unknown; projection fenced");
+      }
+      session.ack(event.eventId);
+    }
   }
 
-  /**
-   * INJECT: drain followDownstream(claimWorkerStream(), () => signal.aborted). For each event:
-   *   • initialize control_request → ack immediately (we're "ready"; no OpenCode handshake needed).
-   *   • user → prompt_async with the active model, THEN ack.
-   *   • control_request interrupt → abort; set_model → remember; set_mode/end → safe no-op; then ack.
-   *   • control_response (a permission answer) → POST the OpenCode permissions reply, then ack.
-   * ACK (review #5) is called after EVERY successful inject so a reclaimed stream doesn't replay.
-   */
+  /** Read every downstream event once. Text moves to the turn FIFO; controls remain independently live. */
   async #injectPump(session: Session, ocSessionId: string, signal: AbortSignal): Promise<void> {
     const gen = session.claimWorkerStream();
     for await (const ev of session.followDownstream(gen, () => signal.aborted)) {
-      if (signal.aborted) return;
-      if (ev === null) continue; // heartbeat tick
-      try {
-        await this.#inject(session, ocSessionId, ev);
-        session.ack(ev.eventId); // (#5) suppress replay for this id on a future reclaimed stream
-      } catch (e) {
-        // A transient inject failure: do NOT ack (so a reconnect can retry), log, and keep draining.
-        this.#tracer.warn("inject failed", { type: ev.eventType, error: String(e) });
+      if (signal.aborted || session.closed) return;
+      if (ev === null) continue;
+      if (ev.eventType === "user") {
+        this.#browserTurns.push(ev);
+        continue;
       }
+      const request = ev.payload.request as { subtype?: unknown } | undefined;
+      const mutable =
+        (ev.eventType === "control_request" && request?.subtype === "interrupt") ||
+        (this.#mirror && ev.eventType === "control_response");
+      if (mutable) await this.#admission.waitTransport(signal);
+      try {
+        await this.#inject(ocSessionId, ev, signal);
+      } catch (error) {
+        if (signal.aborted || session.closed) return;
+        if (error instanceof OpencodeProjectionError) throw error;
+        throw new OpencodeProjectionError(
+          "OpenCode mutation outcome is unknown; projection fenced",
+        );
+      }
+      session.ack(ev.eventId);
     }
   }
 
-  /** Map ONE downstream event to an OpenCode action. Throws on a transport failure so #injectPump can
-   *  withhold the ack and retry; returns normally (no ack-blocking) for control verbs it safely no-ops. */
+  /** Map one downstream event to at most one native HTTP mutation. */
   async #inject(
-    session: Session,
     ocSessionId: string,
-    ev: { eventType: string; payload: Record<string, unknown> },
+    ev: { eventId: string; eventType: string; payload: Record<string, unknown> },
+    signal: AbortSignal,
   ): Promise<void> {
     if (ev.eventType === "user") {
       const text = userText(ev.payload);
-      // A blank prompt (empty OR whitespace-only — a human who hit send on spaces / a stray newline) is
-      // a no-op, not a burned model turn. Still acked (it's "handled").
-      if (text.trim() === "") return;
-      // Slash-command routing (documented): `/compact` runs OpenCode's native summarize endpoint rather
-      // than feeding the literal string to the model. Other slash commands pass through as a prompt.
-      if (text.trim() === "/compact") {
-        // Dispatch summarize WITHOUT awaiting it (codex review): OpenCode's summarize endpoint runs the
-        // whole compaction turn server-side before returning, so awaiting it here would BLOCK the serial
-        // inject pump — a queued `interrupt` couldn't fire until compaction finished — and delay the ack,
-        // so a reconnect could replay `/compact` and start a SECOND compaction. Fire-and-forget (errors
-        // logged); the compaction's output arrives over the SSE like any turn, and the pump stays free.
-        session.workerStatus = "running";
-        session.wake();
-        this.#client.summarize(ocSessionId, this.#activeModel).catch((e) => {
-          // The dispatch failed before any server-side turn started, so NO session.status/session.error
-          // will ever arrive to clear the "running" we just set — and the downstream event is already
-          // acked (fire-and-forget), so a reconnect can't retry. Surface the failure as a result frame
-          // and drop back to idle ourselves, exactly like the session.error path (codex review).
-          const msg = errText(e);
-          this.#tracer.warn("summarize failed", { error: msg });
-          session.pushUpstream({ type: "result", result: `⚠ OpenCode error: ${msg}` });
-          session.workerStatus = "idle";
-          session.wake();
-        });
-        this.#tracer.debug("routed /compact → summarize (dispatched)");
-        return;
+      const partId = opencodePartId(ev.eventId);
+      const active = this.#activeBrowserTurn;
+      if (active?.eventId !== ev.eventId || active.partId !== partId || active.text !== text) {
+        throw new OpencodeProjectionError("browser turn lost its native admission claim");
       }
-      // Record the text BEFORE the POST so its OpenCode user-message echo (which can arrive on the SSE
-      // before promptAsync even resolves) is recognized as OURS and suppressed (#flushMessage), not
-      // double-rendered as a local_prompt.
-      this.#recordInjected(text);
-      try {
-        await this.#client.promptAsync(ocSessionId, { text, model: this.#activeModel });
-      } catch (e) {
-        // The POST failed: no echo will ever arrive for this text, so the recorded suppression token would
-        // leak — a LATER identical local prompt would be falsely suppressed (and #injectedTexts would grow
-        // unboundedly). Roll the token back, then re-throw so #injectPump withholds the ack and retries
-        // (review #3). The retry re-records before re-POSTing, so the multiset stays correct.
-        this.#unrecordInjected(text);
-        throw e;
+      if (this.#browserMutations.has(partId) || this.#partOwner.has(partId)) {
+        throw new OpencodeProjectionError("browser mutation reused a native part coordinate");
       }
-      session.workerStatus = "running";
-      session.wake();
-      this.#tracer.debug("injected prompt", { bytes: text.length });
+      if (this.#partCoordinateCount + this.#browserMutations.size >= OPENCODE_HISTORY_LIMIT) {
+        throw new OpencodeProjectionError("OpenCode browser-mutation limit exceeded");
+      }
+      const clientMsgId = ev.payload.client_msg_id;
+      if (clientMsgId !== undefined && typeof clientMsgId !== "string") {
+        throw new OpencodeProjectionError("browser mutation carried an invalid client coordinate");
+      }
+      this.#browserMutations.set(partId, {
+        text,
+        ...(typeof clientMsgId === "string" ? { clientMsgId } : {}),
+      });
+      await this.#client.promptAsync(
+        ocSessionId,
+        { text, model: this.#model, partId },
+        sessionMutationSignal(signal),
+      );
+      // The 204 has no response-assigned message ID. The capture owner (live SSE, or its reconnect
+      // history pass) must bind this exact marker+text before the broker event is acknowledged.
+      const correlationSignal = sessionMutationSignal(signal);
+      await Promise.race([active.correlated.promise, waitAbort(correlationSignal)]);
+      throwIfAborted(correlationSignal);
+      this.#tracer.debug("injected OpenCode prompt", { partId, bytes: text.length });
       return;
     }
     if (ev.eventType === "control_request") {
-      const req = ev.payload.request as { subtype?: string; model?: unknown } | undefined;
+      const req = ev.payload.request as { subtype?: string } | undefined;
       const sub = req?.subtype;
-      if (sub === "initialize") return; // we're ready immediately; just ack it
+      if (sub === "initialize") return;
       if (sub === "interrupt") {
-        await this.#client.abort(ocSessionId);
+        this.#admission.markNativeBusy();
+        await this.#client.abort(ocSessionId, sessionMutationSignal(signal));
         return;
       }
-      if (sub === "set_model") {
-        // Remember for the next prompt_async. OpenCode's model is {providerID, modelID}; the viewer sends
-        // an opaque model string. Best-effort: accept a "providerID/modelID" form, else keep current.
-        const m = typeof req?.model === "string" ? req.model : "";
-        const slash = m.indexOf("/");
-        if (slash > 0) {
-          this.#activeModel = { providerID: m.slice(0, slash), modelID: m.slice(slash + 1) };
-          this.#tracer.debug("set_model", { ...this.#activeModel });
-        }
-        return;
-      }
-      // set_permission_mode / end / any other verb: safe no-op (review #4 — never throw on an
-      // unsupported verb; a capability-gated viewer hides these buttons, but an older viewer or a
-      // pre-announce race can still deliver them).
+      // Model, mode, status, and end controls are unsupported on the frozen tuple.
       return;
     }
-    if (ev.eventType === "control_response") {
-      await this.#replyPermission(ev.payload);
+    if (this.#mirror && ev.eventType === "control_response") {
+      await this.#replyPermission(ev.payload, sessionMutationSignal(signal));
       return;
     }
-    // Any other downstream event type: nothing to inject.
+    // Defense in depth for older/handcrafted viewers: unsupported types are harmless no-ops.
   }
 
   /** Prove one session's append-only permission setup. The parent awaits this before readiness. An
@@ -1156,7 +1595,7 @@ export class OpencodeDriver implements Driver {
    *  FAIL-CLOSED: only an explicit "allow" → "once"; anything else (deny, or a malformed/absent behavior)
    *  → "reject". The control_response payload carries response.request_id + response.response.behavior
    *  (pushControlResponse's shape). */
-  async #replyPermission(payload: Record<string, unknown>): Promise<void> {
+  async #replyPermission(payload: Record<string, unknown>, signal: AbortSignal): Promise<void> {
     const resp = payload.response as
       | { request_id?: unknown; response?: { behavior?: unknown } }
       | undefined;
@@ -1167,7 +1606,7 @@ export class OpencodeDriver implements Driver {
     // behavior to allow|deny before this, so a real viewer grant is always "allow".
     const behavior = resp?.response?.behavior;
     const reply = behavior === "allow" ? "once" : "reject";
-    await this.#client.replyPermission(requestId, reply);
+    await this.#client.replyPermission(requestId, reply, signal);
     this.#tracer.debug("permission replied", { requestId, reply });
   }
 }
@@ -1178,6 +1617,16 @@ function pendingKey(parentSession: string, agent: string): string {
   return `${parentSession}\0${agent}`;
 }
 
+/** Exact display semantics for one validated part; identity is the containing map key. */
+function partFingerprint(part: Part): string {
+  return JSON.stringify(partToBlocks(part));
+}
+
+function textPartValue(part: Part | undefined): string | undefined {
+  if (part?.type !== "text" || !("text" in part)) return undefined;
+  return typeof part.text === "string" ? part.text : undefined;
+}
+
 /** Resolve when `signal` aborts (the pump-coupling sentinel in run()'s Promise.race). */
 function waitAbort(signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve();
@@ -1186,20 +1635,17 @@ function waitAbort(signal: AbortSignal): Promise<void> {
   );
 }
 
-/** A broker fail-stop closes the compatibility Session. Let that end the remote pump, but keep the
- * native OpenCode session and wrapper alive until its real owner cancels. A pump that ends while the
- * Session is still open remains an adapter failure and propagates normally. */
-async function projectionPumpLifetime(
-  pump: Promise<void>,
-  session: Session,
-  signal: AbortSignal,
-): Promise<void> {
+function sessionMutationSignal(parent: AbortSignal): AbortSignal {
+  return AbortSignal.any([parent, AbortSignal.timeout(OPENCODE_MUTATION_TIMEOUT_MS)]);
+}
+
+/** A broker fail-stop ends the companion immediately without touching the externally owned native run. */
+async function projectionPumpLifetime(pump: Promise<void>, session: Session): Promise<void> {
   try {
     await pump;
   } catch (error) {
     if (!session.closed) throw error;
   }
-  if (session.closed && !signal.aborted) await waitAbort(signal);
 }
 
 /** Sleep `ms`, but resolve EARLY if `signal` aborts (the reconnect-backoff wait — review #2). Never

@@ -49,8 +49,8 @@ and explicit exact-session restart through a fresh projection. This retired-desi
 does not mirror the changing acceptance ledger; current evidence and remaining gates live in the
 [release roadmap](release-finish-line.md).
 
-This experiment deliberately does not resurrect the generalized runtime or remove later OpenCode,
-Codex, tmux, and provider work. If the provider-native API
+This experiment deliberately does not resurrect the generalized runtime or remove broader OpenCode
+capability/tuple work, Codex, tmux, and provider work. If the provider-native API
 cannot meet a requirement, record the exact failure first and design only the missing mechanism.
 
 ## Safety rules for any future coordinator

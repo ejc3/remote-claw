@@ -13,7 +13,9 @@ credentials.
 > observed the browser-labelled turn and submitted its own; both turns and their replies appeared once
 > in both remote-claw browsers, and a browser turn still completed after the official client
 > disconnected. The Graduate commit's separate
-> exact-SHA deployed-broker gate is also green. M1 is complete; OpenCode M2 is active. See
+> exact-SHA deployed-broker gate is also green. M1 is complete. The pinned OpenCode M2
+> text/interrupt adapter also passed its real-TUI, two-browser, interrupt, reload, and companion-
+> restart acceptance on 2026-08-30. The next structured milestone is Codex M3a. See
 > [Product goal and release gates](docs/release-finish-line.md).
 
 ## Product goal
@@ -34,8 +36,8 @@ The intended surface matrix is:
 | Agent surface | Local native UI | Official provider collaboration | remote-claw browsers | Current truth |
 | --- | --- | --- | --- | --- |
 | Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; M1's exact-2.1.237 native companion passed local TUI, literal official web UI on the user's phone, two-browser, fresh-projection restart, broker-loss, packed-install, and exact-SHA deployed-broker acceptance |
-| Codex | Codex TUI | Codex/ChatGPT Remote where supported | Multiple browsers | Research proves a pinned app-server multi-client seam; product adapter and official coexistence do not |
-| OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | Experimental HTTP/SSE driver; supported coexistence and fresh-projection recovery are incomplete |
+| Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | Codex Remote is a current product; research proves a pinned app-server multi-client seam, but remote-claw has no Codex adapter or same-thread Remote coexistence result yet |
+| OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | M2 complete for exact OpenCode 1.17.5 on Linux arm64 with the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart |
 | tmux compatibility | Terminal pane | Plain Claude retains its own provider remote when requested | Multiple browsers | Experimental and deliberately lower fidelity; one Claude 2.1.237 coexistence run passed, but the official app UI was not exercised |
 
 Agent integration and inference routing are separate axes. Claude Code or OpenCode may route model
@@ -48,7 +50,7 @@ pass, and any deployment credential required to reach a protected broker.
 
 ## What works today
 
-The implemented Claude modes are:
+The implemented native modes are:
 
 | Mode | Current behavior |
 | --- | --- |
@@ -56,6 +58,7 @@ The implemented Claude modes are:
 | `--rc-trace` | Passes traffic to Anthropic while recording bounded, redacted protocol diagnostics. The official client can drive the session, but remote-claw browsers cannot. |
 | `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text to remote-claw. Linux and exact Claude 2.1.237 only; permissions, questions, interrupts, model/mode changes, attachments, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
+| `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The supported tuple accepts non-empty non-slash text and interrupt only; native/local UI owns permissions, questions, status, model/mode, attachments, and end. |
 | `--rc-app <origin> --rc-driver=tmux --remote-control [name]` | Runs plain Claude with its own Anthropic Remote Control intact while the lower-fidelity tmux adapter projects transcript and pane input to remote-claw. A bounded real run passed through the Anthropic API and two browsers; official-app UI acceptance is still pending. |
 
 The launch form waits for the exact successful bridge request from its Claude child. The attach form
@@ -74,7 +77,8 @@ Existing foundations:
 - **`apps/web`** — authenticated ciphertext broker, durable SQLite/libSQL storage, and the browser
   client. Vercel Workflows remains an experimental backend.
 - **`packages/cli`** — identity/pass custody, broker transport, Claude private RC façade and trace
-  inspector, the native Anthropic companion/client, and experimental OpenCode/tmux/Bedrock adapters.
+  inspector, the native Anthropic companion/client, the pinned OpenCode text/interrupt adapter, and
+  experimental tmux/Bedrock adapters.
 - **Provider evidence** — bounded Claude/OpenCode/Codex fixtures and documented Bedrock live runs.
   They establish specific compatibility facts, not whole-product completion.
 
@@ -92,9 +96,11 @@ The stable private-RC path and the native companion currently require the exact 
 version `2.1.237 (Claude Code)`. This is a compatibility check, not launcher-file attestation. Strict
 runtime parsing and fail-closed mutation admission remain the protocol safety boundary.
 
-Experimental paths are real product work with narrower current claims:
+Other supported and experimental paths have narrower current claims:
 
-- OpenCode connects to its HTTP/SSE server and maps the supported native subset.
+- The pinned OpenCode M2 path connects to an exact loopback HTTP/SSE server and maps native-ordered
+  text plus interrupt. Other versions, models, and platforms are unsupported; permission mirroring is
+  a separate experimental opt-in.
 - tmux captures transcripts and injects pane input when no higher-fidelity native seam is available.
 - Bedrock redirects inference while collaboration remains a separate adapter concern.
 - Accountless Bedrock seeds isolated Claude state so no Anthropic account is needed; it still requires
@@ -172,6 +178,28 @@ node dist/remote-claw.js --rc-app https://your-app.example \
 This attach-only form accepts no forwarded Claude arguments, including `--remote-control`. Apart from
 the required `claude --version` compatibility probe, it does not start or own an interactive Claude
 session, stand up a proxy, scan native sessions, or reuse the old remote-claw projection.
+
+### Run the pinned OpenCode companion
+
+Start and configure `opencode serve` separately, create or select the native session in OpenCode, then
+attach remote-claw to that exact `ses_*`:
+
+```bash
+node dist/remote-claw.js --rc-app https://your-app.example \
+  --rc-driver=opencode --rc-oc-session ses_0123456789abcdef
+```
+
+The acceptance-proved tuple is Linux arm64, exact OpenCode 1.17.5,
+`amazon-bedrock/global.anthropic.claude-sonnet-4-6`, `AWS_REGION=us-west-1`, and explicit temporary
+SigV4 credential environment values in the OpenCode server process. The server—not the browser—must
+have its provider credentials. The `global.` model profile did not remove the SDK's region
+requirement, and that OpenCode run did not consume the normal shared AWS configuration. Other regions
+or credential modes require their own gate. `--rc-oc-url` accepts only an explicit-port literal HTTP
+loopback origin. No forwarded Claude/OpenCode arguments are accepted.
+
+Permission handling stays native/local by default. The browser can neither answer nor bypass native
+gates. `--rc-oc-mirror-permissions` is a separate experimental positive opt-in that mutates the native
+session's append-only policy; it is not part of the supported M2 tuple.
 
 ## Development gates
 

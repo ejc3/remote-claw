@@ -29,12 +29,15 @@ export const remoteClawTheme = defineTheme({
 
   typography: {
     body: {
-      family: "ui-sans-serif",
-      fallbacks: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+      // Inter is installed on the Linux capture host so visual review does not fall back to DejaVu Sans.
+      // Real Apple/Android clients without Inter continue onto their native system face; no remote font
+      // request is introduced, so the self-only font CSP and offline viewer behavior stay unchanged.
+      family: "Inter Variable",
+      fallbacks: 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
     },
     heading: {
-      family: "ui-sans-serif",
-      fallbacks: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+      family: "Inter Variable",
+      fallbacks: 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
     },
     code: { family: "ui-monospace", fallbacks: '"SF Mono", Menlo, monospace' },
   },

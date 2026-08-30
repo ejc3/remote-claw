@@ -31,7 +31,7 @@ export type SeedHost = (opts?: {
   askq?: boolean | "multi";
   /** Driver capability preset (RC_E2E_CAPS) for the capability-gated viewer (#149). Unset is the exact
    * stable Claude tuple; maximal native-RC plumbing is explicit compatibility coverage. */
-  caps?: "compat-mitm" | "native-rc" | "tmux" | "opencode-skip";
+  caps?: "compat-mitm" | "native-rc" | "tmux" | "opencode";
   /** Harness preset (RC_E2E_HARNESS) for the agent+mode badge (#164). Unset is the private MITM relay;
    * `native-rc` is the companion attached to Anthropic's ordinary Remote Control session. */
   harness?: "native-rc" | "tmux" | "opencode";

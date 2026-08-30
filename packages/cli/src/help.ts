@@ -52,7 +52,8 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      Anthropic Remote Control intact alongside the local TUI and remote-claw browsers.
                      Literal official-client coexistence acceptance passed for the pinned release.
                      Use it with claude's own --remote-control.
-                     tmux and opencode remain experimental/internal compatibility drivers.
+                     tmux remains an experimental/internal compatibility driver. OpenCode has one
+                     pinned supported text/interrupt tuple described below.
 
 Claude native companion (--rc-driver=claude-native):
   Launch form starts ordinary Claude behind a transparent session-binding observer, then mirrors the
@@ -84,16 +85,17 @@ Experimental/internal tmux driver (--rc-driver=tmux):
                      --bare/--safe-mode and truthy CLAUDE_CODE_SIMPLE or CLAUDE_CODE_SAFE_MODE are
                      rejected.
 
-Experimental/internal opencode driver (--rc-driver=opencode):
+Pinned OpenCode driver (--rc-driver=opencode):
   --rc-oc-url <origin>     the \`opencode serve\` origin (or set OPENCODE_URL; default
-                     http://127.0.0.1:4096).
+                     http://127.0.0.1:4096). Only explicit-port HTTP loopback origins are accepted.
   --rc-oc-model <p/m>      provider/model for prompts (or set RC_OC_MODEL; default
-                     amazon-bedrock/global.anthropic.claude-sonnet-4-6 — a reliable Bedrock tool-caller).
-  --rc-oc-session <id>     attach to this exact existing \`ses_…\` (or set RC_OC_SESSION). When omitted,
-                     create only if discovery proves the server has no sessions; otherwise require an ID.
-  --rc-oc-skip-permissions opt out of permission mirroring (or set RC_OC_SKIP_PERMISSIONS): leave the
-                     session's own permission config instead of PATCHing it to "ask". Default is mirroring
-                     ON.
+                     amazon-bedrock/global.anthropic.claude-sonnet-4-6; this exact model is required).
+  --rc-oc-session <id>     required exact existing canonical \`ses_…\` (or set RC_OC_SESSION).
+                     Attach-only: the companion never discovers, selects, or creates a native session.
+  --rc-oc-mirror-permissions  EXPERIMENTAL: opt in to permission mirroring (or set
+                     RC_OC_MIRROR_PERMISSIONS=1). Default leaves native permission policy untouched;
+                     permissions remain native/local. The retired --rc-oc-skip-permissions is an error.
+                     Supported tuple: Linux arm64 and exact OpenCode 1.17.5. No forwarded arguments.
 
 Diagnostics:
   --rc-trace         stand up a MITM that passes through to the REAL api.anthropic.com and traces the
@@ -107,7 +109,8 @@ Environment-only knobs (no flag):
   RC_CLAUDE_BIN             path to the claude binary to spawn (default: \`claude\` on PATH).
   RC_BEDROCK_STRIP_KEYS    comma-separated body keys to drop before forwarding to Bedrock, for a model
                      that hard-400s on a field claude sends (e.g. output_config). Bedrock inference only.
-  OPENCODE_SERVER_PASSWORD HTTP Basic password for a protected \`opencode serve\` (opencode driver).
+  OPENCODE_SERVER_USERNAME HTTP Basic username for a protected \`opencode serve\` (default: opencode).
+  OPENCODE_SERVER_PASSWORD HTTP Basic password (preserved byte-for-byte; never logged).
 
 Below is claude's own help:
 `;

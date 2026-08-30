@@ -48,7 +48,7 @@ async function pair(
 test("accent inversion, reset leak, type hierarchy, elevation", async ({ page, seedHost }) => {
   const { pass } = await seedHost();
   await page.goto(`/#${encodeURIComponent(pass)}`);
-  await expect(page.getByLabel("Machine pass")).toBeVisible();
+  await expect(page.getByLabel("Machine pass", { exact: true })).toBeVisible();
 
   // F — seeding the accent family alone generates light-dark(#424BDA, #CBBEFF) with on-accent #001F9C:
   // in dark mode Astryx inverts the accent into a pale surface carrying dark text.
