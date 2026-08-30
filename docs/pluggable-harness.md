@@ -13,8 +13,8 @@ Four drivers exist:
 - `opencode` — an experimental `opencode serve` compatibility adapter.
 
 The private MITM remains the supported Claude beta. The native companion has passed its structured
-API-path and local Graduate runs. The Graduate commit's separate exact-SHA deployed-broker gate passed;
-literal official-app UI remains.
+API-path, local Graduate, literal official web UI coexistence, and separate exact-SHA
+deployed-broker gates; M1 is complete.
 OpenCode and tmux are intended product surfaces with narrower experimental guarantees, not discarded
 side projects. Codex follows after the existing app-server seam is turned into product code. Every
 current `Session` binding remains process-local.

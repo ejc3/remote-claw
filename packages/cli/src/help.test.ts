@@ -79,7 +79,7 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toMatch(/mitm \| claude-native \| tmux \| opencode/);
     expect(RC_HELP).toContain("Claude native companion (--rc-driver=claude-native)");
     expect(RC_HELP).toContain("Linux/Claude 2.1.237 text-only companion");
-    expect(RC_HELP).toMatch(/Literal official-client UI acceptance remains pending/);
+    expect(RC_HELP).toMatch(/Literal official-client coexistence acceptance passed/);
     expect(RC_HELP).toContain("Only non-empty, non-slash text is supported");
     expect(RC_HELP).toMatch(/--rc-inference, --rc-bedrock-\*, and --rc-accountless are rejected/);
     expect(RC_HELP).toMatch(/--rc-native-session <cse_…>/);

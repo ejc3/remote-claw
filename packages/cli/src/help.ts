@@ -50,8 +50,8 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      (default mitm). mitm is the supported private relay and replaces Anthropic RC.
                      claude-native is the Linux/Claude 2.1.237 text-only companion: it leaves ordinary
                      Anthropic Remote Control intact alongside the local TUI and remote-claw browsers.
-                     Literal official-client UI acceptance remains pending. Use it with claude's own
-                     --remote-control.
+                     Literal official-client coexistence acceptance passed for the pinned release.
+                     Use it with claude's own --remote-control.
                      tmux and opencode remain experimental/internal compatibility drivers.
 
 Claude native companion (--rc-driver=claude-native):
