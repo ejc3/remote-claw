@@ -11,6 +11,5 @@ authority, recovery, signing, or isolation claims from this retired document.
 
 OpenCode remains an intended product surface. Its next work begins with a user-visible vertical and
 its actual threat boundary; it must not restore the deleted platform foundations merely because they
-once existed. M1 structured Claude native-RC text coexistence and local Graduate acceptance are now
-implemented; literal official Claude UI and exact-SHA deployed acceptance remain open. Current
-evidence and sequencing live in [Product goal and release gates](release-finish-line.md).
+once existed. Current M1 evidence and sequencing live in
+[Product goal and release gates](release-finish-line.md).

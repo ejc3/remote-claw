@@ -27,11 +27,11 @@ What exists today:
 
 | Surface | As-built status |
 | --- | --- |
-| Identity, viewer pass, sealed frames, broker, durable log, and browser viewer | Implemented |
+| Identity, viewer pass, sealed frames, broker, durable log, and browser viewer | Implemented; the Graduate commit's exact-SHA Preview gate passed against the configured SQLite/Turso broker |
 | Default <code>--rc-app &lt;origin&gt; --rc-driver=mitm</code> | Implemented private replacement mode; the official client cannot join |
 | <code>--rc-trace</code> | Implemented transparent inspector; the official client works, but no remote-claw browser is connected |
 | Direct Anthropic RC client | Implemented and wired into the Linux/exact-2.1.237 <code>claude-native</code> companion |
-| Claude native collaboration plus multiple remote-claw browsers | Structured provider-ordered text companion and local Graduate acceptance implemented; literal official-app UI and exact-SHA deployed acceptance remain open |
+| Claude native collaboration plus multiple remote-claw browsers | Structured provider-ordered text companion and local Graduate acceptance implemented; literal official-app UI remains open |
 | OpenCode server adapter and tmux fallback | Experimental implementations with documented limits |
 | Codex | Pinned app-server multi-client evidence; no product adapter yet |
 | Bedrock and no-Anthropic-account launch | Experimental inference/account paths, separate from adapter fidelity |
@@ -403,7 +403,7 @@ truthfully labeled guarantees and remain in the product plan.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
-| Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart | Exact Linux/2.1.237 only; literal official-app UI and exact-SHA deployment acceptance remain open; no remote controls, permissions, attachments, or status |
+| Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart | Exact Linux/2.1.237 only; literal official-app UI remains open; no remote controls, permissions, attachments, or status |
 | tmux | Experimental Claude compatibility driver | Transcript/pane correlation is weaker than native RC; permission mirroring uses hooks |
 | OpenCode | Experimental server driver | Partial history, bounded reconnect dedup, and no proven live reattach |
 | Codex | Research-backed future app-server adapter | Multi-client facts are pinned, but no broker adapter or official-remote coexistence exists |
@@ -522,14 +522,17 @@ Deterministic coverage owns retired-channel fencing and committed-but-response-l
 credential scan found no provider/root/pass/bypass value in the owned mode-0600 logs or raw SQLite
 files, and raw broker files contained none of the six labelled prompts.
 
+On 2026-08-30, trusted Preview run 33323332395 passed against exact deployed commit
+<code>bcab0c9c0fa6ad036f4996b9d0f0540aebec4d26</code>. It attested the served Preview SHA and configured
+default SQLite/Turso profile, then passed browser discovery, host receipt, and reload replay. This
+deployment smoke used no live Claude or provider credential.
+
 The remaining M1 acceptance is:
 
 1. Run the same session through a literal logged-in official Claude web/mobile client, including one
    labelled official-client submission observed by the local TUI and both remote-claw browsers.
-2. Bind the existing deployed Preview smoke to the immutable Graduate commit and supported Turso
-   profile. This deployment gate exercises sealed discovery/send/reload, not live provider credentials.
 
-Until both items pass, the Claude native-coexistence milestone remains unfinished. Passing it will not
+Until that item passes, the Claude native-coexistence milestone remains unfinished. Passing it will not
 complete the OpenCode, Codex, tmux, Bedrock/accountless, or full-product matrix.
 
 ## 17. Claude Remote Control boundary

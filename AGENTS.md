@@ -9,8 +9,9 @@ account, not no AWS/provider or remote-claw credentials.
 **Current truth:** the private Claude replacement relay and narrower OpenCode/tmux adapters work. The
 Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text to remote-claw while
 ordinary Anthropic Remote Control remains active. Its packed-install restart, broker-loss, and
-credential/log checks passed; literal official-app UI validation and the exact-SHA deployed Preview
-remain open. The production Codex adapter is not implemented. The supported durable broker is
+credential/log checks passed. The Graduate commit's separate exact-SHA deployed-broker gate passed;
+literal official-app UI validation remains open. The production Codex adapter is not implemented. The
+supported durable broker is
 SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Design lives in
 `docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI is `packages/cli`.
 Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-architecture.md` §17.
@@ -294,8 +295,9 @@ faithful sentinel.
   exercised two fresh projections of
   one explicitly named live native session with the local TUI, two browsers, and provider API; broker
   loss stopped only the companion, and bounded log/storage inspection found none of the tested
-  credentials or plaintext labels. Literal official Claude app UI acceptance and the exact-SHA
-  deployed Preview remain open. Current evidence lives in `docs/release-finish-line.md`; this milestone
+  credentials or plaintext labels. The Graduate commit's separate exact-SHA deployed-broker gate
+  passed; literal official Claude app UI acceptance remains open. Current evidence lives in
+  `docs/release-finish-line.md`; this milestone
   does not remove OpenCode, Codex, tmux, Bedrock, or accountless from the product goal.
 - TypeScript is strict: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and
   `verbatimModuleSyntax`. Root secrets and known credential material never go on argv or normal output,

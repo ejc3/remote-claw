@@ -9,7 +9,8 @@ credentials.
 > projection while ordinary Anthropic Remote Control stays active. A bounded packed-install run kept
 > the exact Claude local TUI, an authenticated Anthropic RC API client, and two remote-claw browsers on
 > one native session across two fresh companion projections; broker loss stopped only the companion.
-> Literal official Claude web/mobile UI validation and the exact-SHA deployed Preview remain open. See
+> The Graduate commit's separate exact-SHA deployed-broker gate is green; literal official Claude
+> web/mobile UI validation remains open. See
 > [Product goal and release gates](docs/release-finish-line.md).
 
 ## Product goal
@@ -29,7 +30,7 @@ The intended surface matrix is:
 
 | Agent surface | Local native UI | Official provider collaboration | remote-claw browsers | Current truth |
 | --- | --- | --- | --- | --- |
-| Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; the exact-2.1.237 native companion projects structured text to multiple browsers, can reattach a fresh projection to one explicitly named live native session, and preserves the native session on broker loss; literal official-app UI and deployed acceptance remain incomplete |
+| Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; the exact-2.1.237 native companion projects structured text to multiple browsers, can reattach a fresh projection to one explicitly named live native session, and preserves the native session on broker loss; the Graduate commit's separate exact-SHA deployed-broker gate passed, while literal official-app UI remains incomplete |
 | Codex | Codex TUI | Codex/ChatGPT Remote where supported | Multiple browsers | Research proves a pinned app-server multi-client seam; product adapter and official coexistence do not |
 | OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | Experimental HTTP/SSE driver; coexistence and durable recovery are incomplete |
 | tmux compatibility | Terminal pane | Plain Claude retains its own provider remote when requested | Multiple browsers | Experimental and deliberately lower fidelity; one Claude 2.1.237 coexistence run passed, but the official app UI was not exercised |
@@ -59,9 +60,9 @@ requires the exact native ID explicitly and creates a new projection instead of 
 or reusing the retired projection. Both open live SSE before bounded ascending history and publish no
 writable projection until reconciliation is ready. Browser text keeps one UUID/timestamp and is not
 automatically retried after an ambiguous POST; the canonical browser receipt and transcript row come
-only from provider history/SSE. OAuth remains on the host. The literal official Claude app UI and
-exact-SHA deployed Preview remain open; current evidence is tracked in the
-[release roadmap](docs/release-finish-line.md).
+only from provider history/SSE. OAuth remains on the host. The Graduate commit's separate exact-SHA
+deployed-broker gate is green; the literal official Claude app UI remains open. Current evidence is
+tracked in the [release roadmap](docs/release-finish-line.md).
 
 Existing foundations:
 
