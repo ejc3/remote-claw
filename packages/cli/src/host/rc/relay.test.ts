@@ -14,6 +14,8 @@ import type { Tracer } from "../../trace.js";
 import {
   CLAUDE_NATIVE_CAPABILITIES,
   CLAUDE_NATIVE_HARNESS,
+  CODEX_CAPABILITIES,
+  CODEX_HARNESS,
   type DriverCapabilities,
   MITM_CAPABILITIES,
   MITM_HARNESS,
@@ -653,6 +655,17 @@ function opencodeMirroredRelayOf(session: Session, client: FakeClient): HostRcRe
   });
 }
 
+function codexRelayOf(session: Session, client: FakeClient): HostRcRelay {
+  return new HostRcRelay({
+    client: client as unknown as BrokerClient,
+    identityId: ID,
+    sessionId: session.id,
+    session,
+    capabilities: CODEX_CAPABILITIES,
+    harness: CODEX_HARNESS,
+  });
+}
+
 const tick = () => new Promise((r) => setTimeout(r, 0));
 async function waitFor(pred: () => boolean, ms = 2000): Promise<void> {
   const end = Date.now() + ms;
@@ -859,6 +872,11 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
       text: "\t mirrored browser prompt \n",
       relayFor: opencodeMirroredRelayOf,
     },
+    {
+      surface: "Codex app-server",
+      text: "\t Codex browser prompt \n",
+      relayFor: codexRelayOf,
+    },
   ])("$surface waits for native observation before assigning a browser user its canonical seq", async ({
     text,
     relayFor,
@@ -912,6 +930,46 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
       { client_msg_id: "browser-msg", native_pending: true },
       { client_msg_id: "browser-msg", seq: 1 },
     ]);
+  });
+
+  it("Codex admits only native-ordered text and suppresses browser-owned interaction controls", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const relay = codexRelayOf(session, client);
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const pushControl = vi.spyOn(session, "pushControlRequest");
+    const pushResponse = vi.spyOn(session, "pushControlResponse");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+
+    await waitFor(() => client.streamStarts.length === 1);
+    client.pushInbound(inFrame("user", "codex-slash", "  /review", "slash-client"));
+    client.pushInbound(inFrame("interrupt", "codex-interrupt", JSON.stringify({})));
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "codex-permission",
+        JSON.stringify({ request_id: "native-owner", behavior: "allow" }),
+      ),
+    );
+    const text = " browser-owned Codex text ";
+    client.pushInbound(inFrame("user", "codex-text", text, "codex-client"));
+
+    await waitFor(() => pushUser.mock.calls.length === 1);
+    await waitFor(() => client.opened.length === 4);
+    expect(pushUser).toHaveBeenCalledWith(text, { clientMsgId: "codex-client" });
+    expect(pushControl).not.toHaveBeenCalled();
+    expect(pushResponse).not.toHaveBeenCalled();
+    expect(client.content).toEqual([]);
+    expect(
+      client.posts
+        .filter(({ recordKind }) => recordKind === "accepted")
+        .map(({ text: receipt }) => JSON.parse(receipt)),
+    ).toEqual([{ client_msg_id: "codex-client", native_pending: true }]);
+
+    ac.abort();
+    await served;
   });
 
   it("suppresses every unsupported native control without creating transcript content", async () => {
@@ -1549,19 +1607,28 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     );
   });
 
-  it("stable MITM fails closed before pumps or discoverability on a non-durable broker", async () => {
+  it.each([
+    {
+      surface: "stable MITM",
+      relayFor: (session: Session, client: FakeClient) =>
+        relayOf(session, client, STABLE_MITM_CAPABILITIES),
+    },
+    { surface: "Codex", relayFor: codexRelayOf },
+  ])("$surface fails closed before pumps or discoverability on a non-durable broker", async ({
+    relayFor,
+  }) => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     const pushUser = vi.spyOn(session, "pushUserInput");
     client.queueInbound(inFrame("user", "must-not-run", "unsafe legacy command"));
     session.pushUpstream(assistant("must not publish"));
-    const relay = relayOf(session, client, STABLE_MITM_CAPABILITIES);
+    const relay = relayFor(session, client);
 
     await expect(relay.prepare()).rejects.toThrow(
-      "stable Claude remote control requires a durable broker backend",
+      "stable remote control requires a durable broker backend",
     );
     await expect(relay.serve(new AbortController().signal)).rejects.toThrow(
-      "stable Claude remote control requires a durable broker backend",
+      "stable remote control requires a durable broker backend",
     );
 
     expect(session.closed).toBe(true);
@@ -2111,8 +2178,8 @@ describe("HostRcRelay harness on session_announce (#164)", () => {
     expect(client.announces.at(-1)?.harness).toEqual(MITM_HARNESS);
   });
 
-  it("broadcasts a driver's harness verbatim (tmux / opencode)", async () => {
-    for (const h of [TMUX_HARNESS, OPENCODE_HARNESS]) {
+  it("broadcasts a driver's harness verbatim (tmux / opencode / codex)", async () => {
+    for (const h of [TMUX_HARNESS, OPENCODE_HARNESS, CODEX_HARNESS]) {
       const session = new Session("s", "t", {});
       const client = new FakeClient();
       const relay = new HostRcRelay({

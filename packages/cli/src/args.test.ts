@@ -39,6 +39,25 @@ describe("classifyArgs (unit)", () => {
     });
   });
 
+  it("reserves the Codex app-server origin and exact thread without forwarding them", () => {
+    expect(
+      classifyArgs([
+        "--rc-codex-url",
+        "ws://127.0.0.1:4500",
+        "--rc-codex-thread",
+        "0194f8d8-10b4-7abc-8def-0123456789ab",
+        "chat",
+      ]),
+    ).toEqual({
+      rc: {
+        "rc-codex-url": "ws://127.0.0.1:4500",
+        "rc-codex-thread": "0194f8d8-10b4-7abc-8def-0123456789ab",
+      },
+      claudeArgs: ["chat"],
+      errors: [],
+    });
+  });
+
   it("mixes rc flags and claude args in any order", () => {
     const c = classifyArgs(["chat", "--rc-file", "work", "--model", "opus", "--rc-quiet"]);
     expect(c.rc).toEqual({ "rc-file": "work", "rc-quiet": true });

@@ -190,6 +190,21 @@ describe("supported OpenCode mutation surface", () => {
   });
 });
 
+describe("supported Codex mutation surface", () => {
+  const caps = {
+    structuredPermissions: false,
+    status: true,
+    controls: { interrupt: false, setModel: false, setMode: false, end: false },
+    attachments: false,
+  };
+  it("uses real worker status and the shared native text admission guard", () => {
+    expect(reportsWorkerStatus(caps)).toBe(true);
+    expect(stableTextBlockReason(" \n\t ", true)).toBe("empty");
+    expect(stableTextBlockReason(" /review ", true)).toBe("slash");
+    expect(stableTextBlockReason("review this change", true)).toBeNull();
+  });
+});
+
 // #151 mobile a11y: on a coarse (touch) pointer, Enter is a NEWLINE (the Send button sends); on a fine
 // (desktop) pointer Enter sends and Shift+Enter is a line break.
 describe("enterShouldSend", () => {

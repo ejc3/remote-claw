@@ -17,6 +17,8 @@ import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import {
   CLAUDE_NATIVE_CAPABILITIES,
   CLAUDE_NATIVE_HARNESS,
+  CODEX_CAPABILITIES,
+  CODEX_HARNESS,
   type DriverCapabilities,
   type HarnessDescriptor,
   HostRcRelay,
@@ -36,6 +38,7 @@ function presetHarness(p: string | undefined): HarnessDescriptor {
   if (p === "native-rc") return CLAUDE_NATIVE_HARNESS;
   if (p === "tmux") return TMUX_HARNESS;
   if (p === "opencode") return OPENCODE_HARNESS;
+  if (p === "codex") return CODEX_HARNESS;
   return MITM_HARNESS;
 }
 
@@ -58,6 +61,7 @@ function presetCaps(p: string | undefined): DriverCapabilities {
       controls: { interrupt: true, setModel: false, setMode: false, end: false },
       attachments: false,
     };
+  if (p === "codex") return CODEX_CAPABILITIES;
   return STABLE_MITM_CAPABILITIES;
 }
 

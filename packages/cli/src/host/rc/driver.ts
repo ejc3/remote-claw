@@ -13,7 +13,7 @@ import type { GitInfo } from "./gitinfo.js";
 import type { Session } from "./session.js";
 
 /** The driver names the wrapper can dispatch on (`--rc-driver=<name>`, default "mitm"). */
-export type DriverName = "mitm" | "claude-native" | "tmux" | "opencode";
+export type DriverName = "mitm" | "claude-native" | "tmux" | "opencode" | "codex";
 
 /** Per-verb control support. Coarse "controlVerbs: boolean" couldn't say "interrupt works but set_mode
  *  doesn't", which made the viewer fabricate a confirmed mode/model for a driver that silently no-ops it
@@ -80,15 +80,25 @@ export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {
   attachments: false,
 };
 
+/** The Codex app-server companion projects completed plain text and real thread status. Approval and
+ * question requests remain first-response-sensitive native UI interactions, so every browser mutation
+ * family except text stays disabled. */
+export const CODEX_CAPABILITIES: DriverCapabilities = {
+  structuredPermissions: false,
+  status: true,
+  controls: { interrupt: false, setModel: false, setMode: false, end: false },
+  attachments: false,
+};
+
 /** Which harness a session runs, so the viewer's session list can show WHICH agent + mode it is (the
  * sessions look identical otherwise). `agent` is the product; `mode` is how we bridge it. Rides
  *  every session_announce alongside `capabilities`. */
 export interface HarnessDescriptor {
   /** The underlying agent product. */
-  agent: "claude-code" | "opencode";
+  agent: "claude-code" | "opencode" | "codex";
   /** How the session is bridged: private RC facade, provider-native RC companion, a tmux pane, or
    * opencode's own server. */
-  mode: "rc" | "native-rc" | "tmux" | "opencode";
+  mode: "rc" | "native-rc" | "tmux" | "opencode" | "app-server";
 }
 
 /** The MITM driver runs the real `claude` under native remote-control. */
@@ -103,6 +113,8 @@ export const CLAUDE_NATIVE_HARNESS: HarnessDescriptor = {
 export const TMUX_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "tmux" };
 /** The opencode driver peer-attaches to an `opencode serve`. */
 export const OPENCODE_HARNESS: HarnessDescriptor = { agent: "opencode", mode: "opencode" };
+/** The Codex driver peer-attaches to one exact thread on a caller-owned local app-server. */
+export const CODEX_HARNESS: HarnessDescriptor = { agent: "codex", mode: "app-server" };
 
 /**
  * Everything a driver needs to bridge a harness to the broker. Mirrors the launch surface

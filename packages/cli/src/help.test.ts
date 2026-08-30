@@ -40,7 +40,7 @@ describe("RC_HELP banner", () => {
     }
   });
 
-  it("documents the per-driver (tmux / opencode) flags", () => {
+  it("documents the per-driver (tmux / opencode / codex) flags", () => {
     for (const f of [
       "--rc-tmux-skip-permissions",
       "--rc-session-hook",
@@ -49,6 +49,8 @@ describe("RC_HELP banner", () => {
       "--rc-oc-model",
       "--rc-oc-session",
       "--rc-oc-mirror-permissions",
+      "--rc-codex-url",
+      "--rc-codex-thread",
     ]) {
       expect(RC_HELP).toContain(f);
     }
@@ -105,6 +107,17 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toMatch(/Attach-only: the companion never discovers, selects, or creates/);
     expect(RC_HELP).toMatch(/Default leaves native permission policy untouched/);
     expect(RC_HELP).toMatch(/retired --rc-oc-skip-permissions is an error/);
+    expect(RC_HELP).toMatch(/No forwarded arguments/);
+  });
+
+  it("documents the frozen attach-only Codex tuple and local interaction ownership", () => {
+    expect(RC_HELP).toContain("Pinned Codex companion (--rc-driver=codex)");
+    expect(RC_HELP).toMatch(/Linux arm64\s+and exact Codex app-server 0\.151\.0/);
+    expect(RC_HELP).toMatch(/never starts or stops the app-server/);
+    expect(RC_HELP).toMatch(/resumes\/joins only the\s+exact supplied thread/);
+    expect(RC_HELP).toMatch(/Approvals,\s+questions, interrupts, model\/mode changes/);
+    expect(RC_HELP).toMatch(/Keep a local Codex TUI attached/);
+    expect(RC_HELP).toMatch(/sole owner of approvals\s+and questions/);
     expect(RC_HELP).toMatch(/No forwarded arguments/);
   });
 

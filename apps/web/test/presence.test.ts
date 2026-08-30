@@ -456,6 +456,10 @@ describe("parseHarness", () => {
       agent: "opencode",
       mode: "opencode",
     });
+    expect(parseHarness({ agent: "codex", mode: "app-server" })).toEqual({
+      agent: "codex",
+      mode: "app-server",
+    });
   });
 
   it("returns undefined for a legacy host (absent) or a non-object", () => {
@@ -478,5 +482,9 @@ describe("parseHarness", () => {
     expect(parseHarness({ agent: "opencode", mode: "rc" })).toBeUndefined();
     expect(parseHarness({ agent: "opencode", mode: "native-rc" })).toBeUndefined();
     expect(parseHarness({ agent: "opencode", mode: "tmux" })).toBeUndefined();
+    expect(parseHarness({ agent: "codex", mode: "rc" })).toBeUndefined();
+    expect(parseHarness({ agent: "codex", mode: "opencode" })).toBeUndefined();
+    expect(parseHarness({ agent: "claude-code", mode: "app-server" })).toBeUndefined();
+    expect(parseHarness({ agent: "opencode", mode: "app-server" })).toBeUndefined();
   });
 });

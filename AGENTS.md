@@ -15,8 +15,11 @@ ordinary Anthropic Remote Control remains active. Its packed-install restart, br
 credential/log checks passed. The literal logged-in official Claude web UI on the user's phone, the
 local TUI, and two remote-claw browsers then completed the bounded coexistence run, including liveness
 after the official client disconnected. The Graduate commit's separate exact-SHA deployed-broker gate
-passed. M1 and OpenCode M2 are complete; structured Codex M3a is next. The production Codex adapter
-is not implemented. The supported durable broker is
+passed. M1, OpenCode M2, and narrow Codex M3a are complete. M3a peer-attaches exact Codex app-server
+0.151.0/Linux arm64 on an explicit-port loopback WebSocket to one supplied UUIDv7, requires an attached
+local TUI and paired durable broker cursors, and exposes only text plus real status; every browser
+control, attachment, approval, and question response remains disabled. M3b—same-thread coexistence
+with the supported ChatGPT desktop/phone Remote topology—is next. The supported durable broker is
 SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Design lives in
 `docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI is `packages/cli`.
 Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-architecture.md` §17.

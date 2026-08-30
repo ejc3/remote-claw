@@ -32,6 +32,8 @@ const OPENCODE_ENV_KEYS = [
   "RC_OC_MIRROR_PERMISSIONS",
   "OPENCODE_SERVER_USERNAME",
   "OPENCODE_SERVER_PASSWORD",
+  "RC_CODEX_URL",
+  "RC_CODEX_THREAD",
 ] as const;
 
 function clearOpencodeEnv(): () => void {
@@ -184,6 +186,33 @@ describe("runWrapper (functional)", () => {
     } finally {
       restoreEnv();
     }
+  });
+
+  it.each([
+    ["driver flag", ["--rc-driver", "codex"], undefined],
+    ["URL flag", ["--rc-codex-url", "ws://127.0.0.1:4500"], undefined],
+    ["thread flag", ["--rc-codex-thread", "0194f8d8-10b4-7abc-8def-0123456789ab"], undefined],
+    ["driver env", [], ["RC_DRIVER", "codex"]],
+    ["URL env", [], ["RC_CODEX_URL", "ws://127.0.0.1:4500"]],
+    ["thread env", [], ["RC_CODEX_THREAD", "0194f8d8-10b4-7abc-8def-0123456789ab"]],
+  ] as const)("rejects Codex intent from %s without a broker instead of spawning plain Claude", async (_name, args, envEntry) => {
+    const { fn, calls } = recordingSpawn();
+    const driverSpy = vi.fn(async () => 0);
+    const lines: string[] = [];
+    if (envEntry !== undefined) process.env[envEntry[0]] = envEntry[1];
+
+    const code = await runWrapper([...args], {
+      spawnFn: fn,
+      runCodexDriver: driverSpy,
+      stderr: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(2);
+    expect(calls).toEqual([]);
+    expect(driverSpy).not.toHaveBeenCalled();
+    expect(lines).toEqual([
+      "remote-claw: Codex attach configuration requires --rc-app (or RC_APP); refusing to launch plain claude\n",
+    ]);
   });
 
   it("--rc-driver=opencode --help prints wrapper help but never spawns Claude or the driver", async () => {
@@ -494,6 +523,142 @@ describe("runWrapper (functional)", () => {
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       restoreEnv();
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("dispatches Codex with the shared context and exact caller-owned attachment tuple", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-codex-"));
+    const secret = join(dir, "secret");
+    const fetchSpy = vi.fn(() => Promise.reject(new Error("unexpected network call")));
+    vi.stubGlobal("fetch", fetchSpy);
+    let seenContext: DriverContext | undefined;
+    let seenSignal: AbortSignal | undefined;
+    let seenOptions:
+      | {
+          url: string;
+          threadId: string;
+          runtime?: Readonly<{ platform: NodeJS.Platform; arch: string }>;
+        }
+      | undefined;
+    try {
+      const code = await runWrapper(
+        [
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-backend",
+          "sqlite",
+          "--rc-driver",
+          "codex",
+          "--rc-codex-url",
+          "ws://[::1]:4510",
+          "--rc-codex-thread",
+          "0194f8d8-10b4-7abc-8def-0123456789ab",
+        ],
+        {
+          runtime: { platform: "linux", arch: "arm64" },
+          runCodexDriver: async (ctx, signal, options) => {
+            seenContext = ctx;
+            seenSignal = signal;
+            seenOptions = options;
+            return 29;
+          },
+        },
+      );
+
+      expect(code).toBe(29);
+      expect(existsSync(secret)).toBe(true);
+      expect(seenSignal?.aborted).toBe(false);
+      expect(seenContext).toMatchObject({
+        brokerUrl: "https://broker.example",
+        backend: "sqlite",
+        harnessArgs: [],
+        title: "remote-claw",
+        cwd: process.cwd(),
+      });
+      expect(seenContext?.harnessBin).toBeUndefined();
+      expect(seenContext?.extra).toBeUndefined();
+      expect(seenOptions).toEqual({
+        url: "ws://[::1]:4510",
+        threadId: "0194f8d8-10b4-7abc-8def-0123456789ab",
+        runtime: { platform: "linux", arch: "arm64" },
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "forwarded arguments",
+      extra: ["chat", "--rc-codex-thread", "0194f8d8-10b4-7abc-8def-0123456789ab"],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /remove forwarded arguments/,
+    },
+    {
+      name: "unsupported platform",
+      extra: ["--rc-codex-thread", "0194f8d8-10b4-7abc-8def-0123456789ab"],
+      runtime: { platform: "linux" as const, arch: "x64" },
+      error: /requires the supported Linux arm64 release tuple/,
+    },
+    {
+      name: "missing exact thread",
+      extra: [],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /required and must be a canonical Codex UUIDv7/,
+    },
+    {
+      name: "malformed thread",
+      extra: ["--rc-codex-thread", "not-a-thread"],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /canonical Codex UUIDv7/,
+    },
+    {
+      name: "non-loopback URL",
+      extra: [
+        "--rc-codex-thread",
+        "0194f8d8-10b4-7abc-8def-0123456789ab",
+        "--rc-codex-url",
+        "ws://localhost:4500",
+      ],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /explicit-port ws origin on 127\.0\.0\.1 or \[::1\]/,
+    },
+  ])("rejects Codex $name before identity or network", async ({ extra, runtime, error }) => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-codex-invalid-"));
+    const secret = join(dir, "secret");
+    const fetchSpy = vi.fn(() => Promise.reject(new Error("unexpected network call")));
+    const driverSpy = vi.fn(async () => 0);
+    vi.stubGlobal("fetch", fetchSpy);
+    const lines: string[] = [];
+    try {
+      const code = await runWrapper(
+        [
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-driver",
+          "codex",
+          ...extra,
+        ],
+        {
+          runtime,
+          stderr: (line) => lines.push(line),
+          runCodexDriver: driverSpy,
+        },
+      );
+      expect(code).toBe(2);
+      expect(lines.join("")).toMatch(error);
+      expect(existsSync(secret)).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(driverSpy).not.toHaveBeenCalled();
+    } finally {
       vi.unstubAllGlobals();
       rmSync(dir, { recursive: true, force: true });
     }
@@ -956,7 +1121,7 @@ describe("runWrapper (functional)", () => {
     expect(code).toBe(2);
     expect(calls).toHaveLength(0);
     expect(lines.join("")).toMatch(/unknown --rc-driver=bogus/);
-    expect(lines.join("")).toMatch(/mitm \| claude-native \| tmux \| opencode/);
+    expect(lines.join("")).toMatch(/mitm \| claude-native \| tmux \| opencode \| codex/);
   });
 
   it("--rc-driver=tmux without --rc-app warns and runs plain claude (no broker)", async () => {
@@ -1079,6 +1244,17 @@ describe("misappliedDriverFlagWarnings — cross-mode flag hygiene", () => {
     ]);
   });
 
+  it("warns that Codex attach flags are a no-op for another known driver", () => {
+    expect(
+      misappliedDriverFlagWarnings("opencode", {
+        "rc-codex-url": "ws://127.0.0.1:4500",
+        "rc-codex-thread": "0194f8d8-10b4-7abc-8def-0123456789ab",
+      }),
+    ).toEqual([
+      "remote-claw: --rc-codex-url / --rc-codex-thread only apply to --rc-driver=codex; ignored for opencode\n",
+    ]);
+  });
+
   it("a tmux run with BOTH opencode + inference flags warns once per group", () => {
     const w = misappliedDriverFlagWarnings("tmux", {
       "rc-oc-model": "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
@@ -1102,6 +1278,12 @@ describe("misappliedDriverFlagWarnings — cross-mode flag hygiene", () => {
       }),
     ).toEqual([]);
     expect(misappliedDriverFlagWarnings("tmux", { "rc-tmux-skip-permissions": true })).toEqual([]);
+    expect(
+      misappliedDriverFlagWarnings("codex", {
+        "rc-codex-url": "ws://127.0.0.1:4500",
+        "rc-codex-thread": "0194f8d8-10b4-7abc-8def-0123456789ab",
+      }),
+    ).toEqual([]);
   });
 
   it("an UNKNOWN driver gets NO misapplied-flag nag (allowlist-gated; it errors on its own)", () => {

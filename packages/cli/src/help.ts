@@ -46,14 +46,16 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      keeping (and replaying) an in-memory transcript. Stable Claude requires that
                      durable profile and fails closed before discovery on vercel/local; production
                      should default the deployment to sqlite/Turso so host and viewer agree.
-  --rc-driver <d>    capture/inject driver (or set RC_DRIVER): mitm | claude-native | tmux | opencode
+  --rc-driver <d>    capture/inject driver (or set RC_DRIVER): mitm | claude-native | tmux | opencode |
+                     codex
                      (default mitm). mitm is the supported private relay and replaces Anthropic RC.
                      claude-native is the Linux/Claude 2.1.237 text-only companion: it leaves ordinary
                      Anthropic Remote Control intact alongside the local TUI and remote-claw browsers.
                      Literal official-client coexistence acceptance passed for the pinned release.
                      Use it with claude's own --remote-control.
                      tmux remains an experimental/internal compatibility driver. OpenCode has one
-                     pinned supported text/interrupt tuple described below.
+                     pinned supported text/interrupt tuple. Codex has one pinned text-only companion
+                     tuple described below.
 
 Claude native companion (--rc-driver=claude-native):
   Launch form starts ordinary Claude behind a transparent session-binding observer, then mirrors the
@@ -96,6 +98,19 @@ Pinned OpenCode driver (--rc-driver=opencode):
                      RC_OC_MIRROR_PERMISSIONS=1). Default leaves native permission policy untouched;
                      permissions remain native/local. The retired --rc-oc-skip-permissions is an error.
                      Supported tuple: Linux arm64 and exact OpenCode 1.17.5. No forwarded arguments.
+
+Pinned Codex companion (--rc-driver=codex):
+  --rc-codex-url <origin>  caller-owned \`codex app-server\` WebSocket origin (or set RC_CODEX_URL;
+                     default ws://127.0.0.1:4500). Only explicit-port loopback ws origins are accepted.
+  --rc-codex-thread <id>   required exact existing Codex UUIDv7 (or set RC_CODEX_THREAD).
+                     Attach-only: the companion never starts or stops the app-server and never
+                     discovers, selects, creates, deletes, or stops a thread. It resumes/joins only the
+                     exact supplied thread. Only non-empty, non-slash text is projected. Approvals,
+                     questions, interrupts, model/mode changes, files, and attachments remain in the
+                     local Codex client and are disabled in the viewer. Keep a local Codex TUI attached
+                     to that exact thread for the companion lifetime; it is the sole owner of approvals
+                     and questions. Supported tuple: Linux arm64 and exact Codex app-server 0.151.0.
+                     No forwarded arguments.
 
 Diagnostics:
   --rc-trace         stand up a MITM that passes through to the REAL api.anthropic.com and traces the

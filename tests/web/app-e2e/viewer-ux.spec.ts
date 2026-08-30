@@ -116,16 +116,17 @@ test("the mobile header and session metadata stay inside the viewport", async ({
 });
 
 // #164: the session list labels WHICH agent + bridge mode each session is, so native-RC Claude Code, tmux
-// Claude Code, and opencode don't look identical. The host announces its HarnessDescriptor; the badge is
+// Claude Code, OpenCode, and Codex don't look identical. The host announces its HarnessDescriptor; the badge is
 // driven end-to-end from that announce (RC_E2E_HARNESS picks which the scripted host declares).
-test("the session-list badge labels native RC, tmux, and opencode from the announce", async ({
+test("the session-list badge labels native RC, tmux, OpenCode, and Codex from the announce", async ({
   page,
   seedHost,
 }) => {
-  for (const [harness, caps, label, agent] of [
-    ["native-rc", "native-rc", "Claude Code", "claude-code"],
-    ["tmux", "tmux", "Claude Code", "claude-code"],
-    ["opencode", "opencode", "OpenCode", "opencode"],
+  for (const [harness, caps, label, agent, detail] of [
+    ["native-rc", "native-rc", "Claude Code", "claude-code", "Anthropic remote control"],
+    ["tmux", "tmux", "Claude Code", "claude-code", "Terminal bridge"],
+    ["opencode", "opencode", "OpenCode", "opencode", "Native OpenCode session"],
+    ["codex", "codex", "Codex", "codex", "Local app-server"],
   ] as const) {
     const { pass } = await seedHost({ harness, caps });
     await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
@@ -134,6 +135,7 @@ test("the session-list badge labels native RC, tmux, and opencode from the annou
     const badge = row.locator(".agent-badge");
     await expect(badge).toHaveText(label);
     await expect(badge).toHaveAttribute("data-agent", agent);
+    await expect(row).toHaveAttribute("title", new RegExp(`${label} · ${detail}`));
     await row.screenshot({ path: `test-results/agent-badge-${harness}.png` });
   }
 });
@@ -501,6 +503,51 @@ test.describe("capability gating (#149)", () => {
     await interrupt.click();
     await expect(sheet).not.toBeVisible();
     await expect(page.locator(".send-err")).toHaveCount(0);
+  });
+
+  test("the Codex app-server companion keeps approvals and questions native and exposes only text", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost({
+      caps: "codex",
+      harness: "codex",
+      perm: true,
+      askq: true,
+    });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    const sessionRow = page.locator("button.row", { hasText: "rc box" });
+    await expect(sessionRow.locator(".row-sub")).toContainText("online");
+    await expect(sessionRow.locator(".agent-badge")).toHaveText("Codex");
+    await expect(sessionRow.locator(".agent-badge")).toHaveAttribute("data-agent", "codex");
+    await sessionRow.click();
+
+    await expect(page.locator(".local-input-disclosure")).toContainText(
+      "Approvals and questions stay in the local Codex TUI.",
+    );
+    await expect(page.locator(".perms-bypassed")).toHaveCount(0);
+    await expect(page.locator(".perm-actions, .q-options, .q-submit")).toHaveCount(0);
+    await expect(page.getByText("Which name do you like best?", { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId("composer-mode")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Attach photos" })).toBeDisabled();
+
+    const composer = page.getByRole("textbox", { name: "Message" });
+    await expect(composer).toHaveAttribute("placeholder", "Message this session");
+    await composer.fill(" /review");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await expect(page.getByText(/Use the local Codex TUI/)).toBeVisible();
+    await composer.fill("review this change");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await expect(page.locator(".row-user", { hasText: "review this change" })).toHaveCount(1);
+
+    await page.locator("button.chat-menu").click();
+    const sheet = page.locator(".sheet");
+    await expect(sheet).toContainText("Codex · Local app-server");
+    await expect(sheet).toContainText("Approvals and questions stay in Codex");
+    await expect(sheet).toContainText("can’t switch model");
+    await expect(sheet.locator(".mode-row", { hasText: "Opus" })).toHaveCount(0);
+    await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
   });
 
   test("a tmux host disables set_mode but keeps the model switcher and shows no permissions-off badge", async ({
