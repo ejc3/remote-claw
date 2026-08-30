@@ -13,5 +13,7 @@ Use these current sources:
 - [Retired host-runtime decision](client-driven-host-runtime.md) for why the generalized coordinator
   was removed.
 
-OpenCode and tmux remain intended product adapters with experimental guarantees; see their driver
-documents for what they actually do today. Codex has retained native seam evidence but no adapter yet.
+OpenCode and tmux remain intended product adapters; the exact OpenCode M2 text/interrupt tuple is
+supported. Other OpenCode tuples are unsupported; only its positive permission-mirroring opt-in and
+the tmux adapter retain experimental guarantees. See their driver documents for what they actually do
+today. Codex has retained native seam evidence but no remote-claw adapter yet.

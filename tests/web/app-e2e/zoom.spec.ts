@@ -105,7 +105,7 @@ test.afterAll(() => {
 test("entry screen regions", async ({ page, seedHost }) => {
   const { pass } = await seedHost();
   await page.goto(`/#${encodeURIComponent(pass)}`);
-  await expect(page.getByLabel("Machine pass")).toBeVisible();
+  await expect(page.getByLabel("Machine pass", { exact: true })).toBeVisible();
 
   const card = await geometry(page, ".astryx-card");
   const body = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
@@ -127,21 +127,23 @@ test("entry screen regions", async ({ page, seedHost }) => {
 
   await shot(page, "01-brand-lockup", ".brand");
   await shot(page, "02-heading-block", "h1");
-  await shot(page, "03-field-unfocused", "textarea");
-  await shot(page, "04-cta", "button.astryx-button");
-  await shot(page, "05-hint-code-chip", ".astryx-code");
+  await shot(page, "03-field", ".pass-control");
+  await shot(page, "04-cta", 'button:has-text("Connect")');
+  await shot(page, "05-help", ".connect-help > summary");
+  await page.locator(".connect-help > summary").click();
+  await shot(page, "05a-help-command", ".connect-command");
   await shot(page, "06-card-whole", ".astryx-card");
 
   // Focused state: the ring is the loudest thing on the screen when the field autofocuses.
-  await page.getByLabel("Machine pass").focus();
-  await shot(page, "07-field-focused", "textarea");
-  const ring = await page.getByLabel("Machine pass").evaluate((el) => {
+  await page.getByLabel("Machine pass", { exact: true }).focus();
+  await shot(page, "07-field-focused", ".pass-control");
+  const ring = await page.locator(".pass-control").evaluate((el) => {
     const s = getComputedStyle(el);
     return { color: s.outlineColor, width: s.outlineWidth, offset: s.outlineOffset };
   });
   metrics.push({ region: "field-focus-ring", notes: ring });
 
-  const btn = await geometry(page, "button.astryx-button");
+  const btn = await geometry(page, 'button:has-text("Connect")');
   metrics.push({ region: "cta", padding: btn.padding, notes: { radius: btn.radius, bg: btn.bg } });
 });
 

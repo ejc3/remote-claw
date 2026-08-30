@@ -9,8 +9,9 @@ plus multiple remote-claw browsers and with provider-native collaboration preser
 
 M0 proved a lower-fidelity version through the tmux adapter, the Anthropic Remote API, and two
 remote-claw browsers. M1 completed the small readiness-gated native companion, explicit exact-session
-fresh-projection restart, and literal official-client coexistence path. To avoid duplicating volatile
-pass/fail lists here, current evidence and remaining gates live in
+fresh-projection restart, and literal official-client coexistence path. M2 completed the pinned
+OpenCode 1.17.5 text/interrupt adapter and its real-TUI, two-browser acceptance. To avoid duplicating
+volatile pass/fail lists here, current evidence and remaining gates live in
 [native coexistence](native-rc-passthrough-scoping.md) and the
 [release roadmap](release-finish-line.md).
 
@@ -32,27 +33,30 @@ milestone as the entire product or delete working adapter foundations merely bec
 ### Claude Code
 
 M1 is complete. Do not reopen it by expanding the text-only native companion into controls or rich
-content. The structured critical path has moved to OpenCode and then Codex; Claude permissions,
+content. The structured critical path has moved to Codex; Claude permissions,
 questions, interrupts, modes, slash commands, and attachments may graduate later one family at a time.
 Keep the private replacement relay as a separately labeled mode for environments that do not need the
 official client.
 
 ### OpenCode
 
-Productize the existing HTTP/SSE adapter for exact OpenCode 1.17.5 on Linux arm64: attach to one
-explicit live session over literal loopback, graduate non-empty non-slash text and interrupt, close the
-ambiguous-send and origin-trust gaps, and use truthful fresh-projection recovery. The supported path
-does not mutate native permission policy and advertises structured permissions as false; the current
-mirror remains only behind the explicit positive experimental opt-in. The viewer labels permission
-handling local/native, not “permissions off.” Other versions and OpenCode collaboration surfaces need
-their own later gate.
+M2 is complete for exact OpenCode 1.17.5 on Linux arm64, the pinned Bedrock Sonnet model, one explicit
+live session over literal loopback, non-empty non-slash text, interrupt, and truthful fresh-projection
+restart. The accepted server environment used `AWS_REGION=us-west-1` plus explicit temporary SigV4
+credential values; other regions or credential modes need their own gate. The supported path does not
+mutate native permission policy and advertises structured permissions as false; the mirror remains
+only behind the explicit positive experimental opt-in. The viewer labels permission handling
+local/native, not “permissions off.” Other versions, models, platforms, permission graduation, and
+OpenCode-native collaboration surfaces need their own later gate; they do not reopen M2.
 
 ### Codex
 
 Build from the retained app-server multi-client evidence in two outcomes. First recapture a current
 version and prove one local Codex TUI plus multiple remote-claw browsers submit labeled text exactly once
-on the same native thread. Then run a bounded feasibility gate and preserve Codex/ChatGPT Remote only
-through a currently supported provider boundary. While browser approvals remain disabled, separately
+on the same native thread. Codex Remote already exists: phone pairing starts in the ChatGPT desktop app
+on macOS or Windows, and that desktop app can run a project on a Linux/other SSH host. M3b is therefore
+a bounded same-thread coexistence feasibility gate, not hypothetical product discovery. While browser
+approvals remain disabled, separately
 prove that attaching the companion does not steal, answer, error, or strand one native approval and one
 native question handled by the local TUI. Label that posture local/native rather than “permissions off,”
 or reject the tuple. Historical evidence is a reason to test the seam, not proof of the final topology.
@@ -76,9 +80,13 @@ credentials explicitly instead of using “accountless” as “no accounts or c
 
 ## Shared follow-ups
 
+- Post-M2 viewer parity, starting with an activity rollup and background-task sheet over event families
+  remote-claw already represents. Richer Claude-native commands, task phases, media, and composer states
+  graduate only after trace evidence defines their real semantics; visual resemblance alone is not a
+  capability claim and does not reopen M1.
 - Per-viewer roles and revocation, after a concrete authority policy exists.
-- Stable same-row native restart adoption, after M1's fresh-projection restart contract, with exact
-  adapter-local binding and a duplicate-mutation crash test.
+- Stable same-row native restart adoption, after the current adapter-local fresh-projection contracts,
+  with exact binding and a duplicate-mutation crash test.
 - Push notifications and offline discovery without plaintext payloads.
 - Retention/deletion with authenticated ownership and partial-failure handling.
 - Shared adapter abstractions only after two production adapters demonstrate the same requirement.

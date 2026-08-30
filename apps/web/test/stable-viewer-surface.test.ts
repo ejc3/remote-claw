@@ -14,7 +14,12 @@ const noAnswers = new Map<string, Record<string, string | string[]>>();
 
 function renderBubble(
   message: Message,
-  opts: { canGrant?: boolean; permissionsLocal?: boolean; hostConnected?: boolean } = {},
+  opts: {
+    canGrant?: boolean;
+    permissionsLocal?: boolean;
+    permissionAgent?: "Claude" | "OpenCode";
+    hostConnected?: boolean;
+  } = {},
   resolved = new Map<string, "allow" | "deny">(),
 ): string {
   return renderToStaticMarkup(
@@ -23,6 +28,7 @@ function renderBubble(
       onGrant: noGrant,
       canGrant: opts.canGrant ?? true,
       permissionsLocal: opts.permissionsLocal ?? false,
+      permissionAgent: opts.permissionAgent ?? "Claude",
       hostConnected: opts.hostConnected ?? true,
       resolved,
       resolvedAnswers: noAnswers,
@@ -71,6 +77,27 @@ describe("stable viewer surface", () => {
     expect(html).not.toContain(">Allow<");
     expect(html).not.toContain(">Deny<");
     expect(html).not.toContain("Allowed");
+  });
+
+  it("renders OpenCode permission history as native/local, never disabled or remotely actionable", () => {
+    const request: Message = {
+      kind: "permission_request",
+      seq: 3,
+      msgId: "permission-3",
+      text: JSON.stringify({ request_id: "perm-oc", tool_name: "Bash", tool_input: {} }),
+    };
+    const html = renderBubble(request, {
+      canGrant: false,
+      permissionsLocal: true,
+      permissionAgent: "OpenCode",
+      hostConnected: true,
+    });
+
+    expect(html).toContain("Permission prompts are local to OpenCode");
+    expect(html).toContain("Answer in the local OpenCode TUI");
+    expect(html).not.toContain("permissions off");
+    expect(html).not.toContain(">Allow<");
+    expect(html).not.toContain(">Deny<");
   });
 
   it("keeps compatibility permission actions disabled whenever host presence is stale", () => {

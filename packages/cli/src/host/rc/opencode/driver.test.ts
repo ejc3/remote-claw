@@ -1,415 +1,463 @@
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
 import { deriveIdentity } from "@remote-claw/clawsec";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
-import { createTracer, type TraceRecord } from "../../../trace.js";
 import type { Session } from "../session.js";
 import {
   type HistoryMessage,
   OpencodeClient,
+  OpencodeError,
   type OpencodeEvent,
+  type OpencodeModel,
   type OpencodeSession,
+  type OpencodeSessionStatus,
   type PermissionRule,
-  parseSseFrame,
 } from "./client.js";
 import {
   DEFAULT_OPENCODE_MODEL,
   errText,
   mergeAskRules,
-  OPENCODE_TEARDOWN_FLUSH_MS,
   OpencodeDriver,
+  OpencodeProjectionError,
+  opencodePartId,
 } from "./driver.js";
 
-// Driver-level CAPTURE test. We drive the real OpencodeDriver and HostRcRelay through ReadyBridge,
-// replacing only the two transports with controllable fakes:
-//   • a FakeOpencodeClient (extends OpencodeClient so the driver's `instanceof` guard accepts it) that
-//     yields a CANNED SSE sequence — the exact (model-agnostic) shapes captured from the live
-//     `opencode serve` (a user-prompt text part, an empty-then-"OK" assistant text part re-sent on
-//     each message.part.updated, an assistant message.updated with time.completed, then session.idle).
-//   • a FakeBroker (records posts; streams nothing) so the relay's announce/serve run end-to-end.
-// The load-bearing assertion: ONE coalesced assistant upstream payload reaches the Session (NOT one per
-// part.updated) — review #1. Plus dedup (#2) and ack-incl-initialize (#5).
+const MAIN = "ses_main";
+const CHILD = "ses_child";
+const PROMPT_MESSAGE_BASE = 0xf000_0000_0000;
 
-/** A no-op broker that records what the relay posts (recordKind/seq + the plaintext body — relay #post
- *  passes utf8(text), so this is exactly what a viewer renders) and parks its inbound stream until
- *  aborted. `content` is the durable transcript (seq !== null). */
-class FakeBroker {
-  posts: Array<{ recordKind: string; seq: number | null; text: string }> = [];
-  /** Park session-announcement writes forever to model a broker transport that ignores abort. */
-  stallAnnouncements = false;
-  /** Reject transcript publication to model a fatal remote projection without touching OpenCode. */
-  failContent = false;
-  announcementAttempts = 0;
-  get content() {
-    return this.posts.filter((p) => p.seq !== null);
+function nativeMessageId(sequence: number): string {
+  if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > 0xffff_ffff_ffff) {
+    throw new Error("test native message sequence is out of range");
   }
+  return `msg_${sequence.toString(16).padStart(12, "0")}${"0".repeat(14)}`;
+}
+
+function nativePartId(sequence: number): string {
+  if (!Number.isSafeInteger(sequence) || sequence < 0 || sequence > 0xffff_ffff_ffff) {
+    throw new Error("test native part sequence is out of range");
+  }
+  return `prt_${sequence.toString(16).padStart(12, "0")}${"0".repeat(14)}`;
+}
+
+function nativePartForMessage(messageId: string): string {
+  return `prt_${messageId.slice(4)}`;
+}
+
+type BrokerPost = { recordKind: string; seq: number | null; text: string };
+
+class FakeBroker {
+  readonly posts: BrokerPost[] = [];
+  failContent = false;
+
   async seqCursor(): Promise<{ maxSeq: number | null; durable: boolean }> {
     return { maxSeq: null, durable: false };
   }
+
   async maxSeq(): Promise<number | null> {
     return null;
   }
+
   async frameCountCursor(): Promise<{ frameCount: number | null; durable: boolean }> {
     return { frameCount: null, durable: false };
   }
+
   async frameCount(): Promise<number | null> {
     return null;
   }
+
   async postMessage(header: FrameHeader, body: Uint8Array): Promise<unknown[]> {
-    if (this.failContent) throw new Error("injected broker publication failure");
-    this.posts.push({
-      recordKind: header.recordKind,
-      seq: header.seq,
-      text: new TextDecoder().decode(body),
-    });
+    if (this.failContent && header.seq !== null) throw new Error("broker content failed");
+    this.#record(header, body);
     return [{ ok: true }];
   }
+
   async postFrame(header: FrameHeader, body: Uint8Array): Promise<unknown> {
-    if (header.recordKind === "session_announce") {
-      this.announcementAttempts++;
-      if (this.stallAnnouncements) await new Promise<never>(() => {});
-    }
-    this.posts.push({
-      recordKind: header.recordKind,
-      seq: header.seq,
-      text: new TextDecoder().decode(body),
-    });
+    this.#record(header, body);
     return { ok: true };
   }
-  async *streamFrames(opts: { signal?: AbortSignal }): AsyncGenerator<Frame> {
-    // No inbound frames; park until aborted (like a live SSE subscription with no traffic).
-    await new Promise<void>((resolve) => {
-      if (opts.signal?.aborted) return resolve();
-      opts.signal?.addEventListener("abort", () => resolve(), { once: true });
-    });
+
+  async *streamFrames(options: { signal?: AbortSignal }): AsyncGenerator<Frame> {
+    await aborted(options.signal);
+    yield* [];
   }
+
   async openFrame(): Promise<Uint8Array> {
     return new Uint8Array();
   }
+
+  #record(header: FrameHeader, body: Uint8Array): void {
+    this.posts.push({
+      recordKind: header.recordKind,
+      seq: header.seq,
+      text: new TextDecoder().decode(body),
+    });
+  }
 }
 
-/** A fake OpencodeClient that replays a fixed event list and records the calls the driver makes. It
- *  extends OpencodeClient (so `extra.client instanceof OpencodeClient` passes) but overrides every
- *  method to avoid any real HTTP. */
-class FakeOpencodeClient extends OpencodeClient {
-  prompts: Array<{ text: string; model: { providerID: string; modelID: string } }> = [];
-  aborts = 0;
-  abortSignals: AbortSignal[] = [];
-  /** Park native abort forever, including after its deadline signal aborts, to prove the outer bound. */
-  stallAbort = false;
-  /** Whether the active SSE pump's signal was already aborted when native abort began. */
-  captureWasAbortedAtNativeAbort: boolean | null = null;
-  lastEventsSignal: AbortSignal | null = null;
-  replies: Array<{ permissionId: string; response: string }> = [];
-  /** Sessions returned by strict discovery. Empty permits create; non-empty needs an explicit target. */
-  sessionList: Array<{ id: string }> = [];
-  /** Inject a malformed successful discovery payload despite the method's static return type. */
-  sessionListOverride: unknown = undefined;
-  listError: Error | null = null;
-  listCalls = 0;
-  listSignals: AbortSignal[] = [];
-  /** Park listSessions until its supplied signal aborts, like a hung cancellation-aware fetch. */
-  stallList = false;
-  /** Optional request barriers model an injected client that ignores cancellation and resolves late. */
-  listBarrier: Promise<void> | null = null;
-  createCalls = 0;
-  createSignals: AbortSignal[] = [];
-  createBarrier: Promise<void> | null = null;
-  createdSessionId = "ses_fake";
-  /** History returned by getMessages (the attach backfill). Empty by default. */
-  history: HistoryMessage[] = [];
-  /** Optional create failure used to exercise the driver's attach-failure teardown. */
-  createError: Error | null = null;
-  sessionGetCalls: string[] = [];
-  sessionGetSignals: AbortSignal[] = [];
-  sessionGetBarrier: Promise<void> | null = null;
-  sessionGetError: Error | null = null;
-  confirmedSessionId: string | null = null;
+class EventQueue {
+  readonly #items: OpencodeEvent[] = [];
+  readonly #waiters = new Set<() => void>();
+  #ended = false;
 
-  constructor(private readonly script: OpencodeEvent[]) {
-    super({ baseUrl: "http://invalid.invalid" });
+  push(event: OpencodeEvent): void {
+    if (this.#ended) throw new Error("event connection ended");
+    this.#items.push(event);
+    this.#wake();
   }
-  override async createSession(_title?: string, signal?: AbortSignal): Promise<string> {
-    this.createCalls++;
-    if (signal !== undefined) this.createSignals.push(signal);
-    if (this.createBarrier !== null) await this.createBarrier;
-    if (this.createError !== null) throw this.createError;
-    return this.createdSessionId;
+
+  end(): void {
+    this.#ended = true;
+    this.#wake();
   }
-  override async listSessions(signal?: AbortSignal): Promise<Array<{ id: string }>> {
-    this.listCalls++;
-    if (signal !== undefined) this.listSignals.push(signal);
-    if (this.stallList) {
-      await new Promise<void>((_resolve, reject) => {
-        const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
-        if (signal?.aborted) fail();
-        else signal?.addEventListener("abort", fail, { once: true });
+
+  async next(signal: AbortSignal): Promise<IteratorResult<OpencodeEvent>> {
+    for (;;) {
+      const item = this.#items.shift();
+      if (item !== undefined) return { done: false, value: item };
+      if (this.#ended || signal.aborted) return { done: true, value: undefined };
+      await new Promise<void>((resolve) => {
+        const finish = (): void => {
+          this.#waiters.delete(finish);
+          signal.removeEventListener("abort", finish);
+          resolve();
+        };
+        this.#waiters.add(finish);
+        signal.addEventListener("abort", finish, { once: true });
       });
     }
-    if (this.listBarrier !== null) await this.listBarrier;
-    if (this.listError !== null) throw this.listError;
-    return (
-      this.sessionListOverride === undefined ? this.sessionList : this.sessionListOverride
-    ) as Array<{ id: string }>;
   }
+
+  #wake(): void {
+    for (const wake of [...this.#waiters]) wake();
+  }
+}
+
+interface PromptCall {
+  sessionId: string;
+  text: string;
+  model: OpencodeModel;
+  partId: string;
+  signal?: AbortSignal;
+}
+
+class FakeOpencodeClient extends OpencodeClient {
+  versionCalls = 0;
+  readonly versionSignals: AbortSignal[] = [];
+  versionError: Error | null = null;
+  readonly sessionGets: string[] = [];
+  readonly sessionGetSignals: AbortSignal[] = [];
+  sessionGetError: Error | null = null;
+  confirmedSessionId: string | null = null;
+  sessionStatus: OpencodeSessionStatus = "idle";
+  readonly sessionStatusGets: string[] = [];
+  readonly sessionStatusSignals: AbortSignal[] = [];
+  sessionStatusError: Error | null = null;
+
+  historyCalls = 0;
+  historySnapshots: HistoryMessage[][] = [[]];
+  readonly historyBarriers = new Map<number, Promise<void>>();
+  readonly historyErrors = new Map<number, Error>();
+
+  readonly prompts: PromptCall[] = [];
+  readonly promptedMessages: HistoryMessage[] = [];
+  promptError: Error | null = null;
+  promptHook: ((call: PromptCall) => void) | null = null;
+  promptedMessageFactory: ((call: PromptCall, messageId: string) => HistoryMessage) | null = null;
+  promptEventHook: ((call: PromptCall, message: HistoryMessage) => void) | null = null;
+  aborts = 0;
+  readonly abortSignals: AbortSignal[] = [];
+  abortError: Error | null = null;
+
+  readonly permissionWrites: Array<{ sessionId: string; rules: readonly PermissionRule[] }> = [];
+  readonly permissions = new Map<string, PermissionRule[]>();
+  permissionReadError: Error | null = null;
+  permissionWriteError: Error | null = null;
+
+  readonly connections: EventQueue[] = [];
+  readonly eventSignals: AbortSignal[] = [];
+  connectionFirst: Array<OpencodeEvent | Error | null> = [];
+
+  constructor() {
+    super({ baseUrl: "http://127.0.0.1:4096" });
+  }
+
+  override async requireSupportedVersion(signal?: AbortSignal): Promise<void> {
+    this.versionCalls += 1;
+    if (signal !== undefined) this.versionSignals.push(signal);
+    if (this.versionError !== null) throw this.versionError;
+  }
+
   override async getSession(sessionId: string, signal?: AbortSignal): Promise<OpencodeSession> {
-    this.sessionGetCalls.push(sessionId);
+    this.sessionGets.push(sessionId);
     if (signal !== undefined) this.sessionGetSignals.push(signal);
-    if (this.sessionGetBarrier !== null) await this.sessionGetBarrier;
     if (this.sessionGetError !== null) throw this.sessionGetError;
     return {
       id: this.confirmedSessionId ?? sessionId,
-      permission: this.existingPermissions.get(sessionId) ?? [],
+      permission: this.permissions.get(sessionId) ?? [],
     };
   }
-  override async getMessages(): Promise<HistoryMessage[]> {
-    return this.history;
+
+  override async getSessionStatus(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<OpencodeSessionStatus> {
+    this.sessionStatusGets.push(sessionId);
+    if (signal !== undefined) this.sessionStatusSignals.push(signal);
+    if (this.sessionStatusError !== null) throw this.sessionStatusError;
+    return this.sessionStatus;
   }
+
+  override async getMessages(_sessionId: string, signal?: AbortSignal): Promise<HistoryMessage[]> {
+    this.historyCalls += 1;
+    const call = this.historyCalls;
+    const barrier = this.historyBarriers.get(call);
+    if (barrier !== undefined) {
+      await Promise.race([barrier, aborted(signal)]);
+      if (signal?.aborted) throw new DOMException("operation aborted", "AbortError");
+    }
+    const error = this.historyErrors.get(call);
+    if (error !== undefined) throw error;
+    const index = Math.min(call - 1, this.historySnapshots.length - 1);
+    const snapshot = this.historySnapshots[index] ?? [];
+    const ids = new Set(snapshot.map((message) => message.info.id));
+    return structuredClone([
+      ...snapshot,
+      ...this.promptedMessages.filter((message) => !ids.has(message.info.id)),
+    ]);
+  }
+
   override async promptAsync(
-    _sessionId: string,
-    args: { text: string; model: { providerID: string; modelID: string } },
+    sessionId: string,
+    args: { text: string; model: OpencodeModel; partId: string },
+    signal?: AbortSignal,
   ): Promise<void> {
-    this.prompts.push(args);
+    const call: PromptCall = { sessionId, ...args, ...(signal !== undefined ? { signal } : {}) };
+    this.prompts.push(call);
+    this.promptHook?.(call);
+    if (this.promptError !== null) throw this.promptError;
+    const messageId = nativeMessageId(PROMPT_MESSAGE_BASE + this.promptedMessages.length + 1);
+    const message =
+      this.promptedMessageFactory?.(call, messageId) ??
+      ({
+        info: { id: messageId, role: "user" },
+        parts: [
+          {
+            type: "text",
+            id: args.partId,
+            messageID: messageId,
+            text: args.text,
+          },
+        ],
+      } satisfies HistoryMessage);
+    this.promptedMessages.push(message);
+    if (this.promptEventHook !== null) {
+      this.promptEventHook(call, message);
+      return;
+    }
+    this.emit(statusEvent(sessionId, "busy"));
+    for (const part of message.parts) {
+      this.emit(partEvent(sessionId, messageId, part as unknown as Record<string, unknown>));
+    }
+    this.emit(messageEvent(sessionId, messageId, "user"));
+    // A tail user with native idle is OpenCode's valid cancelled-turn shape. It also proves that the
+    // capture-owned idle reconciliation, rather than prompt_async's 204, releases the next queued turn.
+    this.emit(statusEvent(sessionId, "idle"));
+    this.emit(idleEvent(sessionId));
   }
+
   override async abort(_sessionId: string, signal?: AbortSignal): Promise<void> {
-    this.aborts++;
+    this.aborts += 1;
     if (signal !== undefined) this.abortSignals.push(signal);
-    this.captureWasAbortedAtNativeAbort = this.lastEventsSignal?.aborted ?? null;
-    if (this.stallAbort) await new Promise<never>(() => {});
+    if (this.abortError !== null) throw this.abortError;
+    this.emit(statusEvent(MAIN, "idle"));
+    this.emit(idleEvent());
   }
-  summarizes: string[] = [];
-  override async summarize(sessionId: string): Promise<void> {
-    this.summarizes.push(sessionId);
-  }
-  override async replyPermission(
-    permissionId: string,
-    response: "once" | "always" | "reject",
+
+  override async getSessionPermission(
+    sessionId: string,
     _signal?: AbortSignal,
-  ): Promise<void> {
-    this.replies.push({ permissionId, response });
+  ): Promise<PermissionRule[]> {
+    if (this.permissionReadError !== null) throw this.permissionReadError;
+    return this.permissions.get(sessionId) ?? [];
   }
-  /** Records each setSessionPermission (the ask-mode PATCH) so tests can assert mirroring on/off. */
-  permissionSets: Array<{ sessionId: string; rules: readonly PermissionRule[] }> = [];
-  permissionSetAttempts = 0;
-  permissionSetSignals: AbortSignal[] = [];
-  stallPermissionSet = false;
-  permissionSetError: Error | null = null;
-  persistPermissionSet = true;
+
   override async setSessionPermission(
     sessionId: string,
     rules: readonly PermissionRule[],
-    signal?: AbortSignal,
+    _signal?: AbortSignal,
   ): Promise<void> {
-    this.permissionSetAttempts++;
-    if (signal !== undefined) this.permissionSetSignals.push(signal);
-    if (this.stallPermissionSet) {
-      await new Promise<void>((_resolve, reject) => {
-        const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
-        if (signal?.aborted) fail();
-        else signal?.addEventListener("abort", fail, { once: true });
-      });
-    }
-    if (this.permissionSetError !== null) throw this.permissionSetError;
-    this.permissionSets.push({ sessionId, rules });
-    if (this.persistPermissionSet) {
-      this.existingPermissions.set(sessionId, [
-        ...(this.existingPermissions.get(sessionId) ?? []),
-        ...rules,
-      ]);
-    }
+    if (this.permissionWriteError !== null) throw this.permissionWriteError;
+    this.permissionWrites.push({ sessionId, rules });
+    this.permissions.set(sessionId, [...rules]);
   }
-  /** Existing per-session rules getSessionPermission returns (keyed by sessionId; default []). Lets a
-   *  test seed a pre-existing policy and assert the mirroring PATCH PRESERVES it. */
-  existingPermissions = new Map<string, PermissionRule[]>();
-  /** When true, getSessionPermission throws — to prove the fail-safe (no PATCH when rules can't be read). */
-  failGetPermission = false;
-  failPermissionReadAt: number | null = null;
-  permissionReadBarrierAt: number | null = null;
-  permissionReadBarrier: Promise<void> | null = null;
-  permissionReadCalls = 0;
-  permissionReadSignals: AbortSignal[] = [];
-  stallPermissionRead = false;
-  override async getSessionPermission(
-    sessionId: string,
-    signal?: AbortSignal,
-  ): Promise<PermissionRule[]> {
-    this.permissionReadCalls++;
-    if (signal !== undefined) this.permissionReadSignals.push(signal);
-    if (
-      this.permissionReadBarrierAt === this.permissionReadCalls &&
-      this.permissionReadBarrier !== null
-    ) {
-      await this.permissionReadBarrier;
-    }
-    if (this.stallPermissionRead) {
-      await new Promise<void>((_resolve, reject) => {
-        const fail = () => reject(new DOMException("The operation was aborted", "AbortError"));
-        if (signal?.aborted) fail();
-        else signal?.addEventListener("abort", fail, { once: true });
-      });
-    }
-    if (
-      this.failGetPermission ||
-      (this.failPermissionReadAt !== null && this.permissionReadCalls === this.failPermissionReadAt)
-    ) {
-      throw new Error("getSessionPermission boom");
-    }
-    return this.existingPermissions.get(sessionId) ?? [];
-  }
-  /** How many times events() has been (re)subscribed — the reconnect test asserts this grows. */
-  connections = 0;
-  /** Per-connection scripts. When set, the Nth events() call replays scripts[N]; every connection EOFs
-   *  after its script EXCEPT the last, which PARKS until aborted (a real long-lived SSE stays open). When
-   *  unset, every connection replays `script` then parks. A connection whose script ends before the last
-   *  models a transient SSE drop the driver must reconnect from (review #2). */
-  connectionScripts: OpencodeEvent[][] | null = null;
 
   override async *events(
     want: string | ((id: string | undefined) => boolean),
     signal: AbortSignal,
   ): AsyncGenerator<OpencodeEvent> {
-    this.lastEventsSignal = signal;
-    const idx = this.connections;
-    this.connections++;
-    const scripts = this.connectionScripts;
-    const events = scripts ? (scripts[Math.min(idx, scripts.length - 1)] ?? []) : this.script;
-    // The LAST connection (or the only one) parks after its script; earlier connections EOF to model a
-    // drop. A real SSE stream stays open after a turn, so parking-until-abort is the faithful default.
-    const isLast = scripts ? idx >= scripts.length - 1 : true;
-    // Replicate the REAL client's server-wide filter (client.ts events()) so the driver tests exercise the
-    // genuine follow-gating: a child sub-agent's events are NOT delivered until the driver follows it, and
-    // a `session.created` (the discovery event) IS delivered to a predicate consumer even for a not-yet-
-    // followed session (#102). `want` is read at yield time so a child added to #followed mid-stream starts
-    // being delivered immediately (the predicate closes over the driver's live #followed set).
-    const isPredicate = typeof want === "function";
-    const deliver = (ev: OpencodeEvent): boolean => {
-      // Discovery: a predicate consumer gets EVERY session.created BEFORE any session filtering (its
-      // session is the not-yet-followed child, possibly carried only as info.id) — matches client.ts.
-      if (isPredicate && ev.type === "session.created") return true;
-      const props = ev.properties as
-        | { sessionID?: string; part?: { sessionID?: string }; info?: { sessionID?: string } }
-        | undefined;
-      const evSession = props?.sessionID ?? props?.part?.sessionID ?? props?.info?.sessionID;
-      if (evSession === undefined) return ev.type.startsWith("server.");
-      return isPredicate
-        ? (want as (id: string | undefined) => boolean)(evSession)
-        : evSession === want;
-    };
-    for (const ev of events) {
-      if (signal.aborted) return;
-      // Yield to the event loop so the inject pump + relay interleave realistically.
-      await new Promise((r) => setTimeout(r, 0));
-      if (!deliver(ev)) continue; // gated by the same filter the real server-wide stream applies
-      yield ev;
+    const index = this.connections.length;
+    const queue = new EventQueue();
+    this.connections.push(queue);
+    this.eventSignals.push(signal);
+    const configured = this.connectionFirst[index];
+    if (configured instanceof Error) throw configured;
+    if (configured === null) return;
+    const first = configured ?? { type: "server.connected", properties: {} };
+    yield first;
+
+    for (;;) {
+      const next = await queue.next(signal);
+      if (next.done) return;
+      if (delivers(next.value, want)) yield next.value;
     }
-    if (!isLast) return; // EOF → the driver's #capturePump must reconnect (NOT tear down) — review #2.
-    // Park until aborted: a live SSE stays open after a turn. run() ends only on the parent abort.
-    await new Promise<void>((resolve) => {
-      if (signal.aborted) return resolve();
-      signal.addEventListener("abort", () => resolve(), { once: true });
-    });
+  }
+
+  emit(event: OpencodeEvent, connection = this.connections.length - 1): void {
+    const queue = this.connections[connection];
+    if (queue === undefined) throw new Error("no live event connection");
+    queue.push(event);
+  }
+
+  drop(connection = this.connections.length - 1): void {
+    const queue = this.connections[connection];
+    if (queue === undefined) throw new Error("no live event connection");
+    queue.end();
   }
 }
 
-const SES = "ses_fake";
-function part(p: Record<string, unknown>): OpencodeEvent {
-  return {
-    type: "message.part.updated",
-    properties: { sessionID: SES, part: p },
-  } as unknown as OpencodeEvent;
-}
-function msgUpdated(info: Record<string, unknown>): OpencodeEvent {
-  return {
-    type: "message.updated",
-    properties: { sessionID: SES, info },
-  } as unknown as OpencodeEvent;
-}
-function idle(): OpencodeEvent {
-  return { type: "session.idle", properties: { sessionID: SES } };
-}
-function sessionError(error: unknown): OpencodeEvent {
-  return {
-    type: "session.error",
-    properties: { sessionID: SES, error },
-  } as unknown as OpencodeEvent;
+function delivers(
+  event: OpencodeEvent,
+  want: string | ((id: string | undefined) => boolean),
+): boolean {
+  const predicate =
+    typeof want === "function" ? want : (id: string | undefined): boolean => id === want;
+  if (typeof want === "function" && event.type === "session.created") return true;
+  const sessionId =
+    event.properties.sessionID ??
+    event.properties.part?.sessionID ??
+    (event.properties.info as { sessionID?: string } | undefined)?.sessionID;
+  return sessionId === undefined ? event.type.startsWith("server.") : predicate(sessionId);
 }
 
-// ── Sub-agent (child session) event builders (#102) ─────────────────────────────────────────────────
-// A child sub-agent runs as a SEPARATE OpenCode session whose events carry the CHILD's id (a part event
-// nests the id in `part.sessionID`, matching the real shape). The driver follows the child on a
-// `session.created` whose `info.parentID` is the bridged session, and tags the child's messages with the
-// spawning subtask part's id so they nest under the Task tool_use anchor.
-const CHILD = "ses_child";
-/** A `session.created` for a child session (parentID → its parent, agent → which subagent spawned it). The
- *  event's own session is the NEW child id (`properties.sessionID = info.id`), so the real filter only
- *  delivers it via the discovery exception — exactly the path #102 depends on. */
-function sessionCreated(info: { id: string; parentID?: string; agent?: string }): OpencodeEvent {
-  return {
-    type: "session.created",
-    properties: { sessionID: info.id, info },
-  } as unknown as OpencodeEvent;
-}
-/** A `message.part.updated` for the CHILD session — the session id rides on `part.sessionID` (the nested
- *  shape the real server uses for part events), so the driver records it in #msgSession for tag lookup. */
-function childPart(p: Record<string, unknown>): OpencodeEvent {
+function partEvent(
+  sessionId: string,
+  messageId: string,
+  part: Record<string, unknown>,
+): OpencodeEvent {
   return {
     type: "message.part.updated",
-    properties: { part: { ...p, sessionID: CHILD } },
-  } as unknown as OpencodeEvent;
-}
-function childMsgUpdated(info: Record<string, unknown>): OpencodeEvent {
-  return {
-    type: "message.updated",
-    properties: { sessionID: CHILD, info },
-  } as unknown as OpencodeEvent;
-}
-function childIdle(): OpencodeEvent {
-  return { type: "session.idle", properties: { sessionID: CHILD } };
-}
-function statusOf(sid: string, type: string): OpencodeEvent {
-  return { type: "session.status", properties: { sessionID: sid, status: { type } } };
-}
-// Generalized variants for tests with MULTIPLE child sessions (the part's session rides on part.sessionID,
-// the nested shape the real server uses for part events).
-function partFor(sid: string, p: Record<string, unknown>): OpencodeEvent {
-  return {
-    type: "message.part.updated",
-    properties: { part: { ...p, sessionID: sid } },
-  } as unknown as OpencodeEvent;
-}
-function msgUpdatedFor(sid: string, info: Record<string, unknown>): OpencodeEvent {
-  return {
-    type: "message.updated",
-    properties: { sessionID: sid, info },
-  } as unknown as OpencodeEvent;
-}
-function idleFor(sid: string): OpencodeEvent {
-  return { type: "session.idle", properties: { sessionID: sid } };
+    properties: {
+      sessionID: sessionId,
+      part: { ...part, messageID: messageId, sessionID: sessionId } as never,
+    },
+  };
 }
 
-// The captured live sequence for "Reply with exactly: OK": the user prompt echo part (synthetic-free
-// here but on the user message, which we never render as assistant), then the assistant text part sent
-// FIRST empty then again with "OK" (the re-send the coalescer must collapse), then the completed
-// assistant message.updated, then session.idle.
-const OK_SCRIPT: OpencodeEvent[] = [
-  { type: "server.connected", properties: {} },
-  part({ type: "text", id: "prt_user", messageID: "msg_user", text: "Reply with exactly: OK" }),
-  msgUpdated({ id: "msg_user", role: "user", time: { created: 1 } }),
-  { type: "session.status", properties: { sessionID: SES, status: { type: "busy" } } },
-  part({ type: "step-start", id: "prt_step", messageID: "msg_asst" }),
-  part({ type: "text", id: "prt_ok", messageID: "msg_asst", text: "" }), // first: empty
-  part({ type: "text", id: "prt_ok", messageID: "msg_asst", text: "OK" }), // re-sent: full
-  part({ type: "step-finish", id: "prt_fin", messageID: "msg_asst" }),
-  msgUpdated({ id: "msg_asst", role: "assistant", time: { created: 1, completed: 2 } }),
-  idle(),
-];
+function messageEvent(
+  sessionId: string,
+  messageId: string,
+  role: "user" | "assistant",
+  completed = false,
+  parentId?: string,
+): OpencodeEvent {
+  return {
+    type: "message.updated",
+    properties: {
+      sessionID: sessionId,
+      info: {
+        id: messageId,
+        role,
+        sessionID: sessionId,
+        ...(parentId !== undefined ? { parentID: parentId } : {}),
+        time: completed ? { completed: 2 } : {},
+      },
+    },
+  };
+}
 
-async function makeCtx(
+function idleEvent(sessionId = MAIN): OpencodeEvent {
+  return { type: "session.idle", properties: { sessionID: sessionId } };
+}
+
+function statusEvent(sessionId: string, status: "idle" | "busy" | "retry"): OpencodeEvent {
+  return { type: "session.status", properties: { sessionID: sessionId, status: { type: status } } };
+}
+
+function userHistory(messageId: string, text: string): HistoryMessage {
+  return {
+    info: { id: messageId, role: "user" },
+    parts: [
+      {
+        type: "text",
+        id: nativePartForMessage(messageId),
+        messageID: messageId,
+        text,
+      },
+    ],
+  };
+}
+
+function assistantHistory(messageId: string, text: string, parentId: string): HistoryMessage {
+  return {
+    info: { id: messageId, role: "assistant", parentID: parentId, time: { completed: 2 } },
+    parts: [
+      {
+        type: "text",
+        id: nativePartForMessage(messageId),
+        messageID: messageId,
+        text,
+      },
+    ],
+  };
+}
+
+function emitUser(client: FakeOpencodeClient, messageId: string, text: string): void {
+  client.emit(
+    partEvent(MAIN, messageId, { type: "text", id: nativePartForMessage(messageId), text }),
+  );
+  client.emit(messageEvent(MAIN, messageId, "user"));
+}
+
+function emitAssistant(client: FakeOpencodeClient, messageId: string, text: string): void {
+  const parentId = nativeMessageId(1);
+  emitUser(client, parentId, "");
+  client.emit(
+    partEvent(MAIN, messageId, { type: "text", id: nativePartForMessage(messageId), text }),
+  );
+  client.emit(messageEvent(MAIN, messageId, "assistant", true, parentId));
+}
+
+function deferred(): { promise: Promise<void>; resolve(): void } {
+  let resolve = (): void => {};
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function aborted(signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted) return;
+  await new Promise<void>((resolve) =>
+    signal?.addEventListener("abort", () => resolve(), { once: true }),
+  );
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition was not reached");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+async function makeContext(
   client: FakeOpencodeClient,
   broker: FakeBroker,
-  onSession: (s: Session) => void,
+  onSession: (session: Session) => void,
+  extra: Record<string, unknown> = {},
 ) {
-  const identity = await deriveIdentity(new TextEncoder().encode("driver-test-secret"));
+  const identity = await deriveIdentity(new TextEncoder().encode("opencode-driver-test"));
   return {
     harnessArgs: [],
     identity,
@@ -419,1655 +467,890 @@ async function makeCtx(
     git: null,
     newClient: () => broker as unknown as BrokerClient,
     onSession,
-    extra: { client },
+    extra: { client, sessionId: MAIN, ...extra },
   };
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-/** Poll `pred` up to `ms`, returning its final value. The fake SSE now PARKS after its script (a real
- *  stream stays open — review #2), so run() no longer resolves on EOF; tests wait for their condition,
- *  then abort and await the exit code. */
-async function waitFor(pred: () => boolean, ms = 2000): Promise<boolean> {
-  const end = Date.now() + ms;
-  while (!pred() && Date.now() < end) await sleep(5);
-  return pred();
-}
-/** The captured Session's upstream snapshot (the `captured` ref is set in an onSession callback that TS
- *  can't see, so it narrows to never — this cast reads it back safely). */
-function up(s: Session | null) {
-  return (s as unknown as Session | null)?.snapshotUpstream() ?? [];
-}
-
-function latestAnnouncement(broker: FakeBroker): {
-  capabilities?: {
-    structuredPermissions?: boolean;
-    status?: boolean;
-    controls?: Record<string, boolean>;
-    attachments?: boolean;
-  };
-} {
-  const frame = broker.posts.filter((post) => post.recordKind === "session_announce").at(-1);
-  return JSON.parse(frame?.text ?? "{}") as {
-    capabilities?: {
-      structuredPermissions?: boolean;
-      status?: boolean;
-      controls?: Record<string, boolean>;
-      attachments?: boolean;
-    };
-  };
+async function launch(
+  client = new FakeOpencodeClient(),
+  extra: Record<string, unknown> = {},
+): Promise<{
+  ac: AbortController;
+  broker: FakeBroker;
+  client: FakeOpencodeClient;
+  driver: OpencodeDriver;
+  run: Promise<number>;
+  session: Session;
+}> {
+  const broker = new FakeBroker();
+  let captured: Session | null = null;
+  const context = await makeContext(
+    client,
+    broker,
+    (session) => {
+      captured = session;
+    },
+    extra,
+  );
+  const driver = new OpencodeDriver(context);
+  const ac = new AbortController();
+  const run = driver.run(ac.signal);
+  await waitFor(() => broker.posts.some((post) => post.recordKind === "session_announce"));
+  if (captured === null) throw new Error("driver did not create a compatibility session");
+  return { ac, broker, client, driver, run, session: captured };
 }
 
-describe("OpencodeDriver capture (coalesce / dedup / ack)", () => {
-  let ac: AbortController | null = null;
+async function stop(ac: AbortController, run: Promise<number>): Promise<void> {
+  ac.abort();
+  await expect(run).resolves.toBe(0);
+}
+
+function upstream(session: Session, type: string): Array<Record<string, unknown>> {
+  return session
+    .snapshotUpstream()
+    .filter((event) => event.eventType === type)
+    .map((event) => event.payload);
+}
+
+describe("OpenCode M2 registration", () => {
+  const controllers: AbortController[] = [];
+
   afterEach(() => {
-    ac?.abort();
-    vi.useRealTimers();
+    for (const controller of controllers.splice(0)) controller.abort();
   });
 
-  it("does no relay or native attachment work when the parent is already aborted", async () => {
-    const client = new FakeOpencodeClient([]);
+  it("does no work when already cancelled", async () => {
+    const client = new FakeOpencodeClient();
     const broker = new FakeBroker();
     let sessions = 0;
-    const ctx = await makeCtx(client, broker, () => {
-      sessions++;
+    const context = await makeContext(client, broker, () => {
+      sessions += 1;
     });
-    ac = new AbortController();
+    const ac = new AbortController();
     ac.abort();
 
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(0);
+    await expect(new OpencodeDriver(context).run(ac.signal)).resolves.toBe(0);
     expect(sessions).toBe(0);
-    expect(client.listCalls).toBe(0);
-    expect(client.createCalls).toBe(0);
-    expect(client.permissionSets).toHaveLength(0);
-    expect(client.connections).toBe(0);
-    expect(client.aborts).toBe(0);
-    expect(broker.announcementAttempts).toBe(0);
+    expect(client.versionCalls).toBe(0);
+    expect(client.sessionGets).toEqual([]);
+    expect(broker.posts).toEqual([]);
   });
 
-  it("cancels a hung attachment request without creating or aborting a native session", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.stallList = true;
+  it("keeps broker presence private until version, exact attach, live SSE, and strict history finish", async () => {
+    const client = new FakeOpencodeClient();
+    const gate = deferred();
+    client.historyBarriers.set(1, gate.promise);
     const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    vi.useFakeTimers();
-    ac = new AbortController();
-
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(client.listCalls).toBe(1);
-    expect(client.listSignals).toHaveLength(1);
-    expect(client.listSignals[0]?.aborted).toBe(false);
-
-    ac.abort();
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(run).resolves.toBe(0);
-    expect(client.listSignals[0]?.aborted).toBe(true);
-    expect(client.createCalls).toBe(0);
-    expect(client.permissionSets).toHaveLength(0);
-    expect(client.connections).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("does not commit or abort a borrowed session returned after attachment cancellation", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.sessionList = [{ id: "ses_borrowed" }];
-    let releaseList!: () => void;
-    client.listBarrier = new Promise<void>((resolve) => {
-      releaseList = resolve;
+    let session: Session | null = null;
+    const context = await makeContext(client, broker, (value) => {
+      session = value;
     });
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
+    const ac = new AbortController();
+    controllers.push(ac);
+    const driver = new OpencodeDriver(context);
+    const run = driver.run(ac.signal);
 
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => client.listCalls === 1)).toBe(true);
-    ac.abort();
-    releaseList();
-
-    await expect(run).resolves.toBe(0);
-    expect(client.createCalls).toBe(0);
-    expect(client.permissionSets).toHaveLength(0);
-    expect(client.connections).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("does no setup or native abort when an injected create client resolves after cancellation", async () => {
-    const client = new FakeOpencodeClient([]);
-    let releaseCreate!: () => void;
-    client.createBarrier = new Promise<void>((resolve) => {
-      releaseCreate = resolve;
-    });
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => client.createCalls === 1)).toBe(true);
-    ac.abort();
-    releaseCreate();
-
-    await expect(run).resolves.toBe(0);
-    expect(client.createSignals[0]?.aborted).toBe(true);
-    expect(client.permissionSets).toHaveLength(0);
-    expect(client.connections).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("cancels a hung initial permission read and still reaches startup cleanup", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.stallPermissionRead = true;
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    vi.useFakeTimers();
-    ac = new AbortController();
-
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(client.permissionReadCalls).toBe(1);
-    expect(client.permissionReadSignals[0]?.aborted).toBe(false);
-
-    ac.abort();
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(run).resolves.toBe(0);
-    expect(client.permissionReadSignals[0]?.aborted).toBe(true);
-    expect(client.permissionSetAttempts).toBe(0);
-    expect(client.connections).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("cancels a hung initial permission write without starting pumps or native teardown", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.stallPermissionSet = true;
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    vi.useFakeTimers();
-    ac = new AbortController();
-
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(client.permissionSetAttempts).toBe(1);
-    expect(client.permissionSetSignals[0]?.aborted).toBe(false);
-    expect(client.permissionSets).toHaveLength(0);
-
-    ac.abort();
-    await vi.advanceTimersByTimeAsync(0);
-    await expect(run).resolves.toBe(0);
-    expect(client.permissionSetSignals[0]?.aborted).toBe(true);
-    expect(client.permissionSets).toHaveLength(0);
-    expect(client.connections).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("publishes no ghost conversation when native attachment fails", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.createError = new Error("create failed");
-    const broker = new FakeBroker();
-    broker.stallAnnouncements = true;
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-    expect(broker.announcementAttempts).toBe(0);
-    expect(client.connections).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("uses one deadline for a stalled native abort and stalled broker flush, after fencing pumps", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.stallAbort = true;
-    const broker = new FakeBroker();
-    broker.stallAnnouncements = true;
-    const ctx = await makeCtx(client, broker, () => {});
-    vi.useFakeTimers();
-    ac = new AbortController();
-
-    let settled = false;
-    const run = new OpencodeDriver(ctx).run(ac.signal).then((code) => {
-      settled = true;
-      return code;
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(client.connections).toBe(1);
-    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
-
-    ac.abort();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(client.aborts).toBe(1);
-    expect(client.captureWasAbortedAtNativeAbort).toBe(true);
-    expect(client.abortSignals).toHaveLength(1);
-    expect(client.abortSignals[0]?.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(OPENCODE_TEARDOWN_FLUSH_MS - 1);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(run).resolves.toBe(0);
-    expect(client.abortSignals[0]?.aborted).toBe(true);
-  });
-
-  it("coalesces a re-sent assistant part into ONE upstream payload with the model's text", async () => {
-    const client = new FakeOpencodeClient(OK_SCRIPT);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    // The fake SSE parks after its script (review #2), so wait for the assistant to flush, then abort.
-    await waitFor(() => up(captured).some((e) => e.eventType === "assistant"));
-    ac.abort();
-    const code = await run;
-    expect(code).toBe(0);
-
-    const session = captured as unknown as Session;
+    await waitFor(() => client.historyCalls === 1);
     expect(session).not.toBeNull();
-    const upstream = session.snapshotUpstream();
-    // The assertion that proves review #1: exactly ONE assistant payload (NOT one per part.updated,
-    // which would be ≥2 for the empty-then-OK re-send + step parts).
-    const assistants = upstream.filter((e) => e.eventType === "assistant");
-    expect(assistants).toHaveLength(1);
-    const a = assistants[0];
-    expect(a).toBeDefined();
-    const msg = a?.payload.message as { content: Array<{ type: string; text?: string }> };
-    expect(msg.content).toEqual([{ type: "text", text: "OK" }]);
-    // uuid is the OpenCode messageID (stable across reconnects).
-    expect(a?.payload.uuid).toBe("msg_asst");
-    // The user message in OK_SCRIPT was NOT injected by the driver (no downstream user event drove it),
-    // so it represents a LOCAL prompt (typed at the TUI). It surfaces as exactly ONE local_prompt `user`
-    // payload — and it lands BEFORE the assistant reply (prompt then answer).
-    const users = upstream.filter((e) => e.eventType === "user");
-    expect(users).toHaveLength(1);
-    const u = users[0];
-    expect(u?.payload.local_prompt).toBe(true);
-    expect((u?.payload.message as { content?: unknown })?.content).toBe("Reply with exactly: OK");
-    expect((u?.sequenceNum ?? 0) < (a?.sequenceNum ?? 0)).toBe(true); // prompt precedes the reply
+    expect(client.versionCalls).toBe(2);
+    expect(client.sessionGets).toEqual([MAIN, MAIN]);
+    expect(client.connections).toHaveLength(1);
+    expect(broker.posts).toEqual([]);
+    expect(client.permissionWrites).toEqual([]);
+
+    gate.resolve();
+    await waitFor(() => broker.posts.some((post) => post.recordKind === "session_announce"));
+    expect(driver.capabilities).toEqual({
+      structuredPermissions: false,
+      status: false,
+      controls: {
+        interrupt: true,
+        setModel: false,
+        setMode: false,
+        end: false,
+      },
+      attachments: false,
+    });
+    await stop(ac, run);
   });
 
-  it("dedups: re-delivering the completed message's parts does not produce a second payload", async () => {
-    // Append a reconnect-style re-delivery of the SAME assistant part + completion after idle.
-    const replayed: OpencodeEvent[] = [
-      ...OK_SCRIPT,
-      part({ type: "text", id: "prt_ok", messageID: "msg_asst", text: "OK" }),
-      msgUpdated({ id: "msg_asst", role: "assistant", time: { created: 1, completed: 2 } }),
-      idle(),
-    ];
-    const client = new FakeOpencodeClient(replayed);
+  it.each([
+    [
+      "wrong server version",
+      (client: FakeOpencodeClient) => (client.versionError = new Error("wrong")),
+    ],
+    [
+      "missing exact native session",
+      (client: FakeOpencodeClient) => (client.sessionGetError = new Error("missing")),
+    ],
+    [
+      "mismatched exact native session",
+      (client: FakeOpencodeClient) => (client.confirmedSessionId = "ses_other"),
+    ],
+  ])("fails before presence for %s", async (_name, arrange) => {
+    const client = new FakeOpencodeClient();
+    arrange(client);
     const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    // The whole replayed script yields with a 0ms tick per event; wait for the assistant, then let the
-    // re-delivery (appended after idle) drain before aborting so dedup has a chance to (not) re-emit.
-    await waitFor(() => up(captured).some((e) => e.eventType === "assistant"));
-    await sleep(50);
-    ac.abort();
-    await run;
-    const session = captured as unknown as Session;
-    expect(session.snapshotUpstream().filter((e) => e.eventType === "assistant")).toHaveLength(1);
-  });
+    const context = await makeContext(client, broker, () => {});
+    const ac = new AbortController();
 
-  it("acks the leading initialize and an injected prompt (review #5)", async () => {
-    // A script that ALSO surfaces a permission gate so we exercise the can_use_tool path; the user
-    // prompt + initialize ack is what we assert. We inject a downstream user prompt by hand below.
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      // a permission.asked → should surface a control_request upstream
-      {
-        type: "permission.asked",
-        properties: {
-          sessionID: SES,
-          id: "per_1",
-          permission: "Bash",
-          metadata: { command: "ls" },
-          tool: { messageID: "msg_a", callID: "call_1" },
-        },
-      } as OpencodeEvent,
-      idle(),
-    ]);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    // Run the driver; before it tears down, push a user prompt + the matching permission answer onto the
-    // Session's downstream so the inject pump consumes them and acks. We push BEFORE run resolves by
-    // racing a microtask that injects then lets the (short) script finish.
-    const session0Promise = new Promise<Session>((resolve) => {
-      const orig = ctx.onSession;
-      ctx.onSession = (s: Session) => {
-        orig?.(s);
-        // push a user prompt + a permission grant for per_1
-        s.pushUserInput("hello opencode");
-        s.pushControlResponse("per_1", "allow");
-        resolve(s);
-      };
-    });
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await session0Promise;
-    // The fake SSE parks (review #2); wait for the inject pump to drain the prompt + permission reply,
-    // then abort and await the exit code.
-    await waitFor(() => client.prompts.length >= 1 && client.replies.length >= 1);
-    ac.abort();
-    await run;
-
-    // A prompt was injected with the default model (bedrock sonnet — no explicit model in extra).
-    expect(client.prompts).toHaveLength(1);
-    expect(client.prompts[0]?.text).toBe("hello opencode");
-    expect(client.prompts[0]?.model).toEqual(DEFAULT_OPENCODE_MODEL);
-    // The permission gate was surfaced upstream as a can_use_tool control_request…
-    const session = captured as unknown as Session;
-    const gates = session.snapshotUpstream().filter((e) => e.eventType === "control_request");
-    expect(gates.length).toBeGreaterThanOrEqual(1);
-    // …and the viewer's allow answer was POSTed to OpenCode as "once".
-    expect(client.replies).toEqual([{ permissionId: "per_1", response: "once" }]);
-  });
-
-  // Scenario (g): deterministic permission coverage against the driver's own translation, with no
-  // model or native server in the loop so it runs in ordinary CI:
-  //   • permission.asked → the EXACT can_use_tool control_request shape mapUpstreamItems renders, and
-  //   • a viewer DENY → POST /permission/{id}/reply { reply: "reject" }
-  //     (allow → "once" is proven above).
-  it("(g) surfaces a permission gate as can_use_tool and maps deny → reject", async () => {
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      {
-        type: "permission.asked",
-        properties: {
-          sessionID: SES,
-          id: "per_deny",
-          permission: "Bash",
-          metadata: { command: "rm -rf /" },
-          tool: { messageID: "msg_b", callID: "call_2" },
-        },
-      } as OpencodeEvent,
-      idle(),
-    ]);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    const ready = new Promise<Session>((resolve) => {
-      const orig = ctx.onSession;
-      ctx.onSession = (s: Session) => {
-        orig?.(s);
-        s.pushControlResponse("per_deny", "deny"); // the viewer denies the gate
-        resolve(s);
-      };
-    });
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await ready;
-    await waitFor(() => client.replies.length >= 1);
-    ac.abort();
-    await run;
-
-    const session = captured as unknown as Session;
-    // The gate surfaced as a can_use_tool control_request with the exact shape the relay renders.
-    const gate = session
-      .snapshotUpstream()
-      .find(
-        (e) => e.eventType === "control_request" && (e.payload.request_id as string) === "per_deny",
-      );
-    expect(gate).toBeDefined();
-    const req = gate?.payload.request as {
-      subtype?: string;
-      tool_name?: string;
-      tool_use_id?: string;
-      input?: unknown;
-    };
-    expect(req?.subtype).toBe("can_use_tool");
-    expect(req?.tool_name).toBe("Bash");
-    expect(req?.tool_use_id).toBe("call_2");
-    expect(req?.input).toEqual({ command: "rm -rf /" });
-    // The deny answer was POSTed to OpenCode as "reject".
-    expect(client.replies).toEqual([{ permissionId: "per_deny", response: "reject" }]);
-  });
-
-  // Scenario (c) DETERMINISTIC: the tiny live model rarely calls a tool, so we prove the tool path
-  // end-to-end here — a real completed-tool SSE sequence (assistant message with a `tool` part going
-  // completed) flushed through the REAL relay must produce a `tool_use` content frame AND a following
-  // `tool_result` content frame (the bodies mapUpstreamItems renders). This is the rigorous proof for (c).
-  it("(c-det) a completed tool turn → a tool_use frame + a tool_result frame at the broker", async () => {
-    const TOOL_SCRIPT: OpencodeEvent[] = [
-      { type: "server.connected", properties: {} },
-      { type: "session.status", properties: { sessionID: SES, status: { type: "busy" } } },
-      part({ type: "step-start", id: "prt_s", messageID: "msg_tool" }),
-      // a `tool` part: first running, then re-sent completed (the coalescer keeps the latest).
-      part({
-        type: "tool",
-        id: "prt_t",
-        messageID: "msg_tool",
-        callID: "call_echo",
-        tool: "bash",
-        state: { status: "running", input: { command: "echo hello" } },
-      }),
-      part({
-        type: "tool",
-        id: "prt_t",
-        messageID: "msg_tool",
-        callID: "call_echo",
-        tool: "bash",
-        state: { status: "completed", input: { command: "echo hello" }, output: "hello\n" },
-      }),
-      part({ type: "step-finish", id: "prt_f", messageID: "msg_tool" }),
-      msgUpdated({ id: "msg_tool", role: "assistant", time: { created: 1, completed: 2 } }),
-      idle(),
-    ];
-    const client = new FakeOpencodeClient(TOOL_SCRIPT);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await waitFor(() => broker.content.some((p) => p.recordKind === "tool_result"));
-    ac.abort();
-    const code = await run;
-    expect(code).toBe(0);
-    expect(captured).not.toBeNull();
-
-    // The relay posted a tool_use content frame and a tool_result content frame.
-    const toolUses = broker.content.filter((p) => p.recordKind === "tool_use");
-    const toolResults = broker.content.filter((p) => p.recordKind === "tool_result");
-    expect(toolUses).toHaveLength(1);
-    expect(toolResults).toHaveLength(1);
-    // tool_use body is {name,input,sub}; tool_result body is {tool_use_id,is_error,output,sub}.
-    const tu = JSON.parse(toolUses[0]?.text ?? "{}");
-    expect(tu.name).toBe("bash");
-    expect(tu.input).toEqual({ command: "echo hello" });
-    const tr = JSON.parse(toolResults[0]?.text ?? "{}");
-    expect(tr.tool_use_id).toBe("call_echo");
-    expect(tr.is_error).toBe(false);
-    expect(tr.output).toContain("hello");
-    // Ordering: the tool_use frame precedes its tool_result frame.
-    expect((toolUses[0]?.seq as number) < (toolResults[0]?.seq as number)).toBe(true);
-  });
-});
-
-describe("OpencodeDriver fail-closed registration", () => {
-  let ac: AbortController | null = null;
-  afterEach(() => ac?.abort());
-
-  function expectPrivateStartup(client: FakeOpencodeClient, broker: FakeBroker): void {
-    expect(broker.announcementAttempts).toBe(0);
-    expect(client.connections).toBe(0);
+    await expect(new OpencodeDriver(context).run(ac.signal)).resolves.toBe(1);
+    expect(broker.posts).toEqual([]);
     expect(client.aborts).toBe(0);
-  }
-
-  it("fails closed when discovery errors", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.listError = new Error("discovery failed");
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.listCalls).toBe(1);
-    expect(client.createCalls).toBe(0);
-    expect(client.sessionGetCalls).toEqual([]);
-    expectPrivateStartup(client, broker);
   });
 
-  it("fails closed when an injected discovery client returns a malformed successful payload", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.sessionListOverride = { sessions: [] };
+  it("requires the frozen model before native I/O", async () => {
+    const client = new FakeOpencodeClient();
     const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.createCalls).toBe(0);
-    expect(client.sessionGetCalls).toEqual([]);
-    expectPrivateStartup(client, broker);
-  });
-
-  it("rejects a malformed discovery entry even when the configured target is also present", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.sessionListOverride = [{ id: "ses_target" }, { id: "not_native" }];
-    const broker = new FakeBroker();
-    const base = await makeCtx(client, broker, () => {});
-    const ctx = { ...base, extra: { client, sessionId: "ses_target" } };
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.createCalls).toBe(0);
-    expect(client.sessionGetCalls).toEqual([]);
-    expectPrivateStartup(client, broker);
-  });
-
-  it("does not guess when discovery is non-empty and no session was configured", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.sessionList = [{ id: "ses_existing" }];
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.createCalls).toBe(0);
-    expect(client.sessionGetCalls).toEqual([]);
-    expectPrivateStartup(client, broker);
-  });
-
-  it("attaches only the configured canonical session when it exists exactly", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.sessionList = [{ id: "ses_other" }, { id: "ses_target" }];
-    const broker = new FakeBroker();
-    const base = await makeCtx(client, broker, () => {});
-    const ctx = { ...base, extra: { client, sessionId: "ses_target" } };
-    ac = new AbortController();
-
-    const driver = new OpencodeDriver(ctx);
-    const run = driver.run(ac.signal);
-    expect(await waitFor(() => client.connections === 1)).toBe(true);
-
-    expect(client.createCalls).toBe(0);
-    expect(client.sessionGetCalls).toEqual(["ses_target"]);
-    expect(client.permissionSets.map((write) => write.sessionId)).toEqual(["ses_target"]);
-    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
-    expect(driver.capabilities.structuredPermissions).toBe(true);
-
-    ac.abort();
-    await expect(run).resolves.toBe(0);
-  });
-
-  it("fails closed when the configured canonical session is absent", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.sessionList = [{ id: "ses_other" }];
-    const broker = new FakeBroker();
-    const base = await makeCtx(client, broker, () => {});
-    const ctx = { ...base, extra: { client, sessionId: "ses_target" } };
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.createCalls).toBe(0);
-    expect(client.sessionGetCalls).toEqual([]);
-    expectPrivateStartup(client, broker);
-  });
-
-  it("fails closed before exact confirmation for a non-canonical configured session", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.sessionList = [];
-    const broker = new FakeBroker();
-    const base = await makeCtx(client, broker, () => {});
-    const ctx = { ...base, extra: { client, sessionId: "ses_bad-id" } };
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.createCalls).toBe(0);
-    expect(client.sessionGetCalls).toEqual([]);
-    expectPrivateStartup(client, broker);
-  });
-
-  it("rejects a non-canonical create result without confirming or publishing it", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.createdSessionId = "not_a_native_session";
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.createCalls).toBe(1);
-    expect(client.sessionGetCalls).toEqual([]);
-    expectPrivateStartup(client, broker);
-  });
-
-  it("rejects an exact GET whose returned identity does not match", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.confirmedSessionId = "ses_different";
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.sessionGetCalls).toEqual(["ses_fake"]);
-    expect(client.permissionReadCalls).toBe(0);
-    expectPrivateStartup(client, broker);
-  });
-
-  it("keeps the broker and pumps private while exact confirmation is pending, then cancels cleanly", async () => {
-    const client = new FakeOpencodeClient([]);
-    let releaseGet!: () => void;
-    client.sessionGetBarrier = new Promise<void>((resolve) => {
-      releaseGet = resolve;
+    const context = await makeContext(client, broker, () => {}, {
+      model: { providerID: "other", modelID: "other" },
     });
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
 
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => client.sessionGetCalls.length === 1)).toBe(true);
-    expectPrivateStartup(client, broker);
-
-    ac.abort();
-    releaseGet();
-    await expect(run).resolves.toBe(0);
-    expect(client.permissionReadCalls).toBe(0);
-    expectPrivateStartup(client, broker);
+    await expect(new OpencodeDriver(context).run(new AbortController().signal)).resolves.toBe(1);
+    expect(client.versionCalls).toBe(0);
+    expect(client.sessionGets).toEqual([]);
+    expect(broker.posts).toEqual([]);
   });
 
-  it("keeps the broker and pumps private while permission read-back is pending, then cancels cleanly", async () => {
-    const client = new FakeOpencodeClient([]);
-    let releaseReadback!: () => void;
-    client.permissionReadBarrierAt = 2;
-    client.permissionReadBarrier = new Promise<void>((resolve) => {
-      releaseReadback = resolve;
-    });
+  it("requires server.connected as the first SSE frame", async () => {
+    const client = new FakeOpencodeClient();
+    client.connectionFirst = [{ type: "server.heartbeat", properties: {} }];
     const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
+    const context = await makeContext(client, broker, () => {});
 
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => client.permissionReadCalls === 2)).toBe(true);
-    expect(client.permissionSetAttempts).toBe(1);
-    expectPrivateStartup(client, broker);
-
-    ac.abort();
-    releaseReadback();
-    await expect(run).resolves.toBe(0);
-    expectPrivateStartup(client, broker);
-  });
-});
-
-describe("OpencodeDriver permission mirroring (B2: flip the session to ask mode)", () => {
-  let ac: AbortController | null = null;
-  afterEach(() => ac?.abort());
-
-  it("DEFAULT ON: PATCHes the attached session to a wildcard ask rule", async () => {
-    const client = new FakeOpencodeClient([]); // no events; createSession → ses_fake; pump parks
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-    const driver = new OpencodeDriver(ctx);
-    const run = driver.run(ac.signal);
-    expect(await waitFor(() => client.connections > 0)).toBe(true);
-    expect(client.permissionSets).toEqual([
-      { sessionId: "ses_fake", rules: [{ permission: "*", pattern: "*", action: "ask" }] },
-    ]);
-    expect(client.permissionReadCalls).toBe(2);
-    expect(driver.capabilities.structuredPermissions).toBe(true);
-    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
-    expect(latestAnnouncement(broker).capabilities).toEqual({
-      structuredPermissions: true,
-      status: false,
-      controls: { interrupt: true, setModel: false, setMode: false, end: false },
-      attachments: false,
-    });
-    ac.abort();
-    await run;
+    await expect(new OpencodeDriver(context).run(new AbortController().signal)).resolves.toBe(1);
+    expect(broker.posts).toEqual([]);
+    expect(client.aborts).toBe(0);
   });
 
-  it("OPT-OUT (mirrorPermissions:false): does NOT PATCH the session, and structuredPermissions is false", async () => {
-    const client = new FakeOpencodeClient([]);
-    const broker = new FakeBroker();
-    const ctx = {
-      ...(await makeCtx(client, broker, () => {})),
-      extra: { client, mirrorPermissions: false },
-    };
-    const driver = new OpencodeDriver(ctx);
-    // Capability reflects the opt-out before setup and remains false after readiness.
-    expect(driver.capabilities.structuredPermissions).toBe(false);
-    ac = new AbortController();
-    const run = driver.run(ac.signal);
-    // Wait until the capture pump has subscribed (attach finished) → if a PATCH were going to happen it
-    // would have by now.
-    expect(await waitFor(() => client.connections > 0)).toBe(true);
-    expect(client.permissionSets).toEqual([]);
-    expect(client.permissionSetAttempts).toBe(0);
-    expect(client.permissionReadCalls).toBe(0);
-    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
-    expect(driver.capabilities.structuredPermissions).toBe(false);
-    expect(latestAnnouncement(broker).capabilities).toEqual({
-      structuredPermissions: false,
-      status: false,
-      controls: { interrupt: true, setModel: false, setMode: false, end: false },
-      attachments: false,
-    });
-    ac.abort();
-    await run;
-  });
+  it("does not mutate permissions by default; the positive experimental opt-in proves its write", async () => {
+    const normal = await launch();
+    expect(normal.client.permissionWrites).toEqual([]);
+    await stop(normal.ac, normal.run);
 
-  it("stays conservative before setup proves structured permissions", async () => {
-    const client = new FakeOpencodeClient([]);
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    expect(new OpencodeDriver(ctx).capabilities).toEqual({
-      structuredPermissions: false,
-      status: false,
-      controls: { interrupt: true, setModel: false, setMode: false, end: false },
-      attachments: false,
-    });
-  });
-
-  it("PRESERVES an existing per-session deny — merges it AFTER the catch-all ask (last-match-wins)", async () => {
-    const client = new FakeOpencodeClient([]);
-    // The session already forbids bash. Mirroring must NOT clobber that to ask — it stays deny.
-    client.existingPermissions.set("ses_fake", [
-      { permission: "bash", pattern: "*", action: "deny" },
-    ]);
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => client.permissionSets.length > 0)).toBe(true);
-    // opencode is last-match-wins: catch-all ask FIRST, the preserved deny LAST so bash stays denied.
-    expect(client.permissionSets).toEqual([
+    const mirrored = await launch(new FakeOpencodeClient(), { mirrorPermissions: true });
+    expect(mirrored.client.permissionWrites).toEqual([
       {
-        sessionId: "ses_fake",
-        rules: [
-          { permission: "*", pattern: "*", action: "ask" },
-          { permission: "bash", pattern: "*", action: "deny" },
-        ],
+        sessionId: MAIN,
+        rules: [{ permission: "*", pattern: "*", action: "ask" }],
       },
     ]);
-    ac.abort();
-    await run;
-  });
-
-  it("FAIL-CLOSED: a permission read failure publishes no bridge and never blind-writes policy", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.failGetPermission = true; // GET throws → we must not replace rules we couldn't read
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-    expect(client.permissionSets).toEqual([]); // nothing PATCHed — the session's own policy is untouched
-    expect(client.connections).toBe(0);
-    expect(broker.announcementAttempts).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("FAIL-CLOSED: a permission PATCH failure never publishes or starts pumps", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.permissionSetError = new Error("permission PATCH failed");
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.permissionReadCalls).toBe(1);
-    expect(client.permissionSetAttempts).toBe(1);
-    expect(client.permissionSets).toEqual([]);
-    expect(client.connections).toBe(0);
-    expect(broker.announcementAttempts).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("FAIL-CLOSED: a permission read-back error never publishes or starts pumps", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.failPermissionReadAt = 2;
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.permissionReadCalls).toBe(2);
-    expect(client.permissionSetAttempts).toBe(1);
-    expect(client.permissionSets).toHaveLength(1);
-    expect(client.connections).toBe(0);
-    expect(broker.announcementAttempts).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("FAIL-CLOSED: read-back without the exact wildcard ask rule never becomes ready", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.persistPermissionSet = false;
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    await expect(new OpencodeDriver(ctx).run(ac.signal)).resolves.toBe(1);
-
-    expect(client.permissionReadCalls).toBe(2);
-    expect(client.permissionSetAttempts).toBe(1);
-    expect(client.permissionSets).toHaveLength(1);
-    expect(client.connections).toBe(0);
-    expect(broker.announcementAttempts).toBe(0);
-    expect(client.aborts).toBe(0);
-  });
-
-  it("does not append again when the exact wildcard ask rule is already installed", async () => {
-    const client = new FakeOpencodeClient([]);
-    client.existingPermissions.set("ses_fake", [
-      { permission: "*", pattern: "*", action: "ask" },
-      { permission: "bash", pattern: "rm *", action: "deny" },
-    ]);
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    const driver = new OpencodeDriver(ctx);
-    const run = driver.run(ac.signal);
-    expect(await waitFor(() => client.connections > 0)).toBe(true);
-
-    expect(client.permissionReadCalls).toBe(1);
-    expect(client.permissionSetAttempts).toBe(0);
-    expect(client.permissionSets).toEqual([]);
-    expect(driver.capabilities.structuredPermissions).toBe(true);
-    expect(broker.announcementAttempts).toBeGreaterThanOrEqual(1);
-
-    ac.abort();
-    await expect(run).resolves.toBe(0);
+    expect(mirrored.driver.capabilities.structuredPermissions).toBe(true);
+    await stop(mirrored.ac, mirrored.run);
   });
 });
 
-describe("mergeAskRules (preserve existing policy + idempotent)", () => {
-  const ASK = { permission: "*", pattern: "*", action: "ask" } as const;
-  it("a fresh session (no rules) yields just the catch-all ask", () => {
-    expect(mergeAskRules([])).toEqual([ASK]);
-  });
-  it("keeps existing rules AFTER the catch-all (last-match-wins → specific rule still decides its tool)", () => {
-    const deny = { permission: "bash", pattern: "*", action: "deny" } as const;
-    const allow = { permission: "edit", pattern: "*", action: "allow" } as const;
-    expect(mergeAskRules([deny, allow])).toEqual([ASK, deny, allow]);
-  });
-  it("is idempotent: re-running drops the prior copy of OUR catch-all (no unbounded growth)", () => {
-    const deny = { permission: "bash", pattern: "*", action: "deny" } as const;
-    const once = mergeAskRules([deny]);
-    expect(mergeAskRules(once)).toEqual(once); // applying twice == applying once
-  });
-  it("does not drop a user's OWN narrower ask (only our exact */*/ask catch-all is de-duped)", () => {
-    const userAsk = { permission: "bash", pattern: "*", action: "ask" } as const;
-    expect(mergeAskRules([userAsk])).toEqual([ASK, userAsk]);
-  });
-});
-
-// ── HARDENING TESTS (code-review consensus #1–#4) ────────────────────────────────────────────────
-// Deterministic proofs of the robustness fixes the happy-path suite doesn't exercise.
-
-/** Build a HistoryMessage (GET /message entry) from an info + parts. */
-function histMsg(
-  info: Record<string, unknown>,
-  parts: Array<Record<string, unknown>>,
-): HistoryMessage {
-  return { info, parts } as unknown as HistoryMessage;
-}
-
-describe("OpencodeDriver hardening", () => {
-  let ac: AbortController | null = null;
-  afterEach(() => ac?.abort());
-
-  // FIX #1 — attach mid-turn: an INCOMPLETE assistant in history must NOT be flushed at backfill (no
-  // truncated answer); the LIVE completion must flush the FULL text exactly once (no truncation, no dup).
-  it("(#1) attach mid-turn: incomplete assistant is buffered at backfill, then live completion flushes the full text once", async () => {
-    // History: a finished user prompt + an assistant message that is STILL STREAMING (a partial part, no
-    // time.completed). Backfill must surface the user prompt but withhold the partial assistant.
-    const history: HistoryMessage[] = [
-      histMsg({ id: "msg_u", role: "user", time: { created: 1 } }, [
-        { type: "text", id: "prt_u", messageID: "msg_u", text: "Stream please" },
-      ]),
-      histMsg({ id: "msg_a", role: "assistant", time: { created: 2 } /* no completed */ }, [
-        { type: "text", id: "prt_a", messageID: "msg_a", text: "partial" }, // mid-stream snapshot
-      ]),
+describe("OpenCode M2 canonical projection", () => {
+  it("replays strict bounded history before readiness", async () => {
+    const client = new FakeOpencodeClient();
+    const userId = nativeMessageId(100);
+    const assistantId = nativeMessageId(200);
+    client.historySnapshots = [
+      [userHistory(userId, "typed in TUI"), assistantHistory(assistantId, "native reply", userId)],
     ];
-    // Use TWO connections so there's a deterministic backoff window to observe the post-backfill state:
-    //  connection 1 backfills (history) then EOFs immediately (just server.connected) — during the
-    //  reconnect backoff we assert the incomplete assistant was withheld;
-    //  connection 2 (the reconnect) delivers the LIVE completion (full text) and idles, then parks.
-    const client = new FakeOpencodeClient([]);
-    client.connectionScripts = [
-      [{ type: "server.connected", properties: {} }], // backfill-only, then EOF
+    const running = await launch(client);
+
+    expect(upstream(running.session, "user")).toMatchObject([
+      {
+        uuid: userId,
+        local_prompt: true,
+        message: { content: "typed in TUI" },
+      },
+    ]);
+    expect(upstream(running.session, "assistant")).toHaveLength(1);
+    await stop(running.ac, running.run);
+  });
+
+  it("uses the host event UUID as a part marker and correlates identical TUI/browser text exactly", async () => {
+    const text = "  identical text survives  \n";
+    const client = new FakeOpencodeClient();
+    const localMessageId = nativeMessageId(100);
+    client.historySnapshots = [[userHistory(localMessageId, text)]];
+    const running = await launch(client);
+    const browser = running.session.pushUserInput(text, { clientMsgId: "browser-coordinate" });
+    const expectedPartId = opencodePartId(browser.eventId);
+    await waitFor(() => running.client.prompts.length === 1);
+
+    expect(running.client.prompts[0]).toMatchObject({
+      sessionId: MAIN,
+      text,
+      model: DEFAULT_OPENCODE_MODEL,
+      partId: expectedPartId,
+    });
+    await waitFor(() => upstream(running.session, "user").length === 2);
+
+    const users = upstream(running.session, "user");
+    expect(users[0]).toMatchObject({
+      uuid: localMessageId,
+      local_prompt: true,
+      message: { content: text },
+    });
+    expect(users[0]).not.toHaveProperty("client_msg_id");
+    const generatedMessageId = running.client.promptedMessages[0]?.info.id;
+    expect(users[1]).toMatchObject({
+      uuid: generatedMessageId,
+      local_prompt: true,
+      client_msg_id: "browser-coordinate",
+      message: { content: text },
+    });
+    await stop(running.ac, running.run);
+  });
+
+  it("fences if OpenCode omits the exact browser part marker from its canonical echo", async () => {
+    const client = new FakeOpencodeClient();
+    client.promptedMessageFactory = (call, messageId) => ({
+      info: { id: messageId, role: "user" },
+      parts: [
+        {
+          type: "text",
+          id: nativePartId(1),
+          messageID: messageId,
+          text: call.text,
+        },
+      ],
+    });
+    const running = await launch(client);
+    running.session.pushUserInput("marker must survive");
+
+    await expect(running.run).rejects.toThrow(/lost the active browser correlation marker/);
+    expect(client.prompts).toHaveLength(1);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("fences if OpenCode preserves the browser marker but changes the marked part", async () => {
+    const client = new FakeOpencodeClient();
+    client.promptedMessageFactory = (call, messageId) => ({
+      info: { id: messageId, role: "user" },
+      parts: [
+        {
+          type: "text",
+          id: call.partId,
+          messageID: messageId,
+          text: "marked",
+        },
+        {
+          type: "text",
+          id: nativePartId(2),
+          messageID: messageId,
+          text: " text",
+        },
+      ],
+    });
+    const running = await launch(client);
+    running.session.pushUserInput("marked text");
+
+    await expect(running.run).rejects.toThrow(/changed the browser correlation marker/);
+    expect(client.prompts).toHaveLength(1);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("fences if one browser marker is reused by two newly observed native messages", async () => {
+    const client = new FakeOpencodeClient();
+    client.promptHook = (call) => {
+      const reusedMessageId = nativeMessageId(100);
+      client.emit(
+        partEvent(MAIN, reusedMessageId, {
+          type: "text",
+          id: call.partId,
+          text: call.text,
+        }),
+      );
+      client.emit(messageEvent(MAIN, reusedMessageId, "user"));
+    };
+    const running = await launch(client);
+    running.session.pushUserInput("one marker, one message");
+
+    const timeout = setTimeout(() => running.ac.abort(), 500);
+    await expect(running.run).rejects.toThrow(/reused.*(?:part|correlation marker)/i);
+    clearTimeout(timeout);
+    expect(client.prompts).toHaveLength(1);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("does not correlate or acknowledge a marker-only partial SSE observation", async () => {
+    const client = new FakeOpencodeClient();
+    client.promptEventHook = (call, message) => {
+      const marker = message.parts[0];
+      if (marker === undefined) throw new Error("fake prompt lacked its marker");
+      client.emit(statusEvent(call.sessionId, "busy"));
+      client.emit(partEvent(call.sessionId, message.info.id, { ...marker }));
+    };
+    const running = await launch(client);
+    const acked: string[] = [];
+    const originalAck = running.session.ack.bind(running.session);
+    Object.defineProperty(running.session, "ack", {
+      configurable: true,
+      value: (eventId: string) => {
+        acked.push(eventId);
+        originalAck(eventId);
+      },
+    });
+
+    const browser = running.session.pushUserInput("wait for the canonical whole message");
+    await waitFor(() => client.prompts.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(acked).not.toContain(browser.eventId);
+    expect(upstream(running.session, "user")).toEqual([]);
+    await stop(running.ac, running.run);
+  });
+
+  it("coalesces whole-part resends once and rejects changed reuse", async () => {
+    const running = await launch();
+    const parentId = nativeMessageId(100);
+    const id = nativeMessageId(200);
+    const textPartId = nativePartId(1);
+    emitUser(running.client, parentId, "");
+    running.client.emit(partEvent(MAIN, id, { type: "text", id: textPartId, text: "partial" }));
+    running.client.emit(partEvent(MAIN, id, { type: "text", id: textPartId, text: "final" }));
+    running.client.emit(messageEvent(MAIN, id, "assistant", true, parentId));
+    await waitFor(() => upstream(running.session, "assistant").length === 1);
+
+    running.client.emit(partEvent(MAIN, id, { type: "text", id: textPartId, text: "final" }));
+    running.client.emit(messageEvent(MAIN, id, "assistant", true, parentId));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(upstream(running.session, "assistant")).toHaveLength(1);
+
+    running.client.emit(partEvent(MAIN, id, { type: "text", id: textPartId, text: "changed" }));
+    running.client.emit(messageEvent(MAIN, id, "assistant", true, parentId));
+    await expect(running.run).rejects.toThrow(/reused a message id|changed content/);
+    expect(running.client.aborts).toBe(0);
+  });
+
+  it("treats queued exact parts and completion after history emission as the same message", async () => {
+    const client = new FakeOpencodeClient();
+    const parentId = nativeMessageId(100);
+    const messageId = nativeMessageId(200);
+    const firstPartId = nativePartId(1);
+    const queuedPartId = nativePartId(2);
+    client.historySnapshots = [
       [
-        { type: "server.connected", properties: {} },
-        part({ type: "text", id: "prt_a", messageID: "msg_a", text: "partial and then the rest" }),
-        msgUpdated({ id: "msg_a", role: "assistant", time: { created: 2, completed: 3 } }),
-        idle(),
+        userHistory(parentId, ""),
+        {
+          info: {
+            id: messageId,
+            role: "assistant",
+            parentID: parentId,
+            time: { completed: 2 },
+          },
+          parts: [
+            {
+              type: "text",
+              id: firstPartId,
+              messageID: messageId,
+              text: "before ",
+            },
+            {
+              type: "text",
+              id: queuedPartId,
+              messageID: messageId,
+              text: "and during history",
+            },
+          ],
+        },
       ],
     ];
-    client.history = history;
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
+    const running = await launch(client);
 
-    // Wait for the user prompt to appear (proves backfill ran on connection 1), then assert no assistant
-    // yet — the incomplete assistant in history was BUFFERED, not flushed (#1). Connection 2 hasn't
-    // delivered the completion yet (we're inside the reconnect backoff window).
-    await waitFor(() => up(captured).some((e) => e.eventType === "user"));
-    const midBackfill = up(captured).filter((e) => e.eventType === "assistant");
-    expect(midBackfill).toHaveLength(0); // the incomplete assistant was NOT flushed at backfill (#1)
-
-    // Now wait for the live completion (connection 2) to flush the assistant.
-    await waitFor(() => up(captured).some((e) => e.eventType === "assistant"), 3000);
-    ac.abort();
-    await run;
-
-    const session = captured as unknown as Session;
-    const assistants = session.snapshotUpstream().filter((e) => e.eventType === "assistant");
-    // EXACTLY ONE assistant payload — and it's the FULL text, not the truncated "partial".
-    expect(assistants).toHaveLength(1);
-    const msg = assistants[0]?.payload.message as {
-      content: Array<{ type: string; text?: string }>;
-    };
-    expect(msg.content).toEqual([{ type: "text", text: "partial and then the rest" }]);
-  });
-
-  // FIX #2 — SSE reconnect: a simulated stream drop+reconnect must KEEP the pump alive (run() must NOT
-  // resolve, opencode must NOT be aborted), and the re-backfill on reconnect must produce no duplicates.
-  it("(#2) a transient SSE drop reconnects (no run() exit, no opencode abort) and re-backfill does not duplicate", async () => {
-    // Connection 1: completes a turn, then EOFs (the drop). Connection 2 (the reconnect): re-delivers the
-    // SAME finished message (as a real reconnect would) then parks. The driver must reconnect and dedup.
-    const turn: OpencodeEvent[] = [
-      { type: "server.connected", properties: {} },
-      part({ type: "text", id: "prt_ok", messageID: "msg_r", text: "OK" }),
-      msgUpdated({ id: "msg_r", role: "assistant", time: { created: 1, completed: 2 } }),
-      idle(),
-    ];
-    const reconnect: OpencodeEvent[] = [
-      { type: "server.connected", properties: {} },
-      // a reconnect re-delivers the finished message's parts + completion — must be deduped (#2)
-      part({ type: "text", id: "prt_ok", messageID: "msg_r", text: "OK" }),
-      msgUpdated({ id: "msg_r", role: "assistant", time: { created: 1, completed: 2 } }),
-      idle(),
-    ];
-    const client = new FakeOpencodeClient([]);
-    client.connectionScripts = [turn, reconnect];
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    let resolved = false;
-    const run = new OpencodeDriver(ctx).run(ac.signal).then((c) => {
-      resolved = true;
-      return c;
-    });
-
-    // Wait for the reconnect to happen (events() called twice) AND the assistant to flush.
-    await waitFor(() => client.connections >= 2);
-    await waitFor(() => up(captured).some((e) => e.eventType === "assistant"));
-    await sleep(50); // let any (incorrect) duplicate land
-
-    // The drop did NOT end run() and did NOT abort opencode — the bridge survived the transient close.
-    expect(resolved).toBe(false);
-    expect(client.aborts).toBe(0);
-    // Re-backfill across the reconnect produced NO duplicate: exactly one assistant payload.
-    const assistants = up(captured).filter((e) => e.eventType === "assistant");
-    expect(assistants).toHaveLength(1);
-    expect(client.connections).toBeGreaterThanOrEqual(2); // it actually reconnected
-
-    ac.abort();
-    const code = await run;
-    expect(code).toBe(0);
-    expect(resolved).toBe(true); // NOW it resolves — only on the parent abort
-  });
-
-  it("keeps the native OpenCode session alive when only the broker projection fails", async () => {
-    const client = new FakeOpencodeClient(OK_SCRIPT);
-    const broker = new FakeBroker();
-    broker.failContent = true;
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (session) => {
-      captured = session;
-    });
-    ac = new AbortController();
-    let resolved = false;
-    const run = new OpencodeDriver(ctx).run(ac.signal).then((code) => {
-      resolved = true;
-      return code;
-    });
-
-    await waitFor(() => (captured as unknown as Session | null)?.closed === true);
-    await sleep(25);
-    expect(resolved).toBe(false);
-    expect(client.aborts).toBe(0);
-
-    ac.abort();
-    await expect(run).resolves.toBe(0);
-    expect(client.aborts).toBe(1);
-  });
-
-  // FIX #3 — a FAILED promptAsync must roll back the suppression token so a later identical LOCAL prompt
-  // is NOT falsely suppressed (it must surface as a local_prompt).
-  it("(#3) a failed inject rolls back its suppression token (a later identical local prompt is not suppressed)", async () => {
-    // The live SSE: a LOCAL user message with the SAME text the failed inject tried to send. With the
-    // rollback, it must surface as a local_prompt; without it, the leaked token would suppress it.
-    const SAME = "duplicate text";
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      part({ type: "text", id: "prt_u", messageID: "msg_local", text: SAME }),
-      msgUpdated({ id: "msg_local", role: "user", time: { created: 1 } }),
-      // an assistant message so #flushBufferedUsers fires and the user message flushes
-      part({ type: "text", id: "prt_a", messageID: "msg_a2", text: "reply" }),
-      msgUpdated({ id: "msg_a2", role: "assistant", time: { created: 2, completed: 3 } }),
-      idle(),
-    ]);
-    // Make promptAsync FAIL so the inject's recorded token must roll back.
-    client.promptAsync = async () => {
-      throw new Error("simulated prompt POST failure");
-    };
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    const ready = new Promise<Session>((resolve) => {
-      const orig = ctx.onSession;
-      ctx.onSession = (s: Session) => {
-        orig?.(s);
-        s.pushUserInput(SAME); // the driver tries to inject this; the POST fails → token must roll back
-        resolve(s);
-      };
-    });
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await ready;
-    // Wait for the LOCAL user message (same text) to flush — it must NOT be suppressed.
-    await waitFor(() => up(captured).some((e) => e.eventType === "user"));
-    ac.abort();
-    await run;
-
-    const session = captured as unknown as Session;
-    const users = session.snapshotUpstream().filter((e) => e.eventType === "user");
-    // The local prompt with the same text surfaced (NOT falsely suppressed by a leaked token — #3).
-    expect(users).toHaveLength(1);
-    expect(users[0]?.payload.local_prompt).toBe(true);
-    expect((users[0]?.payload.message as { content?: unknown })?.content).toBe(SAME);
-  });
-
-  // FIX #4 — the SSE parser must accept CRLF framing (a `\r\n`-separated frame must parse).
-  it("(#4) parseSseFrame parses a CRLF-framed data line", () => {
-    // A frame whose data line ends in \r (after LF-normalization in events(), a block is the inter-blank
-    // content). parseSseFrame receives a LF-normalized block; assert it parses a typical data line, AND
-    // that the raw CRLF normalization in events() collapses \r\n → \n so framing works.
-    const obj = { type: "session.idle", properties: { sessionID: "ses_x" } };
-    const lfBlock = `data: ${JSON.stringify(obj)}`;
-    expect(parseSseFrame(lfBlock)?.type).toBe("session.idle");
-
-    // Multi-line data (SSE allows several data: lines per frame) concatenates.
-    const json = JSON.stringify({ type: "server.heartbeat", properties: {} });
-    const half = json.length >> 1;
-    const multi = `data: ${json.slice(0, half)}\ndata: ${json.slice(half)}`;
-    expect(parseSseFrame(multi)?.type).toBe("server.heartbeat");
-
-    // A `:comment` keepalive (no data:) → null (skipped, not a kill).
-    expect(parseSseFrame(":keepalive")).toBeNull();
-    // Malformed JSON → null.
-    expect(parseSseFrame("data: {not json")).toBeNull();
-
-    // The CRLF normalization that events() applies before framing: \r\n\r\n frames split, \r\n lines
-    // become \n. Prove the normalization the parser depends on: a CRLF block normalizes to the LF block.
-    const crlfBlock = lfBlock.replace(/\n/g, "\r\n");
-    expect(parseSseFrame(crlfBlock.replace(/\r\n?/g, "\n"))?.type).toBe("session.idle");
-  });
-});
-
-// Behaviors the driver doc PROMISES that a live human-style verification found unimplemented (now honored):
-//   • /compact routes to the native summarize endpoint (not fed to the model as literal text);
-//   • session.error surfaces a result frame so the viewer isn't stuck "working" on a failed turn;
-//   • a whitespace-only prompt is a no-op, not a burned model turn.
-describe("OpencodeDriver — documented behavior (session.error / /compact / blank prompts)", () => {
-  let ac: AbortController | null = null;
-  afterEach(() => ac?.abort());
-
-  it("routes /compact to the native summarize endpoint, NOT a model prompt", async () => {
-    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ctx.onSession = (s: Session) => s.pushUserInput("/compact");
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await waitFor(() => client.summarizes.length >= 1);
-    ac.abort();
-    await run;
-    expect(client.summarizes).toEqual([SES]); // summarize hit the attached session
-    expect(client.prompts).toHaveLength(0); // and it was NOT sent to the model as a prompt
-  });
-
-  it("dispatches /compact WITHOUT blocking the inject pump (a hung summarize still lets interrupt fire)", async () => {
-    // OpenCode's summarize endpoint runs the WHOLE compaction turn server-side before returning. The
-    // earlier code `await`ed it inside the serial inject pump, so a later queued `interrupt` could not
-    // fire until compaction finished (and the slow ack risked a reconnect replaying /compact → a SECOND
-    // compaction). The fix dispatches summarize fire-and-forget. Model that with a summarize that NEVER
-    // resolves: the interrupt that follows /compact must still reach client.abort().
-    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
-    client.summarize = () => new Promise<void>(() => {}); // hangs forever — would wedge an awaiting pump
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ctx.onSession = (s: Session) => {
-      s.pushUserInput("/compact"); // dispatched, must NOT block the pump
-      s.pushControlRequest("interrupt"); // queued right behind it — must still be processed
-    };
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    const fired = await waitFor(() => client.aborts >= 1);
-    ac.abort();
-    await run;
-    // `fired` flipped true via the interrupt BEFORE we aborted → the pump processed it while summarize
-    // was still hung. (Teardown also aborts the OpenCode run — review #10 — so the final count is ≥1.)
-    expect(fired).toBe(true);
-    expect(client.aborts).toBeGreaterThanOrEqual(1);
-    expect(client.prompts).toHaveLength(0); // /compact was not fed to the model as a prompt
-  });
-
-  it("a FAILED /compact dispatch surfaces an error result and returns to idle (not stuck 'running')", async () => {
-    // Fire-and-forget /compact sets workerStatus="running" then dispatches summarize. If summarize
-    // REJECTS, no server-side turn ever starts, so no session.status/session.error will clear the
-    // "running" — the .catch must surface the error AND drop to idle itself (codex review). The script
-    // has NO session.idle, so the ONLY route back to idle is that .catch.
-    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }]);
-    client.summarize = () => Promise.reject(new Error("summarize boom"));
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-      s.pushUserInput("/compact");
-    });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await waitFor(() => broker.content.some((p) => p.text.includes("summarize boom")));
-    ac.abort();
-    await run;
-    // The failure reached the viewer as a result frame (impossible without the .catch surfacing it)…
-    expect(broker.content.some((p) => p.text.includes("⚠ OpenCode error: summarize boom"))).toBe(
-      true,
-    );
-    // …and the session left "running" rather than hanging on a turn that never began.
-    expect((captured as unknown as Session).workerStatus).toBe("idle");
-    expect(client.prompts).toHaveLength(0); // still not sent to the model as a prompt
-  });
-
-  it("treats a whitespace-only prompt as a no-op (no burned model turn)", async () => {
-    const client = new FakeOpencodeClient([{ type: "server.connected", properties: {} }, idle()]);
-    const broker = new FakeBroker();
-    let s0: Session | null = null;
-    const ctx = await makeCtx(client, broker, () => {});
-    ctx.onSession = (s: Session) => {
-      s0 = s;
-      s.pushUserInput("   \n  "); // spaces + a stray newline — non-empty but blank
-    };
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await waitFor(() => s0 !== null);
-    await sleep(150); // let the inject pump process (and, correctly, skip) the blank prompt
-    ac.abort();
-    await run;
-    expect(client.prompts).toHaveLength(0); // no model turn burned
-    expect(client.summarizes).toHaveLength(0);
-  });
-
-  it("surfaces session.error as a result frame the viewer renders, then goes idle", async () => {
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      { type: "session.status", properties: { sessionID: SES, status: { type: "busy" } } },
-      sessionError({ name: "ProviderError", data: { message: "model not found: zzz" } }),
-    ]);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    // End-to-end: the error reaches the BROKER as a content frame (what the viewer renders).
-    await waitFor(() => broker.content.some((p) => p.text.includes("model not found: zzz")));
-    ac.abort();
-    await run;
-    expect(
-      broker.content.some((p) => p.text.includes("⚠ OpenCode error: model not found: zzz")),
-    ).toBe(true);
-    // …and the session left the "working" state rather than hanging.
-    expect((captured as unknown as Session).workerStatus).toBe("idle");
-  });
-
-  it("keeps an arbitrary provider response body out of every trace sink record", async () => {
-    const sentinel = "arbitrary-provider-response-body-SENTINEL-7f06";
-    const records: TraceRecord[] = [];
-    const tracer = createTracer("rc.opencode.test", {
-      sink: (record) => records.push(record),
-      filter: () => 4,
-      now: () => 0,
-    });
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      sessionError({
-        name: sentinel,
-        data: {
-          message: `request failed: ${sentinel}`,
-          responseBody: sentinel,
-          statusCode: 503,
-          isRetryable: true,
-        },
-      }),
-    ]);
-    const broker = new FakeBroker();
-    const ctx = { ...(await makeCtx(client, broker, () => {})), tracer };
-    ac = new AbortController();
-
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => broker.content.some((post) => post.text.includes(sentinel)))).toBe(
-      true,
-    );
-    ac.abort();
-    await run;
-
-    // The E2E viewer result remains useful, but the local diagnostic sink gets metadata only.
-    expect(JSON.stringify(records)).not.toContain(sentinel);
-    const failureRecord = records.find((record) => record.msg === "OpenCode session failed");
-    expect(failureRecord?.level).toBe("warn");
-    expect(failureRecord?.fields).toEqual({
-      driver: "opencode",
-      session: SES,
-      status: 503,
-      retryable: true,
-    });
-  });
-});
-
-// ── SUB-AGENT (Task) BRIDGING (#102) ─────────────────────────────────────────────────────────────
-// The driver follows a child OpenCode session spawned by a `subtask` part and nests its messages under
-// the Task tool_use anchor. These prove the END-TO-END follow path against the REAL server-wide filter
-// (the FakeOpencodeClient replicates client.ts's gating + discovery exception), so a child's events only
-// flow AFTER its session.created is processed — the exact circular-dependency the discovery exception fixes.
-describe("OpencodeDriver — sub-agent (Task) bridging", () => {
-  let ac: AbortController | null = null;
-  afterEach(() => ac?.abort());
-
-  it("does not follow or prepare a child whose native session ID is noncanonical", async () => {
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      sessionCreated({ id: "not-a-native-session", parentID: SES, agent: "explore" }),
-    ]);
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => client.connections === 1)).toBe(true);
-    await sleep(20);
-    ac.abort();
-    await expect(run).resolves.toBe(0);
-
-    expect(client.permissionReadCalls).toBe(2); // parent setup + read-back only
-    expect(client.permissionSets.map((write) => write.sessionId)).toEqual([SES]);
-  });
-
-  it("passes the run signal to child policy setup, tracks it through cancellation, and never PATCHes after a late read", async () => {
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
-    ]);
-    let releaseChildRead!: () => void;
-    client.permissionReadBarrierAt = 3; // parent read + read-back are 1/2; the child's first read is 3
-    client.permissionReadBarrier = new Promise<void>((resolve) => {
-      releaseChildRead = resolve;
-    });
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => client.permissionReadCalls === 3)).toBe(true);
-    expect(client.permissionSetAttempts).toBe(1); // parent only
-    expect(client.permissionReadSignals.at(-1)?.aborted).toBe(false);
-
-    let settled = false;
-    const observedRun = run.then((code) => {
-      settled = true;
-      return code;
-    });
-    ac.abort();
-    await sleep(20);
-    expect(client.permissionReadSignals.at(-1)?.aborted).toBe(true);
-    expect(settled).toBe(false); // teardown is joining the tracked child task
-
-    releaseChildRead();
-    await expect(observedRun).resolves.toBe(0);
-    expect(client.permissionSetAttempts).toBe(1);
-    expect(client.permissionSets.map((write) => write.sessionId)).toEqual([SES]);
-  });
-
-  it("shares the teardown bound with a cancellation-unaware child read and fences its very-late resolution", async () => {
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
-    ]);
-    let releaseChildRead!: () => void;
-    client.permissionReadBarrierAt = 3;
-    client.permissionReadBarrier = new Promise<void>((resolve) => {
-      releaseChildRead = resolve;
-    });
-    const broker = new FakeBroker();
-    const ctx = await makeCtx(client, broker, () => {});
-    ac = new AbortController();
-
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    expect(await waitFor(() => client.permissionReadCalls === 3)).toBe(true);
-    expect(client.permissionSetAttempts).toBe(1);
-
-    vi.useFakeTimers();
-    try {
-      let settled = false;
-      const observedRun = run.then((code) => {
-        settled = true;
-        return code;
-      });
-      ac.abort();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(OPENCODE_TEARDOWN_FLUSH_MS - 1);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(observedRun).resolves.toBe(0);
-
-      // The injected client ignored cancellation past teardown. Resolving its read now still hits the
-      // post-read run-signal fence, so it cannot begin a child PATCH after shutdown.
-      releaseChildRead();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(client.permissionSetAttempts).toBe(1);
-      expect(client.permissionSets.map((write) => write.sessionId)).toEqual([SES]);
-    } finally {
-      releaseChildRead();
-      vi.useRealTimers();
-    }
-  });
-
-  it("subtask part → Task anchor; the child session's reply nests under it; the child's internal prompt is not surfaced", async () => {
-    const SUBAGENT_SCRIPT: OpencodeEvent[] = [
-      { type: "server.connected", properties: {} },
-      statusOf(SES, "busy"),
-      // The MAIN assistant turn carries a `subtask` part (the Task spawn) alongside some text.
-      part({ type: "text", id: "prt_m1", messageID: "msg_main", text: "I'll investigate." }),
-      part({
-        type: "subtask",
-        id: "prt_task1",
-        messageID: "msg_main",
-        agent: "explore",
-        description: "scout the auth flow",
-        prompt: "find every call site of login()",
-      }),
-      msgUpdated({ id: "msg_main", role: "assistant", time: { created: 1, completed: 2 } }),
-      // The child session is created (parent = SES, agent = explore). Its OWN id is not yet followed, so it
-      // arrives ONLY via the discovery exception — then the driver follows it and tags it to prt_task1.
-      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
-      // The child's INTERNAL user prompt (the Task input) — must NOT surface as a top-level local_prompt.
-      childPart({
+    client.emit(
+      partEvent(MAIN, messageId, {
         type: "text",
-        id: "prt_cu",
-        messageID: "msg_cu",
-        text: "internal subagent prompt",
+        id: queuedPartId,
+        text: "and during history",
       }),
-      childMsgUpdated({ id: "msg_cu", role: "user", time: { created: 3 } }),
-      // The child's assistant reply — must nest under the Task (parent_tool_use_id = prt_task1).
-      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "found it" }),
-      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 4, completed: 5 } }),
-      childIdle(),
-      idle(),
-    ];
-    const client = new FakeOpencodeClient(SUBAGENT_SCRIPT);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    // Wait for the CHILD's reply to flush (proves the child was discovered + followed + nested).
-    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
-    ac.abort();
-    const code = await run;
-    expect(code).toBe(0);
+    );
+    client.emit(messageEvent(MAIN, messageId, "assistant", true, parentId));
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    const upstream = up(captured);
-    // 1) The main assistant turn carries the Task tool_use anchor built from the subtask part.
-    const main = upstream.find((e) => e.payload.uuid === "msg_main");
-    expect(main).toBeDefined();
-    const mainContent = (main?.payload.message as { content: Array<Record<string, unknown>> })
-      .content;
-    const task = mainContent.find((b) => b.type === "tool_use" && b.name === "Task");
-    expect(task).toEqual({
-      type: "tool_use",
-      name: "Task",
-      id: "prt_task1",
-      input: {
-        subagent_type: "explore",
-        description: "scout the auth flow",
-        prompt: "find every call site of login()",
+    expect(upstream(running.session, "assistant")).toHaveLength(1);
+    await stop(running.ac, running.run);
+  });
+
+  it("applies the native 1.17.5 part-removal shape before completion", async () => {
+    const running = await launch();
+    const parentId = nativeMessageId(100);
+    const messageId = nativeMessageId(200);
+    const keptPartId = nativePartId(1);
+    const removedPartId = nativePartId(2);
+    emitUser(running.client, parentId, "");
+    running.client.emit(partEvent(MAIN, messageId, { type: "text", id: keptPartId, text: "kept" }));
+    running.client.emit(
+      partEvent(MAIN, messageId, { type: "text", id: removedPartId, text: "removed" }),
+    );
+    running.client.emit({
+      type: "message.part.removed",
+      properties: { sessionID: MAIN, messageID: messageId, partID: removedPartId },
+    });
+    running.client.emit(messageEvent(MAIN, messageId, "assistant", true, parentId));
+    await waitFor(() => upstream(running.session, "assistant").length === 1);
+
+    expect(upstream(running.session, "assistant")[0]?.message).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "kept" }],
+    });
+    await stop(running.ac, running.run);
+  });
+
+  it("fences removals of canonical content and whole native messages", async () => {
+    const partRemoval = await launch();
+    const canonicalMessageId = nativeMessageId(2);
+    emitAssistant(partRemoval.client, canonicalMessageId, "shared");
+    await waitFor(() => upstream(partRemoval.session, "assistant").length === 1);
+    partRemoval.client.emit({
+      type: "message.part.removed",
+      properties: {
+        sessionID: MAIN,
+        messageID: canonicalMessageId,
+        partID: nativePartForMessage(canonicalMessageId),
       },
     });
-    // It is NOT tagged (a top-level main message), and the text block precedes the Task anchor.
-    expect(main?.payload.parent_tool_use_id).toBeUndefined();
-    expect(mainContent[0]).toEqual({ type: "text", text: "I'll investigate." });
+    await expect(partRemoval.run).rejects.toThrow(/removed already projected content/);
+    expect(partRemoval.client.aborts).toBe(0);
 
-    // 2) The child's reply nests under the Task: tagged parent_tool_use_id = prt_task1, content = "found it".
-    const child = upstream.find((e) => e.payload.uuid === "msg_child");
-    expect(child?.eventType).toBe("assistant");
-    expect(child?.payload.parent_tool_use_id).toBe("prt_task1");
-    expect((child?.payload.message as { content: unknown }).content).toEqual([
-      { type: "text", text: "found it" },
-    ]);
-
-    // 3) The child's INTERNAL prompt was NOT surfaced as a local_prompt (it's shown via the Task anchor).
-    const users = upstream.filter((e) => e.eventType === "user");
-    expect(users).toHaveLength(0);
-    expect(
-      upstream.some(
-        (e) => (e.payload.message as { content?: unknown })?.content === "internal subagent prompt",
-      ),
-    ).toBe(false);
-  });
-
-  it("a child sub-agent's idle does NOT flip the bridge to idle while the parent is still running", async () => {
-    // The child completes and idles, but the MAIN session never idles in this script. Only the main
-    // session's idle/status drives workerStatus, so the bridge must stay "running" after the child idles.
-    const SCRIPT: OpencodeEvent[] = [
-      { type: "server.connected", properties: {} },
-      statusOf(SES, "busy"), // main is working → running
-      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
-      statusOf(CHILD, "busy"),
-      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "sub done" }),
-      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 1, completed: 2 } }),
-      statusOf(CHILD, "idle"), // a child going idle must NOT flip the bridge
-      childIdle(), // nor must a child session.idle
-    ];
-    const client = new FakeOpencodeClient(SCRIPT);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
+    const messageRemoval = await launch();
+    const removedMessageId = nativeMessageId(2);
+    emitAssistant(messageRemoval.client, removedMessageId, "already shared");
+    await waitFor(() => upstream(messageRemoval.session, "assistant").length === 1);
+    messageRemoval.client.emit({
+      type: "message.removed",
+      properties: { sessionID: MAIN, messageID: removedMessageId },
     });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
-    await sleep(40); // let the trailing child status:idle + child session.idle process
-    // The parent is still running — neither child-idle event flipped the bridge presence.
-    expect((captured as unknown as Session).workerStatus).toBe("running");
-    ac.abort();
-    await run;
+    await expect(messageRemoval.run).rejects.toThrow(/removed a native message/);
+    expect(messageRemoval.client.aborts).toBe(0);
   });
 
-  it("the MAIN session's idle DOES flip the bridge to idle (control for the isolation test)", async () => {
-    const SCRIPT: OpencodeEvent[] = [
-      { type: "server.connected", properties: {} },
-      statusOf(SES, "busy"),
-      idle(), // main idle → bridge idle
-    ];
-    const client = new FakeOpencodeClient(SCRIPT);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
-    });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    const wentIdle = await waitFor(
-      () => captured !== null && (captured as unknown as Session).workerStatus === "idle",
-    );
-    expect(wentIdle).toBe(true);
-    ac.abort();
-    await run;
-  });
-
-  // codex #5 — an UNTAGGED followed child (its session.created had no matching subtask anchor) must STILL
-  // suppress its internal user prompt (suppression keys on "is a followed non-main child", not on the tag).
-  it("suppresses an UNTAGGED child's internal prompt and keeps its reply top-level (no anchor matched)", async () => {
-    const SCRIPT: OpencodeEvent[] = [
-      { type: "server.connected", properties: {} },
-      statusOf(SES, "busy"),
-      // No subtask part is ever noted → the child gets NO tag when created.
-      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
-      childPart({
+  it("fences malformed own-session message events before they can flush buffered users", async () => {
+    const running = await launch();
+    const waitingUserId = nativeMessageId(1);
+    running.client.emit(
+      partEvent(MAIN, waitingUserId, {
         type: "text",
-        id: "prt_cu",
-        messageID: "msg_cu",
-        text: "internal subagent prompt",
+        id: nativePartId(1),
+        text: "not canonical yet",
       }),
-      childMsgUpdated({ id: "msg_cu", role: "user", time: { created: 1 } }),
-      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "sub reply" }),
-      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 2, completed: 3 } }),
-      childIdle(),
-    ];
-    const client = new FakeOpencodeClient(SCRIPT);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
+    );
+    running.client.emit(messageEvent(MAIN, waitingUserId, "user"));
+    running.client.emit({
+      type: "message.updated",
+      properties: { sessionID: MAIN, info: { role: "assistant", time: { completed: 2 } } },
     });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
-    ac.abort();
-    await run;
-    const upstream = up(captured);
-    // The child's internal prompt was NOT surfaced (suppressed despite being untagged) …
-    expect(upstream.filter((e) => e.eventType === "user")).toHaveLength(0);
-    // … and its reply is top-level (untagged) rather than mis-nested.
-    const child = upstream.find((e) => e.payload.uuid === "msg_child");
-    expect(child?.eventType).toBe("assistant");
-    expect(child?.payload.parent_tool_use_id).toBeUndefined();
+
+    await expect(running.run).rejects.toThrow(/invalid message update/);
+    expect(upstream(running.session, "user")).toEqual([]);
+    expect(running.client.aborts).toBe(0);
   });
 
-  // codex #2 — backfill must NOT enqueue historical subtask anchors. A later live child with the same agent
-  // must NOT nest under a stale anchor from history (we can't reliably correlate a past anchor to a new child).
-  it("does NOT nest a live child under a subtask anchor that came from history backfill", async () => {
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      // a live child of the SAME agent as the historical subtask part
-      sessionCreated({ id: CHILD, parentID: SES, agent: "explore" }),
-      childPart({ type: "text", id: "prt_c1", messageID: "msg_child", text: "fresh reply" }),
-      childMsgUpdated({ id: "msg_child", role: "assistant", time: { created: 9, completed: 10 } }),
-      childIdle(),
-      idle(),
-    ]);
-    // History: a completed parent assistant turn that INCLUDED a subtask (agent "explore"). Backfill renders
-    // its Task anchor but must NOT enqueue it for correlation (its real child already ran in the past).
-    client.history = [
-      histMsg({ id: "msg_hist", role: "assistant", time: { created: 1, completed: 2 } }, [
-        { type: "text", id: "prt_h", messageID: "msg_hist", text: "did some work" },
-        {
-          type: "subtask",
-          id: "prt_hist_task",
-          messageID: "msg_hist",
-          agent: "explore",
-          description: "old task",
-          prompt: "old prompt",
-        },
-      ]),
-    ];
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
+  it("fences deletion of the attached native session", async () => {
+    const running = await launch();
+    running.client.emit({
+      type: "session.deleted",
+      properties: { sessionID: MAIN, info: { id: MAIN } },
     });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_child"));
-    ac.abort();
-    await run;
-    const upstream = up(captured);
-    // The historical Task anchor still rendered (history is shown) …
-    const hist = upstream.find((e) => e.payload.uuid === "msg_hist");
-    const histContent = (hist?.payload.message as { content: Array<Record<string, unknown>> })
-      .content;
-    expect(histContent.some((b) => b.type === "tool_use" && b.id === "prt_hist_task")).toBe(true);
-    // … but the LIVE child is NOT mis-nested under that stale anchor (backfill didn't enqueue it).
-    const child = upstream.find((e) => e.payload.uuid === "msg_child");
-    expect(child?.payload.parent_tool_use_id).toBeUndefined();
+
+    await expect(running.run).rejects.toThrow(/deleted an attached native session/);
+    expect(running.client.aborts).toBe(0);
   });
 
-  // codex #3 — correlation is keyed by (PARENT session, agent), not agent alone: two parents spawning the
-  // SAME agent must not steal each other's anchors. main(SES) and its followed child C1 both spawn "explore";
-  // a grandchild of C1 must nest under C1's anchor, not main's (agent-only FIFO would mis-tag it).
-  it("keys subtask correlation by (parent, agent): a grandchild nests under its own parent's anchor", async () => {
-    const C1 = "ses_c1";
-    const GC = "ses_gc";
-    const client = new FakeOpencodeClient([
-      { type: "server.connected", properties: {} },
-      statusOf(SES, "busy"),
-      // main spawns worker → C1 (so C1 becomes a followed parent in its own right)
-      part({ type: "subtask", id: "prt_c1_task", messageID: "msg_m", agent: "worker" }),
-      msgUpdated({ id: "msg_m", role: "assistant", time: { created: 1, completed: 2 } }),
-      sessionCreated({ id: C1, parentID: SES, agent: "worker" }),
-      // BOTH main and C1 now enqueue an "explore" anchor (same agent, different parents)
-      part({ type: "subtask", id: "prt_main_explore", messageID: "msg_m2", agent: "explore" }), // parent SES
-      msgUpdated({ id: "msg_m2", role: "assistant", time: { created: 3, completed: 4 } }),
-      partFor(C1, { type: "subtask", id: "prt_c1_explore", messageID: "msg_c1", agent: "explore" }), // parent C1
-      msgUpdatedFor(C1, { id: "msg_c1", role: "assistant", time: { created: 5, completed: 6 } }),
-      // a grandchild of C1 with agent "explore" — must pop C1's anchor (prt_c1_explore), NOT main's
-      sessionCreated({ id: GC, parentID: C1, agent: "explore" }),
-      partFor(GC, { type: "text", id: "prt_gc1", messageID: "msg_gc", text: "grandchild reply" }),
-      msgUpdatedFor(GC, { id: "msg_gc", role: "assistant", time: { created: 7, completed: 8 } }),
-      idleFor(GC),
-    ]);
-    const broker = new FakeBroker();
-    let captured: Session | null = null;
-    const ctx = await makeCtx(client, broker, (s) => {
-      captured = s;
+  it("fences after one rejected prompt and never retries or mutates the native session on teardown", async () => {
+    const client = new FakeOpencodeClient();
+    client.promptError = new Error("ambiguous prompt failure");
+    const running = await launch(client);
+    running.session.pushUserInput("one attempt");
+
+    await expect(running.run).rejects.toThrow(OpencodeProjectionError);
+    expect(client.prompts).toHaveLength(1);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("allows a successful interrupt followed by later text", async () => {
+    const running = await launch();
+    running.session.pushControlRequest("interrupt");
+    await waitFor(() => running.client.aborts === 1);
+    running.session.pushUserInput("after interrupt");
+    await waitFor(() => running.client.prompts.length === 1);
+    expect(running.client.prompts[0]?.text).toBe("after interrupt");
+    await stop(running.ac, running.run);
+    expect(running.client.aborts).toBe(1);
+  });
+
+  it("fences after one rejected interrupt", async () => {
+    const client = new FakeOpencodeClient();
+    client.abortError = new Error("abort outcome unknown");
+    const running = await launch(client);
+    running.session.pushControlRequest("interrupt");
+
+    await expect(running.run).rejects.toThrow(OpencodeProjectionError);
+    expect(client.aborts).toBe(1);
+    expect(client.prompts).toEqual([]);
+  });
+
+  it("defensively rejects slash input instead of restoring the retired compact route", async () => {
+    const running = await launch();
+    running.session.pushUserInput("/compact");
+    await expect(running.run).rejects.toThrow(/unsupported browser text/);
+    expect(running.client.prompts).toEqual([]);
+    expect(running.client.aborts).toBe(0);
+  });
+
+  it("surfaces native session errors without aborting the owned session", async () => {
+    const running = await launch();
+    running.client.emit({
+      type: "session.error",
+      properties: { sessionID: MAIN, error: { data: { message: "provider failed" } } },
     });
-    ac = new AbortController();
-    const run = new OpencodeDriver(ctx).run(ac.signal);
-    await waitFor(() => up(captured).some((e) => e.payload.uuid === "msg_gc"));
-    ac.abort();
-    await run;
-    const gc = up(captured).find((e) => e.payload.uuid === "msg_gc");
-    // Parent-keyed correlation → the grandchild nests under C1's anchor; agent-only FIFO would give main's.
-    expect(gc?.payload.parent_tool_use_id).toBe("prt_c1_explore");
+    await waitFor(() => upstream(running.session, "result").length === 1);
+    expect(upstream(running.session, "result")[0]?.result).toContain("provider failed");
+    await stop(running.ac, running.run);
+    expect(running.client.aborts).toBe(0);
   });
 });
 
-// errText backs BOTH error result frames (session.error and a failed /compact). It must NEVER throw and
-// must ALWAYS yield non-empty text for any error shape a provider might send (verification-review gap).
-describe("errText — robust error-text extraction", () => {
-  it("prefers data.message → message → name, in that order", () => {
-    expect(errText({ name: "E", message: "m", data: { message: "d" } })).toBe("d");
-    expect(errText({ name: "E", message: "m" })).toBe("m");
-    expect(errText({ name: "ProviderError" })).toBe("ProviderError");
+describe("OpenCode M2 recovery and ownership", () => {
+  it("closes admission for a new main user but not a duplicate update of an old user", async () => {
+    const existingUserId = nativeMessageId(1);
+    const duplicateClient = new FakeOpencodeClient();
+    duplicateClient.historySnapshots = [[userHistory(existingUserId, "existing")]];
+    const duplicate = await launch(duplicateClient);
+    duplicateClient.emit(messageEvent(MAIN, existingUserId, "user"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    duplicate.session.pushUserInput("duplicate must not close admission");
+    await waitFor(() => duplicateClient.prompts.length === 1);
+    await stop(duplicate.ac, duplicate.run);
+
+    const freshClient = new FakeOpencodeClient();
+    const fresh = await launch(freshClient);
+    emitUser(freshClient, nativeMessageId(1), "new native turn");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fresh.session.pushUserInput("must wait behind native turn");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(freshClient.prompts).toEqual([]);
+    await stop(fresh.ac, fresh.run);
   });
-  it("handles primitives: string passes through, number/boolean stringify", () => {
-    expect(errText("plain failure")).toBe("plain failure");
-    expect(errText(42)).toBe("42");
-    expect(errText(true)).toBe("true");
+
+  it.each([
+    "busy",
+    "retry",
+  ] as const)("does not release queued browser text when idle reconciliation still reports %s", async (status) => {
+    const client = new FakeOpencodeClient();
+    const nativeUserId = nativeMessageId(1);
+    client.historySnapshots = [[], [userHistory(nativeUserId, "native turn")]];
+    const running = await launch(client);
+    client.sessionStatus = status;
+    emitUser(client, nativeUserId, "native turn");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    running.session.pushUserInput("queued browser turn");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(client.prompts).toEqual([]);
+
+    client.emit(idleEvent());
+    await waitFor(() => client.sessionStatusGets.length === 2);
+    expect(client.prompts).toEqual([]);
+
+    client.sessionStatus = "idle";
+    client.emit(idleEvent());
+    await waitFor(() => client.prompts.length === 1);
+    await stop(running.ac, running.run);
   });
-  it("falls back to JSON for an unkeyed object, and to 'unknown error' for null/unstringifiable", () => {
-    expect(errText({ code: 7 })).toBe('{"code":7}'); // no message/name/data → JSON of the object
-    // All recognized keys present but EMPTY → they don't satisfy the !== "" guards, so it JSON-stringifies
-    // the whole object (still SOMETHING for the viewer, never empty).
-    expect(errText({ name: "", message: "", data: { message: "" } })).toBe(
-      '{"name":"","message":"","data":{"message":""}}',
+
+  it("fences if native idle follows the active marker with a newer TUI user", async () => {
+    const client = new FakeOpencodeClient();
+    client.promptEventHook = (call, browserMessage) => {
+      client.emit(statusEvent(call.sessionId, "busy"));
+      for (const part of browserMessage.parts) {
+        client.emit(partEvent(call.sessionId, browserMessage.info.id, { ...part }));
+      }
+      client.emit(messageEvent(call.sessionId, browserMessage.info.id, "user"));
+
+      const tuiMessage = userHistory(
+        nativeMessageId(PROMPT_MESSAGE_BASE + 100),
+        "newer TUI steering",
+      );
+      client.promptedMessages.push(tuiMessage);
+      for (const part of tuiMessage.parts) {
+        client.emit(partEvent(call.sessionId, tuiMessage.info.id, { ...part }));
+      }
+      client.emit(messageEvent(call.sessionId, tuiMessage.info.id, "user"));
+      client.emit(statusEvent(call.sessionId, "idle"));
+      client.emit(idleEvent(call.sessionId));
+    };
+    const running = await launch(client);
+    running.session.pushUserInput("browser turn being overtaken");
+
+    await expect(running.run).rejects.toThrow(/advanced past the active browser turn/);
+    expect(client.prompts).toHaveLength(1);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("rejects poisoned history where a legacy msg_rc user sorts after its native assistant", async () => {
+    const client = new FakeOpencodeClient();
+    const legacyUserId = "msg_rc_123e4567e89b42d3a456426614174000";
+    client.historySnapshots = [
+      [
+        userHistory(legacyUserId, "legacy caller-selected identity"),
+        assistantHistory(nativeMessageId(1), "native reply", legacyUserId),
+      ],
+    ];
+    const broker = new FakeBroker();
+    const context = await makeContext(client, broker, () => {});
+
+    await expect(new OpencodeDriver(context).run(new AbortController().signal)).resolves.toBe(1);
+    expect(broker.posts).toEqual([]);
+    expect(client.aborts).toBe(0);
+  });
+
+  it.each([
+    ["missing", undefined, /invalid message update/],
+    ["dangling", nativeMessageId(1), /did not bind the latest native user/],
+  ] as const)("fences a live assistant with a %s native parent", async (_kind, parentId, error) => {
+    const running = await launch();
+    const assistantId = nativeMessageId(2);
+    running.client.emit(
+      partEvent(MAIN, assistantId, {
+        type: "text",
+        id: nativePartId(10),
+        text: "must not project",
+      }),
     );
-    expect(errText(null)).toBe("unknown error");
-    expect(errText(undefined)).toBe("unknown error");
-    const circular: Record<string, unknown> = {};
-    circular.self = circular; // JSON.stringify throws → caught → "unknown error"
-    expect(errText(circular)).toBe("unknown error");
+    running.client.emit(messageEvent(MAIN, assistantId, "assistant", true, parentId));
+
+    await expect(running.run).rejects.toThrow(error);
+    expect(running.client.aborts).toBe(0);
+  });
+
+  it("fences an assistant bound to an earlier rather than the latest preceding user", async () => {
+    const client = new FakeOpencodeClient();
+    const earlierUserId = nativeMessageId(1);
+    const latestUserId = nativeMessageId(2);
+    const assistantId = nativeMessageId(3);
+    client.historySnapshots = [[userHistory(earlierUserId, ""), userHistory(latestUserId, "")]];
+    const running = await launch(client);
+    running.client.emit(
+      partEvent(MAIN, assistantId, {
+        type: "text",
+        id: nativePartId(10),
+        text: "wrong turn",
+      }),
+    );
+    running.client.emit(messageEvent(MAIN, assistantId, "assistant", true, earlierUserId));
+
+    await expect(running.run).rejects.toThrow(/did not bind the latest native user/);
+    expect(running.client.aborts).toBe(0);
+  });
+
+  it("fences if a live assistant changes its already-observed native parent", async () => {
+    const client = new FakeOpencodeClient();
+    const firstParentId = nativeMessageId(1);
+    const secondParentId = nativeMessageId(2);
+    const assistantId = nativeMessageId(3);
+    client.historySnapshots = [[userHistory(firstParentId, ""), userHistory(secondParentId, "")]];
+    const running = await launch(client);
+    running.client.emit(
+      partEvent(MAIN, assistantId, {
+        type: "text",
+        id: nativePartId(10),
+        text: "answer",
+      }),
+    );
+    running.client.emit(messageEvent(MAIN, assistantId, "assistant", false, secondParentId));
+    running.client.emit(messageEvent(MAIN, assistantId, "assistant", false, firstParentId));
+
+    await expect(running.run).rejects.toThrow(/changed an assistant parent/);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("accepts increasing assistant siblings that share one native user parent", async () => {
+    const client = new FakeOpencodeClient();
+    const parentId = nativeMessageId(1);
+    const firstAssistantId = nativeMessageId(2);
+    const secondAssistantId = nativeMessageId(3);
+    client.historySnapshots = [
+      [
+        userHistory(parentId, "one turn"),
+        assistantHistory(firstAssistantId, "tool prelude", parentId),
+        assistantHistory(secondAssistantId, "final answer", parentId),
+      ],
+    ];
+    const running = await launch(client);
+
+    expect(upstream(running.session, "assistant").map((payload) => payload.uuid)).toEqual([
+      firstAssistantId,
+      secondAssistantId,
+    ]);
+    await stop(running.ac, running.run);
+  });
+
+  it("pauses writes through reconnect and resumes only after exact history reconciliation", async () => {
+    const client = new FakeOpencodeClient();
+    const parentId = nativeMessageId(1);
+    const assistantId = nativeMessageId(2);
+    client.historySnapshots = [
+      [],
+      [userHistory(parentId, ""), assistantHistory(assistantId, "once", parentId)],
+    ];
+    const gate = deferred();
+    client.historyBarriers.set(2, gate.promise);
+    const running = await launch(client);
+
+    emitAssistant(client, assistantId, "once");
+    await waitFor(() => upstream(running.session, "assistant").length === 1);
+    client.drop(0);
+    await waitFor(() => client.historyCalls === 2, 3_000);
+    expect(client.versionCalls).toBe(3);
+    expect(client.sessionGets).toEqual([MAIN, MAIN, MAIN]);
+
+    running.session.pushUserInput("held behind recovery");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(client.prompts).toEqual([]);
+    gate.resolve();
+    await waitFor(() => client.prompts.length === 1);
+    expect(upstream(running.session, "assistant")).toHaveLength(1);
+    await stop(running.ac, running.run);
+  });
+
+  it("fences if history inserts a missed message behind projected order", async () => {
+    const client = new FakeOpencodeClient();
+    const missedId = nativeMessageId(1);
+    const observedId = nativeMessageId(2);
+    client.historySnapshots = [
+      [userHistory(observedId, "a")],
+      [userHistory(missedId, "missed"), userHistory(observedId, "a")],
+    ];
+    const running = await launch(client);
+    client.drop(0);
+
+    await expect(running.run).rejects.toThrow(/history changed behind projected order/);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("fences if the same history identity changes content", async () => {
+    const client = new FakeOpencodeClient();
+    const messageId = nativeMessageId(1);
+    client.historySnapshots = [
+      [userHistory(messageId, "before")],
+      [userHistory(messageId, "after")],
+    ];
+    const running = await launch(client);
+    client.drop(0);
+
+    await expect(running.run).rejects.toThrow(/reused a message id|changed content/);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("treats strict-history response failure as terminal, not best effort", async () => {
+    const client = new FakeOpencodeClient();
+    client.historyErrors.set(1, new OpencodeError(0, "malformed history"));
+    const broker = new FakeBroker();
+    const context = await makeContext(client, broker, () => {});
+
+    await expect(new OpencodeDriver(context).run(new AbortController().signal)).resolves.toBe(1);
+    expect(broker.posts).toEqual([]);
+    expect(client.aborts).toBe(0);
+  });
+
+  it("broker projection loss stops the companion without aborting OpenCode", async () => {
+    const running = await launch();
+    running.broker.failContent = true;
+    emitAssistant(running.client, nativeMessageId(2), "native stays alive");
+
+    await expect(running.run).resolves.toBe(0);
+    expect(running.client.aborts).toBe(0);
+  });
+
+  it("restart creates a fresh projection, observes history, and never replays an old command", async () => {
+    const client = new FakeOpencodeClient();
+    const text = "first projection command";
+    const first = await launch(client);
+    first.session.pushUserInput(text, { clientMsgId: "first-browser" });
+    await waitFor(() => client.prompts.length === 1);
+    const nativeId = client.promptedMessages[0]?.info.id;
+    if (nativeId === undefined) throw new Error("fake did not generate a native message id");
+    await waitFor(() => upstream(first.session, "user").length === 1);
+    const firstSessionId = first.session.id;
+    await stop(first.ac, first.run);
+
+    const second = await launch(client);
+    await waitFor(() => upstream(second.session, "user").length === 1);
+    expect(second.session.id).not.toBe(firstSessionId);
+    expect(client.prompts).toHaveLength(1);
+    expect(upstream(second.session, "user")[0]).toMatchObject({
+      uuid: nativeId,
+      local_prompt: true,
+      message: { content: text },
+    });
+    expect(upstream(second.session, "user")[0]).not.toHaveProperty("client_msg_id");
+    await stop(second.ac, second.run);
+  });
+
+  it("retains useful child-session nesting without widening the M2 browser control surface", async () => {
+    const running = await launch();
+    const parentUserId = nativeMessageId(1);
+    const parentAssistantId = nativeMessageId(2);
+    const childUserId = nativeMessageId(3);
+    const childAssistantId = nativeMessageId(4);
+    const taskPartId = nativePartId(10);
+    emitUser(running.client, parentUserId, "");
+    running.client.emit(
+      partEvent(MAIN, parentAssistantId, {
+        type: "subtask",
+        id: taskPartId,
+        agent: "research",
+        prompt: "inspect",
+        description: "child",
+      }),
+    );
+    running.client.emit({
+      type: "session.created",
+      properties: {
+        sessionID: CHILD,
+        info: { id: CHILD, parentID: MAIN, agent: "research" },
+      },
+    });
+    running.client.emit(messageEvent(MAIN, parentAssistantId, "assistant", true, parentUserId));
+
+    running.client.emit(
+      partEvent(CHILD, childUserId, {
+        type: "text",
+        id: nativePartId(2),
+        text: "internal prompt",
+      }),
+    );
+    running.client.emit(messageEvent(CHILD, childUserId, "user"));
+    running.client.emit(
+      partEvent(CHILD, childAssistantId, {
+        type: "text",
+        id: nativePartId(3),
+        text: "child answer",
+      }),
+    );
+    running.client.emit(messageEvent(CHILD, childAssistantId, "assistant", true, childUserId));
+    running.client.emit(idleEvent(CHILD));
+
+    await waitFor(() => upstream(running.session, "assistant").length === 2);
+    const child = upstream(running.session, "assistant").find(
+      (payload) => payload.uuid === childAssistantId,
+    );
+    expect(child).toMatchObject({ parent_tool_use_id: taskPartId });
+    expect(upstream(running.session, "user")).toEqual([]);
+    await stop(running.ac, running.run);
+  });
+});
+
+describe("small exported invariants", () => {
+  it("derives the exact native part marker only from a canonical host UUID", () => {
+    expect(opencodePartId("123e4567-e89b-42d3-a456-426614174000")).toBe(
+      "prt_rc_123e4567e89b42d3a456426614174000",
+    );
+    expect(() => opencodePartId("not-a-uuid")).toThrow(/noncanonical/);
+    expect(() => opencodePartId("123E4567-E89B-42D3-A456-426614174000")).toThrow(/noncanonical/);
+    expect(() => opencodePartId("123e4567-e89b-32d3-a456-426614174000")).toThrow(/noncanonical/);
+  });
+
+  it("keeps the experimental ask rule before preserved native policy", () => {
+    const deny: PermissionRule = { permission: "bash", pattern: "*", action: "deny" };
+    expect(mergeAskRules([deny])).toEqual([{ permission: "*", pattern: "*", action: "ask" }, deny]);
+  });
+
+  it("extracts a useful viewer error without changing tracing policy", () => {
+    expect(errText({ data: { message: "provider detail" } })).toBe("provider detail");
   });
 });

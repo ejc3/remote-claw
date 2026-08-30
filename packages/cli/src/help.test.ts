@@ -48,14 +48,20 @@ describe("RC_HELP banner", () => {
       "--rc-oc-url",
       "--rc-oc-model",
       "--rc-oc-session",
-      "--rc-oc-skip-permissions",
+      "--rc-oc-mirror-permissions",
     ]) {
       expect(RC_HELP).toContain(f);
     }
   });
 
   it("documents the env-only knobs that have no flag", () => {
-    for (const e of ["RC_CLAUDE_BIN", "RC_BEDROCK_STRIP_KEYS", "OPENCODE_SERVER_PASSWORD"]) {
+    for (const e of [
+      "RC_CLAUDE_BIN",
+      "RC_BEDROCK_STRIP_KEYS",
+      "OPENCODE_SERVER_USERNAME",
+      "OPENCODE_SERVER_PASSWORD",
+      "RC_OC_MIRROR_PERMISSIONS",
+    ]) {
       expect(RC_HELP).toContain(e);
     }
   });
@@ -87,11 +93,19 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toMatch(/required version probe still runs/);
   });
 
-  it("keeps tmux and opencode outside the primary native-coexistence path", () => {
-    expect(RC_HELP).toContain(
-      "tmux and opencode remain experimental/internal compatibility drivers",
-    );
+  it("distinguishes the pinned OpenCode tuple from experimental tmux and Bedrock inference", () => {
+    expect(RC_HELP).toContain("tmux remains an experimental/internal compatibility driver");
+    expect(RC_HELP).toContain("Pinned OpenCode driver (--rc-driver=opencode)");
+    expect(RC_HELP).toMatch(/pinned supported text\/interrupt tuple/);
     expect(RC_HELP).toMatch(/outside the primary coexistence\s+path/);
+  });
+
+  it("documents the frozen attach-only OpenCode tuple and no-mutation default", () => {
+    expect(RC_HELP).toMatch(/Linux arm64 and exact OpenCode 1\.17\.5/);
+    expect(RC_HELP).toMatch(/Attach-only: the companion never discovers, selects, or creates/);
+    expect(RC_HELP).toMatch(/Default leaves native permission policy untouched/);
+    expect(RC_HELP).toMatch(/retired --rc-oc-skip-permissions is an error/);
+    expect(RC_HELP).toMatch(/No forwarded arguments/);
   });
 
   it("does not advertise removed flags", () => {

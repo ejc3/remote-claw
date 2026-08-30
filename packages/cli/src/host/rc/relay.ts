@@ -126,6 +126,24 @@ function isStablePlainTextSurface(
   );
 }
 
+/** The one native-ordered OpenCode text surface. Permission mirroring is an orthogonal experimental
+ *  capability: toggling structuredPermissions must not change prompt ordering/correlation semantics. */
+function isOpencodeNativeTextSurface(
+  capabilities: DriverCapabilities,
+  harness: HarnessDescriptor,
+): boolean {
+  return (
+    harness.agent === "opencode" &&
+    harness.mode === "opencode" &&
+    !capabilities.status &&
+    capabilities.controls.interrupt &&
+    !capabilities.controls.setModel &&
+    !capabilities.controls.setMode &&
+    !capabilities.controls.end &&
+    !capabilities.attachments
+  );
+}
+
 /** Out-post retry budget for a transient broker error (409 = the channel was disposed or replaced
  *  between resolve and publish). A `seq` is allocated BEFORE the post, so a dropped post would
  *  strand the viewer on a permanent gap; retrying the SAME frame (deterministic msg_id → viewer
@@ -238,8 +256,8 @@ export function defaultAttachmentsDir(sessionId: string): string {
 interface OutItem {
   kind: string;
   text: string;
-  /** Browser source coordinate for a provider-canonical user event. Only the native companion sets
-   * this; the outbound queue publishes the matching accepted receipt at the canonical transcript seq. */
+  /** Browser source coordinate for a native-canonical user event. Only a provider-ordered companion
+   * sets this; the outbound queue publishes the matching receipt at the canonical transcript seq. */
   clientMsgId?: string;
 }
 
@@ -1203,9 +1221,9 @@ export class HostRcRelay {
           }
           const seq = this.#seq++;
           try {
-            // A provider-native browser prompt is not echoed at inbound admission: Anthropic history
-            // owns its place in the shared order. Reconcile the optimistic browser row only now, at the
-            // canonical provider event's seq, immediately before publishing that user frame.
+            // A native-canonical browser prompt is not echoed at inbound admission: native history owns
+            // its place in the shared order. Reconcile the optimistic browser row only now, at the
+            // canonical native event's seq, immediately before publishing that user frame.
             if (item.clientMsgId !== undefined) {
               await this.#post(
                 "accepted",
@@ -1362,15 +1380,19 @@ export class HostRcRelay {
         const text = new TextDecoder().decode(plaintext);
         const trimmed = text.trim();
         if (
-          isStablePlainTextSurface(this.#capabilities, this.#harness) &&
+          (isStablePlainTextSurface(this.#capabilities, this.#harness) ||
+            isOpencodeNativeTextSurface(this.#capabilities, this.#harness)) &&
           (trimmed === "" || trimmed.startsWith("/"))
         ) {
-          this.#trace.warn("unsupported stable text mutation suppressed");
+          this.#trace.warn("unsupported text mutation suppressed by capability boundary");
           admitted();
           continue;
         }
-        if (this.#harness.mode === "native-rc") {
-          // The provider is the ordering authority for this companion. First prove the broker can
+        if (
+          this.#harness.mode === "native-rc" ||
+          isOpencodeNativeTextSurface(this.#capabilities, this.#harness)
+        ) {
+          // Native history is the ordering authority for this companion. First prove the broker can
           // durably record a pre-mutation admission, then enqueue one immutable native UUID/timestamp.
           // This seq-null shape is intentionally ignored by current viewers; the canonical history
           // event later emits the ordinary {client_msg_id,seq} receipt and the one user frame together.

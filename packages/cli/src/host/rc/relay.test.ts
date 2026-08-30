@@ -89,6 +89,18 @@ describe("extForMime / isLikelyBase64", () => {
 const ID = new Uint8Array(16);
 const enc = (s: string) => new TextEncoder().encode(s);
 
+/** The exact default OpenCode M2 surface. */
+const OPENCODE_M2_CAPABILITIES: DriverCapabilities = {
+  structuredPermissions: false,
+  status: false,
+  controls: { interrupt: true, setModel: false, setMode: false, end: false },
+  attachments: false,
+};
+const OPENCODE_MIRRORED_CAPABILITIES: DriverCapabilities = {
+  ...OPENCODE_M2_CAPABILITIES,
+  structuredPermissions: true,
+};
+
 interface Posted {
   recordKind: string;
   seq: number | null;
@@ -619,6 +631,28 @@ function nativeRelayOf(session: Session, client: FakeClient): HostRcRelay {
   });
 }
 
+function opencodeM2RelayOf(session: Session, client: FakeClient): HostRcRelay {
+  return new HostRcRelay({
+    client: client as unknown as BrokerClient,
+    identityId: ID,
+    sessionId: session.id,
+    session,
+    capabilities: OPENCODE_M2_CAPABILITIES,
+    harness: OPENCODE_HARNESS,
+  });
+}
+
+function opencodeMirroredRelayOf(session: Session, client: FakeClient): HostRcRelay {
+  return new HostRcRelay({
+    client: client as unknown as BrokerClient,
+    identityId: ID,
+    sessionId: session.id,
+    session,
+    capabilities: OPENCODE_MIRRORED_CAPABILITIES,
+    harness: OPENCODE_HARNESS,
+  });
+}
+
 const tick = () => new Promise((r) => setTimeout(r, 0));
 async function waitFor(pred: () => boolean, ms = 2000): Promise<void> {
   const end = Date.now() + ms;
@@ -808,34 +842,55 @@ describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
   });
 });
 
-describe("HostRcRelay Claude-native text boundary", () => {
-  it("waits for provider observation before assigning a browser user its canonical seq", async () => {
+describe("HostRcRelay provider-ordered text boundaries", () => {
+  it.each([
+    {
+      surface: "Claude native",
+      text: "browser prompt",
+      relayFor: nativeRelayOf,
+    },
+    {
+      surface: "OpenCode M2",
+      text: "\t browser prompt \n",
+      relayFor: opencodeM2RelayOf,
+    },
+    {
+      surface: "OpenCode M2 with experimental permission mirroring",
+      text: "\t mirrored browser prompt \n",
+      relayFor: opencodeMirroredRelayOf,
+    },
+  ])("$surface waits for native observation before assigning a browser user its canonical seq", async ({
+    text,
+    relayFor,
+  }) => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     client.reportedDurable = true;
-    const relay = nativeRelayOf(session, client);
+    const relay = relayFor(session, client);
     const pushUser = vi.spyOn(session, "pushUserInput");
     const ac = new AbortController();
     const served = relay.serve(ac.signal);
 
     await waitFor(() => client.streamStarts.length === 1);
-    client.pushInbound(inFrame("user", "native-in", "browser prompt", "browser-msg"));
+    client.pushInbound(inFrame("user", "native-in", text, "browser-msg"));
     await waitFor(() => pushUser.mock.calls.length === 1);
 
-    expect(pushUser).toHaveBeenCalledWith("browser prompt", { clientMsgId: "browser-msg" });
+    // Admission preserves the original bytes and browser reconciliation coordinate, but owns no
+    // canonical row/seq until the driver reports the exact native echo.
+    expect(pushUser).toHaveBeenCalledWith(text, { clientMsgId: "browser-msg" });
     expect(client.content).toEqual([]);
     expect(
       client.posts
         .filter(({ recordKind }) => recordKind === "accepted")
-        .map(({ text }) => JSON.parse(text)),
+        .map(({ text: receipt }) => JSON.parse(receipt)),
     ).toEqual([{ client_msg_id: "browser-msg", native_pending: true }]);
 
-    session.pushUpstream(assistant("provider event before the user"));
+    session.pushUpstream(assistant("native event before the user"));
     session.pushUpstream({
       type: "user",
       local_prompt: true,
       client_msg_id: "browser-msg",
-      message: { role: "user", content: "browser prompt" },
+      message: { role: "user", content: text },
     });
     await waitFor(() => client.content.length === 2);
     ac.abort();
@@ -845,14 +900,14 @@ describe("HostRcRelay Claude-native text boundary", () => {
       expect.objectContaining({
         recordKind: "assistant",
         seq: 0,
-        text: "provider event before the user",
+        text: "native event before the user",
       }),
-      expect.objectContaining({ recordKind: "user", seq: 1, text: "browser prompt" }),
+      expect.objectContaining({ recordKind: "user", seq: 1, text }),
     ]);
     expect(
       client.posts
         .filter(({ recordKind }) => recordKind === "accepted")
-        .map(({ text }) => JSON.parse(text)),
+        .map(({ text: receipt }) => JSON.parse(receipt)),
     ).toEqual([
       { client_msg_id: "browser-msg", native_pending: true },
       { client_msg_id: "browser-msg", seq: 1 },
@@ -894,6 +949,111 @@ describe("HostRcRelay Claude-native text boundary", () => {
         seq: 0,
         text: "provider content still flows",
       }),
+    ]);
+  });
+});
+
+describe("HostRcRelay OpenCode M2 surface", () => {
+  it("admits only preserved non-slash text plus interrupt and suppresses every other mutation", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const relay = opencodeM2RelayOf(session, client);
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const pushControl = vi.spyOn(session, "pushControlRequest");
+    const pushResponse = vi.spyOn(session, "pushControlResponse");
+
+    await relay.announce("OpenCode M2");
+    expect(client.announces.at(-1)?.capabilities).toEqual(OPENCODE_M2_CAPABILITIES);
+
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+    await waitFor(() => client.streamStarts.length === 1);
+
+    // A native permission/question remains local and cannot be answered by this browser surface.
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "native-question",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "AskUserQuestion",
+        tool_input: { questions: [{ question: "Local only?" }] },
+      },
+    });
+
+    client.pushInbound(inFrame("user", "oc-empty", " \t\r\n", "empty-client"));
+    client.pushInbound(inFrame("user", "oc-slash", " \n\t/compact please", "slash-client"));
+    client.pushInbound(
+      inFrame(
+        "attachment",
+        "oc-attachment",
+        JSON.stringify({ name: "not-supported.png", mime: "image/png", data: "AAAA" }),
+      ),
+    );
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "oc-permission",
+        JSON.stringify({ request_id: "native-question", behavior: "allow" }),
+      ),
+    );
+    for (const kind of ["set_model", "set_mode", "end"]) {
+      client.pushInbound(
+        inFrame(
+          kind,
+          `oc-${kind}`,
+          JSON.stringify({
+            model: "other",
+            mode: "plan",
+            expiry: Date.now() + 60_000,
+          }),
+        ),
+      );
+    }
+    client.pushInbound(
+      inFrame("interrupt", "oc-interrupt", JSON.stringify({ expiry: Date.now() + 60_000 })),
+    );
+    const admittedText = "\n  preserve / inside and trailing space \t";
+    client.pushInbound(inFrame("user", "oc-text", admittedText, "oc-client-msg"));
+
+    await waitFor(() => pushUser.mock.calls.length === 1 && pushControl.mock.calls.length === 1);
+    await waitFor(() => client.opened.length === 9);
+
+    expect(pushUser).toHaveBeenCalledWith(admittedText, { clientMsgId: "oc-client-msg" });
+    expect(pushControl).toHaveBeenCalledTimes(1);
+    expect(pushControl).toHaveBeenCalledWith("interrupt");
+    expect(pushResponse).not.toHaveBeenCalled();
+    expect(client.content).toEqual([]);
+    expect(
+      client.posts
+        .filter(({ recordKind }) => recordKind === "accepted")
+        .map(({ text }) => JSON.parse(text)),
+    ).toEqual([{ client_msg_id: "oc-client-msg", native_pending: true }]);
+    expect(client.posts.some(({ recordKind }) => recordKind === "permission_request")).toBe(false);
+
+    // The driver adds client_msg_id only after exact native-ID + immutable-text correlation. That
+    // canonical echo, rather than admission, owns the viewer row and final reconciliation receipt.
+    session.pushUpstream({
+      type: "user",
+      uuid: "msg_rc_11111111111141118111111111111111",
+      local_prompt: true,
+      client_msg_id: "oc-client-msg",
+      message: { role: "user", content: admittedText },
+    });
+    await waitFor(() => client.content.length === 1);
+    ac.abort();
+    await served;
+
+    expect(client.content).toEqual([
+      expect.objectContaining({ recordKind: "user", seq: 0, text: admittedText }),
+    ]);
+    expect(
+      client.posts
+        .filter(({ recordKind }) => recordKind === "accepted")
+        .map(({ text }) => JSON.parse(text)),
+    ).toEqual([
+      { client_msg_id: "oc-client-msg", native_pending: true },
+      { client_msg_id: "oc-client-msg", seq: 0 },
     ]);
   });
 });

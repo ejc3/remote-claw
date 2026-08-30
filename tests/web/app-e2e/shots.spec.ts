@@ -1,3 +1,4 @@
+import { uploadHandoff } from "@remote-claw/cli";
 import { expect, test } from "./fixtures";
 
 // A screenshot harness for the Astryx migration — NOT part of the gate (see app-e2e.shots.config.ts;
@@ -13,6 +14,7 @@ import { expect, test } from "./fixtures";
 // Keyed by PROJECT: all four width/theme projects run the same test titles, and a bare
 // "shots/03-transcript.png" would let later projects silently overwrite earlier files.
 const OUT = () => `shots/${test.info().project.name}`;
+const HANDOFF_TEST_ENV = { NEXT_PUBLIC_RC_HANDOFF_ENABLED: "1" } as NodeJS.ProcessEnv;
 
 /** Wait for the bottom-sheet's slide-up + scrim-fade animations to finish before capturing — otherwise
  *  the shot catches a mid-animation frame (transparent scrim, transcript bleeding through), which makes
@@ -38,8 +40,21 @@ async function connect(page: import("@playwright/test").Page, pass: string) {
 test("connect + pass screen", async ({ page, seedHost }) => {
   const { pass } = await seedHost();
   await page.goto(`/#${encodeURIComponent(pass)}`);
-  await expect(page.getByLabel("Machine pass")).toBeVisible();
+  await expect(page.getByLabel("Machine pass", { exact: true })).toBeVisible();
   await page.screenshot({ path: `${OUT()}/01-connect.png` });
+});
+
+test("one-time pairing: claim and identity confirmation", async ({ page, seedHost, baseURL }) => {
+  if (!baseURL) throw new Error("baseURL is required");
+  const { pass } = await seedHost();
+  const link = await uploadHandoff(baseURL, pass, { env: HANDOFF_TEST_ENV });
+  await page.goto(link);
+  await expect(page.getByRole("heading", { name: "Pair this device" })).toBeVisible();
+  await page.screenshot({ path: `${OUT()}/01a-pairing.png` });
+
+  await page.getByRole("button", { name: "Pair this device" }).click();
+  await expect(page.getByTestId("identity-hex")).toBeVisible();
+  await page.screenshot({ path: `${OUT()}/01b-pairing-confirm.png` });
 });
 
 test("session list", async ({ page, seedHost }) => {
@@ -63,14 +78,14 @@ test("transcript: prose, tool rows, diff, task nesting", async ({ page, seedHost
   await page.screenshot({ path: `${OUT()}/04-tool-output-expanded.png`, fullPage: true });
 });
 
-test("stable Claude: permissions-local header and text-only composer", async ({
+test("stable Claude: local-permission disclosure and text-only composer", async ({
   page,
   seedHost,
 }) => {
   const { pass } = await seedHost();
   await connect(page, pass);
   await page.locator("button.row", { hasText: "rc box" }).click();
-  await expect(page.locator(".perms-local")).toBeVisible();
+  await expect(page.locator(".local-input-disclosure")).toBeVisible();
   await expect(page.getByTestId("composer-mode")).toBeDisabled();
   await expect(page.getByRole("button", { name: "Attach photos" })).toBeDisabled();
   await page.locator("section.chat").screenshot({ path: `${OUT()}/04a-stable-claude.png` });
@@ -137,8 +152,6 @@ test("status strip: disconnected with incomplete-tail disclosure", async ({ page
   await expect(page.locator('.chat-status[data-state="reconnecting"]')).toBeVisible();
   await page.clock.fastForward(40_000);
   const disconnected = page.locator('.chat-status[data-state="disconnected"]');
-  await expect(disconnected).toContainText(
-    "most recent delivery and output tail may be incomplete",
-  );
+  await expect(disconnected).toContainText("Recent output may be incomplete");
   await disconnected.screenshot({ path: `${OUT()}/11-status-strip.png` });
 });

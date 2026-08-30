@@ -43,7 +43,7 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
   await expect(output.locator("pre.tool-output")).toContainText("built in 3.42s");
 
   // (2) The sub-agent Task lifecycle row — the sub-agent is now visible (#47).
-  await expect(page.locator(".task-row", { hasText: "Task started" })).toBeVisible();
+  await expect(page.locator(".task-row", { hasText: "Sub-agent is running" })).toBeVisible();
 
   // (3) The sub-agent's Output nests under the Task (the data-sub fix), surviving its null content
   //     block (the codex crash guard) — there is exactly one sub-tagged tool_result.
@@ -161,7 +161,7 @@ test("an AskUserQuestion renders a question UI and submits answers (#42)", async
   await expect(card.locator(".q-text", { hasText: "Which name do you like best?" })).toBeVisible();
   // The always-present "type your own answer" box is there alongside the options (#42 freeform).
   await expect(card.locator(".q-freeform")).toBeVisible();
-  const submit = card.getByRole("button", { name: "Submit answers" });
+  const submit = card.getByRole("button", { name: "Submit" });
   await expect(submit).toBeDisabled(); // can't submit until a choice is picked
   await card.getByRole("button", { name: "Orion" }).click();
   await expect(submit).toBeEnabled();
@@ -182,7 +182,7 @@ test("an AskUserQuestion accepts a FREEFORM 'type your own' answer with no optio
   const card = page.locator(".perm.perm-q");
   const freeform = card.locator(".q-freeform");
   await expect(freeform).toBeVisible();
-  const submit = card.getByRole("button", { name: "Submit answers" });
+  const submit = card.getByRole("button", { name: "Submit" });
   await expect(submit).toBeDisabled(); // nothing answered yet
 
   // Type a custom answer that is NOT any listed option — before the fix there was no such input at all,
@@ -216,7 +216,7 @@ test("a multiSelect AskUserQuestion sends BOTH picked options and an appended fr
   await page.locator("button.row", { hasText: "rc box" }).click();
 
   const card = page.locator(".perm.perm-q");
-  const submit = card.getByRole("button", { name: "Submit answers" });
+  const submit = card.getByRole("button", { name: "Submit" });
   await expect(submit).toBeDisabled();
 
   // Pick a listed option AND type a freeform one — multiSelect appends the freeform string to the picked

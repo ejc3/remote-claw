@@ -72,11 +72,14 @@ describe("classifyArgs (unit)", () => {
     expect(classifyArgs(["--rc-identity=x"]).errors).toEqual(["--rc-identity takes no value"]);
   });
 
-  it("registers both driver permission opt-out flags as booleans (else the parser rejects them)", () => {
-    // Regression: these were referenced in run.ts but absent from RC_FLAGS, so the parser emitted
-    // `unknown flag` (exit 2) before the driver could read them — the documented opt-out was dead,
-    // reachable only via the RC_*_SKIP_PERMISSIONS env var. They must parse as plain booleans.
-    for (const flag of ["rc-tmux-skip-permissions", "rc-oc-skip-permissions"]) {
+  it("registers driver permission flags as booleans (else the parser rejects them)", () => {
+    // The retired OpenCode inverse remains reserved solely so run.ts can emit its targeted migration
+    // error; the positive flag is the only OpenCode permission configuration.
+    for (const flag of [
+      "rc-tmux-skip-permissions",
+      "rc-oc-mirror-permissions",
+      "rc-oc-skip-permissions",
+    ]) {
       const c = classifyArgs(["chat", `--${flag}`]);
       expect(c.errors).toEqual([]);
       expect(c.rc[flag]).toBe(true);

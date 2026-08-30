@@ -8,7 +8,7 @@ focused compatibility tests.
 
 These findings matter because they identified both the working private replacement relay and the
 native client seam for structured coexistence. A later bounded M0 run first proved the cheaper
-lower-fidelity tmux route. Current M1 evidence and sequencing live in
+lower-fidelity tmux route. The current M1/M2 evidence and later sequencing live in
 [Product goal and release gates](release-finish-line.md). This research is one part of the broader
 Claude/Codex/OpenCode/tmux product.
 
@@ -139,7 +139,7 @@ client, and two remote-claw browsers submitted labelled turns; provider history 
 did not duplicate them, and broker loss left the native session alive. This is bounded architecture
 evidence, not a supported-version promise or official-app UI test.
 
-The client-side seam is now the selected structured milestone:
+The client-side seam became the selected M1 structured milestone and is now complete:
 
 1. keep normal Anthropic Remote Control intact;
 2. wait until one exact native session and bridge prerequisites are ready;
@@ -147,10 +147,11 @@ The client-side seam is now the selected structured milestone:
 4. project supported events through the existing sealed broker; and
 5. submit one stable-identity text event without automatically retrying an ambiguous POST.
 
-See [Native Claude Remote coexistence](native-rc-passthrough-scoping.md). If this thin adapter works,
-reuse the demonstrated lifecycle and safety pattern for OpenCode and Codex where their native seams
-support it. Keep tmux explicitly lower fidelity. Do not recreate the retired generalized coordinator
-unless a concrete cross-adapter failure demonstrates that it is necessary.
+See [Native Claude Remote coexistence](native-rc-passthrough-scoping.md). The later pinned OpenCode M2
+adapter reused the demonstrated small lifecycle and is also complete. Apply proven pieces selectively
+to Codex where its native seam needs them. Keep tmux explicitly lower fidelity. Do not recreate the
+retired generalized coordinator unless a concrete cross-adapter failure demonstrates that it is
+necessary.
 
 ## 8. Evidence limits
 

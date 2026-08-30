@@ -19,6 +19,11 @@ import {
 import type { DriverContext } from "./host/rc/driver.js";
 import { gitInfo } from "./host/rc/gitinfo.js";
 import { runRcLaunch, type SpawnClaudeEnv } from "./host/rc/launch.js";
+import {
+  DEFAULT_OPENCODE_URL,
+  isOpencodeSessionId,
+  normalizeOpencodeBaseUrl,
+} from "./host/rc/opencode/client.js";
 import { DEFAULT_OPENCODE_MODEL, runOpencodeDriver } from "./host/rc/opencode/driver.js";
 import { runTmuxDriver } from "./host/rc/tmux/driver.js";
 import { resolveMirrorPermissions } from "./host/rc/tmux/permhook.js";
@@ -45,7 +50,7 @@ function signalExitCode(signal: NodeJS.Signals): number {
  *  Each group names the driver it DOES apply to:
  *    • tmux: --rc-session-hook / --rc-no-session-hook (ongoing transcript/rotation follow only) /
  *      --rc-tmux-skip-permissions
- *    • opencode: --rc-oc-url / --rc-oc-model / --rc-oc-session / --rc-oc-skip-permissions
+ *    • opencode: --rc-oc-url / --rc-oc-model / --rc-oc-session / --rc-oc-mirror-permissions
  *    • mitm (inference): --rc-inference / --rc-bedrock-region / --rc-bedrock-model / --rc-accountless
  *      (tmux/opencode reach Bedrock via their own provider, NOT our MITM translation). */
 export function misappliedDriverFlagWarnings(
@@ -73,7 +78,7 @@ export function misappliedDriverFlagWarnings(
   if (driver === "mitm" || driver === "claude-native" || driver === "tmux") {
     emit(
       [
-        ...(rc["rc-oc-skip-permissions"] === true ? ["--rc-oc-skip-permissions"] : []),
+        ...(rc["rc-oc-mirror-permissions"] === true ? ["--rc-oc-mirror-permissions"] : []),
         ...(has("rc-oc-url") ? ["--rc-oc-url"] : []),
         ...(has("rc-oc-model") ? ["--rc-oc-model"] : []),
         ...(has("rc-oc-session") ? ["--rc-oc-session"] : []),
@@ -105,6 +110,31 @@ function wantsHelp(claudeArgs: readonly string[]): boolean {
   return scan.includes("--help") || scan.includes("-h");
 }
 
+const OPENCODE_CONFIG_FLAGS = [
+  "rc-oc-url",
+  "rc-oc-model",
+  "rc-oc-session",
+  "rc-oc-mirror-permissions",
+] as const;
+
+const OPENCODE_CONFIG_ENV = [
+  "OPENCODE_URL",
+  "RC_OC_MODEL",
+  "RC_OC_SESSION",
+  "RC_OC_MIRROR_PERMISSIONS",
+  "OPENCODE_SERVER_USERNAME",
+  "OPENCODE_SERVER_PASSWORD",
+] as const;
+
+/** An OpenCode selection or any OpenCode-only configuration is an explicit attach request. */
+function hasOpencodeIntent(rc: Record<string, unknown>, driver: string): boolean {
+  return (
+    driver === "opencode" ||
+    OPENCODE_CONFIG_FLAGS.some((name) => Object.hasOwn(rc, name)) ||
+    OPENCODE_CONFIG_ENV.some((name) => process.env[name] !== undefined)
+  );
+}
+
 /** Run `bin` with `args`, inheriting stdio, resolving to the process exit code. */
 export type SpawnFn = (bin: string, args: string[]) => Promise<number>;
 
@@ -127,6 +157,8 @@ export interface RunOptions {
   runTmuxDriver?: typeof runTmuxDriver;
   /** Injectable stable-Claude compatibility boundary (tests). Defaults to the fail-closed probe. */
   claudeCompatibilityCheck?: (claudeBin: string) => Promise<void>;
+  /** Narrow OpenCode release-platform seam (tests). Defaults to the current Node runtime. */
+  runtime?: Readonly<{ platform: NodeJS.Platform; arch: string }>;
 }
 
 async function withClearedRootSecret<T>(
@@ -243,6 +275,12 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     for (const e of errors) warn(`remote-claw: ${e}\n`);
     return 2;
   }
+  if (rc["rc-oc-skip-permissions"] === true) {
+    warn(
+      "remote-claw: --rc-oc-skip-permissions is retired; OpenCode permission policy is not mutated by default (use --rc-oc-mirror-permissions only for the experimental opt-in)\n",
+    );
+    return 2;
+  }
   // The local rc actions (--rc-identity / --rc-show-secret / --rc-pass) run locally and never
   // launch claude; their modifiers (--rc-file/--rc-json/--rc-quiet/…) are handled inside each.
   if (rc["rc-identity"] === true) {
@@ -291,7 +329,7 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-oc-url" &&
       n !== "rc-oc-model" &&
       n !== "rc-oc-session" &&
-      n !== "rc-oc-skip-permissions" &&
+      n !== "rc-oc-mirror-permissions" &&
       n !== "rc-session-hook" &&
       n !== "rc-no-session-hook" &&
       n !== "rc-tmux-skip-permissions" &&
@@ -318,28 +356,34 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
   // instead of producing a synchronous spawn("") throw.
   const bin = opts.claudeBin || process.env.RC_CLAUDE_BIN || "claude";
 
+  const driver = (
+    (typeof rc["rc-driver"] === "string" ? rc["rc-driver"] : "").trim() ||
+    (process.env.RC_DRIVER ?? "").trim() ||
+    "mitm"
+  ).toLowerCase();
+
   // Remote control needs a broker to relay to (`--rc-app` / RC_APP). With one configured, launch the
   // selected capture/inject driver and wire its sessions into the broker (§3.1). Without one, there's
-  // nothing to relay to — run claude transparently (identical to plain `claude`). A bare `--help`
-  // short-circuits the launch: never create an identity or start a driver just to print claude's help —
-  // fall through to a plain spawn.
+  // nothing to relay to — ordinary legacy flags still run claude transparently. An explicit attach
+  // request must never degrade into a new plain-Claude process, including on a help invocation.
   const rcApp = (typeof rc["rc-app"] === "string" ? rc["rc-app"] : "") || process.env.RC_APP || "";
+  if (rcApp === "" && hasOpencodeIntent(rc, driver)) {
+    warn(
+      "remote-claw: OpenCode attach configuration requires --rc-app (or RC_APP); refusing to launch plain claude\n",
+    );
+    return 2;
+  }
   if (rcApp === "" && typeof rc["rc-native-session"] === "string" && !helpWanted) {
     // Unlike the legacy launch flags, an explicit attach request must not degrade to spawning a new
     // plain Claude when its broker origin is missing.
     warn("remote-claw: --rc-native-session requires --rc-app (or RC_APP)\n");
     return 2;
   }
-  if (rcApp !== "" && !helpWanted) {
+  if (rcApp !== "" && (!helpWanted || driver === "opencode")) {
     // Which capture/inject driver runs the harness: --rc-driver / RC_DRIVER, default "mitm" (the real
     // claude behind our MITM). tmux runs a PLAIN claude in a tmux pane and bridges via the transcript
     // (provider-agnostic, Bedrock-capable — no MITM); opencode peer-attaches to an opencode server. All
     // three bridge to the SAME broker via the pluggable seam (driver.ts).
-    const driver = (
-      (typeof rc["rc-driver"] === "string" ? rc["rc-driver"] : "").trim() ||
-      (process.env.RC_DRIVER ?? "").trim() ||
-      "mitm"
-    ).toLowerCase();
     if (
       typeof rc["rc-native-session"] === "string" &&
       driver !== "claude-native" &&
@@ -582,29 +626,61 @@ async function runOpencodeDriverPath(
   opts: RunOptions,
   warn: (line: string) => void,
 ): Promise<number> {
-  // OpenCode server origin (--rc-oc-url, else OPENCODE_URL, else the default loopback). The model is
-  // "providerID/modelID" (--rc-oc-model, else RC_OC_MODEL, else the bedrock-sonnet default — a reliable
-  // tool-caller via the region-agnostic `global.` profile; the opencode server supplies AWS creds).
-  const baseUrl =
-    (typeof rc["rc-oc-url"] === "string" ? rc["rc-oc-url"] : "").trim() ||
-    (process.env.OPENCODE_URL ?? "").trim() ||
-    undefined;
+  // This compatibility release is deliberately one tuple, not a platform/version/model matrix. Every
+  // usage/configuration check stays ahead of identity creation, git inspection, broker construction,
+  // and the driver's native health probe.
+  if (claudeArgs.length > 0) {
+    warn(
+      "remote-claw: --rc-driver=opencode attaches a companion only; remove forwarded arguments\n",
+    );
+    return 2;
+  }
+  const runtime = opts.runtime ?? { platform: process.platform, arch: process.arch };
+  if (runtime.platform !== "linux" || runtime.arch !== "arm64") {
+    warn("remote-claw: --rc-driver=opencode requires the supported Linux arm64 release tuple\n");
+    return 2;
+  }
+
+  const configuredUrl =
+    (typeof rc["rc-oc-url"] === "string" ? rc["rc-oc-url"] : undefined) ??
+    process.env.OPENCODE_URL ??
+    DEFAULT_OPENCODE_URL;
+  let baseUrl: string;
+  try {
+    baseUrl = normalizeOpencodeBaseUrl(configuredUrl);
+  } catch {
+    warn(
+      "remote-claw: --rc-oc-url / OPENCODE_URL must be an explicit-port HTTP origin on 127.0.0.1 or [::1], with no credentials, path, query, or fragment\n",
+    );
+    return 2;
+  }
+
+  const supportedModel = `${DEFAULT_OPENCODE_MODEL.providerID}/${DEFAULT_OPENCODE_MODEL.modelID}`;
   const modelStr =
-    (typeof rc["rc-oc-model"] === "string" ? rc["rc-oc-model"] : "").trim() ||
-    (process.env.RC_OC_MODEL ?? "").trim();
-  const slash = modelStr.indexOf("/");
-  const model =
-    slash > 0
-      ? { providerID: modelStr.slice(0, slash), modelID: modelStr.slice(slash + 1) }
-      : DEFAULT_OPENCODE_MODEL;
-  const password = (process.env.OPENCODE_SERVER_PASSWORD ?? "").trim() || undefined;
-  // Which OpenCode session to attach to (--rc-oc-session, else RC_OC_SESSION). The driver confirms an
-  // explicit canonical ID exactly. If omitted, only a valid empty discovery snapshot permits creation;
-  // an existing-session list is ambiguous and fails closed.
+    (typeof rc["rc-oc-model"] === "string" ? rc["rc-oc-model"] : undefined) ??
+    process.env.RC_OC_MODEL ??
+    supportedModel;
+  if (modelStr !== supportedModel) {
+    warn(`remote-claw: --rc-oc-model / RC_OC_MODEL must be exactly ${supportedModel}\n`);
+    return 2;
+  }
+
   const ocSessionId =
-    (typeof rc["rc-oc-session"] === "string" ? rc["rc-oc-session"] : "").trim() ||
-    (process.env.RC_OC_SESSION ?? "").trim() ||
-    undefined;
+    (typeof rc["rc-oc-session"] === "string" ? rc["rc-oc-session"] : undefined) ??
+    process.env.RC_OC_SESSION;
+  if (!isOpencodeSessionId(ocSessionId)) {
+    warn(
+      "remote-claw: --rc-oc-session (or RC_OC_SESSION) is required and must be a canonical ses_* session id\n",
+    );
+    return 2;
+  }
+
+  const username = process.env.OPENCODE_SERVER_USERNAME ?? "opencode";
+  // Presence, including an intentionally empty value, is meaningful. Never trim or interpolate this
+  // credential into diagnostics.
+  const password = process.env.OPENCODE_SERVER_PASSWORD;
+  const mirrorPermissions =
+    rc["rc-oc-mirror-permissions"] === true || process.env.RC_OC_MIRROR_PERMISSIONS === "1";
 
   try {
     const ctx = await createDriverContext({
@@ -613,15 +689,13 @@ async function runOpencodeDriverPath(
       harnessArgs: claudeArgs,
       tracerTarget: "rc.opencode",
       extra: {
-        ...(baseUrl !== undefined ? { baseUrl } : {}),
-        model,
+        baseUrl,
+        model: DEFAULT_OPENCODE_MODEL,
+        username,
         ...(password !== undefined ? { password } : {}),
-        ...(ocSessionId !== undefined ? { sessionId: ocSessionId } : {}),
-        // Permission MIRRORING is on unless the user explicitly opts out.
-        mirrorPermissions: resolveMirrorPermissions({
-          skipFlag: rc["rc-oc-skip-permissions"] === true,
-          env: process.env.RC_OC_SKIP_PERMISSIONS,
-        }),
+        sessionId: ocSessionId,
+        // Default is no native permission mutation; this is an explicit experimental positive opt-in.
+        mirrorPermissions,
       },
     });
 

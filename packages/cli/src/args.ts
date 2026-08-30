@@ -48,19 +48,20 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   "rc-native-session": "value",
   // OpenCode driver knobs (only meaningful with --rc-driver=opencode). The server origin
   // (default 127.0.0.1:4096, env OPENCODE_URL) and the model as "providerID/modelID" (default
-  // amazon-bedrock/global.anthropic.claude-sonnet-4-6, env RC_OC_MODEL — a reliable tool-caller; the
-  // opencode server supplies AWS creds, and the `global.` profile needs no region).
+  // amazon-bedrock/global.anthropic.claude-sonnet-4-6, env RC_OC_MODEL — a reliable tool-caller). The
+  // opencode server supplies the AWS region and credentials; `global.` selects a cross-region model but
+  // does not remove the AWS SDK's region requirement.
   "rc-oc-url": "value",
   "rc-oc-model": "value",
-  // Which OpenCode session to ATTACH to (env RC_OC_SESSION). The configured canonical `ses_…` must
-  // exist exactly. When omitted, the driver creates one only after a valid empty discovery response;
-  // one or more existing sessions are ambiguous and require this flag.
+  // Which OpenCode session to ATTACH to (env RC_OC_SESSION). The supported path requires one exact,
+  // already-live canonical `ses_…`; it never discovers, selects, or creates a native session.
   "rc-oc-session": "value",
-  // opencode driver only: opt OUT of native permission mirroring (the driver adds a catch-all "ask"
-  // rule so otherwise-unconfigured tools raise a viewer gate). DEFAULT ON; the opt-out SKIPS that
-  // ask-PATCH and leaves the session's own permission config untouched — so opencode behaves exactly
-  // as it would unbridged (auto-run, UNLESS the session already carries its own rules).
-  // Env RC_OC_SKIP_PERMISSIONS truthy ("1"/"true"/"yes"/"on").
+  // OpenCode driver only: EXPERIMENTAL positive opt-in to native permission mirroring. The supported
+  // default leaves the externally owned session's permission policy untouched. Env opt-in:
+  // RC_OC_MIRROR_PERMISSIONS=1.
+  "rc-oc-mirror-permissions": "boolean",
+  // Retained only so an invocation of the retired inverse flag gets a precise usage error instead of
+  // becoming an unknown flag. No code path consumes it as configuration.
   "rc-oc-skip-permissions": "boolean",
   // tmux driver only: control whether the private SessionStart marker remains the authoritative source
   // for ongoing exact transcript discovery + rotation-follow (/clear, /compact, resume). DEFAULT ON;

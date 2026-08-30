@@ -26,7 +26,7 @@ mostly ordering, recovery, and deployment edges:
 The concrete protocol and storage boundaries above have focused regression tests in clawsec, the CLI
 relay/session/launch suites, and the web broker/route suites. Deployment-only preconditions such as an
 external handoff rate limit require the named conditional outside-in procedure in the current
-[test plan](test-plan.md#56-handoff-waf--conditional-on-enabling-handoff); this archive is not evidence
+[test plan](test-plan.md#56-handoff-enablement-disclosure-plus-waf); this archive is not evidence
 that every operational conclusion is reproducible in-process.
 
 ## What is superseded
@@ -40,8 +40,9 @@ still replaces Anthropic Remote Control, and `--rc-trace` is passive. Since this
 `--rc-driver=claude-native` has implemented structured native-RC text coexistence plus an explicit
 exact-session, fresh-projection restart path. This archive intentionally does not duplicate the live
 acceptance ledger; current evidence and remaining gates are maintained in
-[Product goal and release gates](release-finish-line.md). Later OpenCode, Codex, tmux, and inference
-milestones retain their own acceptance scenarios.
+[Product goal and release gates](release-finish-line.md). The pinned OpenCode M2 text/interrupt tuple
+has since completed; broader OpenCode, Codex, tmux, and inference milestones retain their own
+acceptance scenarios.
 
 ## Current reproduction
 

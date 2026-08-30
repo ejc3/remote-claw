@@ -22,9 +22,9 @@ function listedFiles(config: string): string[] {
   return (JSON.parse(result.stdout) as Array<{ file: string }>).map(({ file }) => file);
 }
 
-// Guards the silent regression where the live opencode e2e's exact opt-in/model controls get scrubbed
-// (so it never runs, or runs against the wrong provider). CI has no opencode server, so this unit test
-// owns that setup boundary.
+// Guards the silent regression where the live opencode e2e's exact opt-in/session controls get scrubbed
+// (so it never runs, or attaches to no caller-selected native session). CI has no opencode server, so
+// this unit test owns that setup boundary.
 describe("shouldScrubEnvKey", () => {
   it("scrubs wrapper-launch RC_* vars", () => {
     expect(shouldScrubEnvKey("RC_APP")).toBe(true);
@@ -35,7 +35,8 @@ describe("shouldScrubEnvKey", () => {
 
   it("preserves only the live-e2e controls that the suite reads", () => {
     expect(shouldScrubEnvKey("RC_OPENCODE_E2E_RUN")).toBe(false);
-    expect(shouldScrubEnvKey("RC_OPENCODE_E2E_MODEL")).toBe(false);
+    expect(shouldScrubEnvKey("RC_OPENCODE_E2E_SESSION")).toBe(false);
+    expect(shouldScrubEnvKey("RC_OPENCODE_E2E_MODEL")).toBe(true);
     expect(shouldScrubEnvKey("RC_OPENCODE_E2E_UNUSED")).toBe(true);
   });
 

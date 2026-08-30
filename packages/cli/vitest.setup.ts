@@ -1,7 +1,7 @@
 // Test bootstrap, run once before any test (vitest.config.ts setupFiles).
 //
 // 1. Load `.env.local` (gitignored) so the LIVE opencode e2e (driver.e2e.test.ts) is reproducible on
-//    another machine: drop OPENCODE_URL / RC_OPENCODE_E2E_MODEL there once instead of exporting them
+//    another machine: drop OPENCODE_URL / RC_OPENCODE_E2E_SESSION there once instead of exporting them
 //    each run. Precedence is shell-WINS. The dedicated package script owns the exact RUN opt-in; ordinary
 //    Vitest excludes the live file even if that variable is present.
 // 2. Scrub ambient RC_* vars (whether from the shell OR .env.local) so tests never take the real

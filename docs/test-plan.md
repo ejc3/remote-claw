@@ -6,8 +6,9 @@ tested, not that one script vouched for another script.
 
 The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude text, literal official
 web UI coexistence on the user's phone, fresh-projection restart, broker-loss isolation, packed install,
-bounded credential/storage checks, and exact-SHA deployed Preview are green. OpenCode M2 is active.
-Maintained tmux support waits for M4. See
+bounded credential/storage checks, and exact-SHA deployed Preview are green. The pinned OpenCode M2
+text/interrupt tuple and its real-TUI/two-browser acceptance are also green. Codex M3a is next;
+maintained tmux support waits for M4. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
 
 ## 1. Gate policy
@@ -82,7 +83,8 @@ pnpm --filter @remote-claw/web run test:run
 | Broker transport | <code>packages/cli/src/broker/*.test.ts</code> | Authenticated HTTP/SSE, retries, ordering, and cursor handling |
 | Claude private facade | <code>packages/cli/src/host/rc/mitm*.test.ts</code>, <code>session.test.ts</code>, <code>relay.test.ts</code>, <code>launch.test.ts</code> | Strict native intake, worker delivery, translation, fail-stop, and child isolation |
 | Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, exact launch/attach binding, subscribe/history reconciliation, provider-coordinate dedup, fresh-projection restart, conservative writes, and native/projection isolation |
-| Alternate adapters and inference | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, <code>opencode/*.test.ts</code>, <code>bedrock/*.test.ts</code> | Current adapter-local contracts and honest capability limits; not full-product parity |
+| Pinned OpenCode adapter | <code>packages/cli/src/host/rc/opencode/*.test.ts</code>, focused relay/viewer tests | Exact-session capture, native coordinates and parents, marker correlation, FIFO idle admission, reconnect fencing, interrupt, restart projection, and honest capabilities for the supported M2 tuple |
+| Experimental adapters and inference | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, <code>bedrock/*.test.ts</code> | Current adapter-local contracts and honest capability limits; not full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
 | HTTP routes | <code>apps/web/test/api/*.test.ts</code>, <code>auth.test.ts</code> | Bearer binding, route validation, error mapping, handoff semantics |
 | In-process spine | <code>apps/web/test/e2e/*.integration.test.ts</code> | Host, crypto, real broker routes, Workflow runtime, and viewer with only the model faked |
@@ -165,11 +167,14 @@ ordinary tests:
 
 ~~~bash
 OPENCODE_URL=http://127.0.0.1:4096 \
+RC_OPENCODE_E2E_SESSION=ses_0123456789abcdef \
 pnpm --filter @remote-claw/cli run test:opencode-live
 ~~~
 
 The package script sets `RC_OPENCODE_E2E_RUN=1`; without that exact opt-in the live file skips before
-any network call. Once opted in, an unreachable declared target is a failure.
+any network call. Once opted in, an unreachable declared target is a failure. This is a narrow
+driver/native-seam regression with model-bearing turns; it does not replace the completed
+real-TUI/two-browser M2 product acceptance.
 
 Bedrock and accountless changes require an explicitly credentialed provider smoke before release of
 those surfaces. Accountless means no Anthropic account; the smoke must still prove the expected
@@ -326,23 +331,33 @@ forwarded Claude arguments. Neither may use the default <code>--rc-driver=mitm</
 <code>runRcLaunch</code> replacement path: it cannot satisfy official-client coexistence by design, and
 trace mode cannot connect remote-claw browsers.
 
-M1 is complete. CI green still does not mean the OpenCode, Codex, tmux, Bedrock/accountless, or full
-product matrix is complete.
+M1 is complete. CI green still does not mean Codex, broader OpenCode tuples, tmux,
+Bedrock/accountless, or the full product matrix is complete.
 
-## 8. Remaining adapter acceptance
+## 8. OpenCode M2 and remaining adapter acceptance
+
+On 2026-08-30, the exact supported OpenCode 1.17.5/Linux arm64/Bedrock Sonnet tuple passed with the
+real TUI and two independent browser contexts. Its OpenCode server used `AWS_REGION=us-west-1` plus
+explicit temporary SigV4 credential environment values; other regions or credential modes need their
+own gate. OpenCode generated the ordered native IDs; browser A and B correlated through their exact
+`prt_rc_*` markers. TUI/browser turns appeared once, reload left the native-history SHA-256 unchanged,
+a browser interrupted a genuinely busy turn and then completed a later turn, and companion-only
+restart against the same `ses_*` created a fresh projection with the identical history SHA-256 and
+every old command once. Deterministic tests own malformed or reused coordinates, parent/order rules,
+FIFO and busy/retry admission, local-user exclusion, live-idle history/status reproof,
+reconnect-before-write, ambiguous writes, broker projection loss, and no teardown abort.
 
 The later milestones use the same shared security checks but keep product-specific truth:
 
 | Surface | Required real outcome |
 | --- | --- |
-| OpenCode | Exact 1.17.5 local TUI plus two browsers on one explicitly named session; unique TUI/browser labels appear once in native history/TUI and both browsers; non-empty non-slash text, interrupt, literal-loopback origin trust, SSE/history reconnect, reload, fresh-projection restart, and broker-loss isolation match the advertised capability set; prompt/interrupt ambiguity fences without replay or later writes; the supported path does not mutate permission policy, structured permissions are false, and the viewer labels permission handling native/local rather than “permissions off” |
-| Codex | M3a proves a current-version local TUI plus two browsers on one app-server thread; uniquely labeled text from the TUI and each browser appears exactly once everywhere; one native approval and one native question are separately answered in the local TUI while the companion emits no answer/error and neither steals nor strands them; the viewer labels that posture local/native or rejects the tuple; M3b separately proves Codex/ChatGPT Remote coexistence through a currently supported provider boundary |
+| OpenCode beyond M2 | Each added version, platform, model, permission/control family, or native collaboration surface needs its own exact tuple and bounded outcome; it does not reopen the completed text/interrupt tuple |
+| Codex | M3a proves a current-version local TUI plus two browsers on one app-server thread; uniquely labeled text from the TUI and each browser appears exactly once everywhere; one native approval and one native question are separately answered in the local TUI while the companion emits no answer/error and neither steals nor strands them; the viewer labels that posture local/native or rejects the tuple; M3b separately proves same-thread coexistence with the current Codex Remote topology |
 | tmux | Recoverable local pane plus two browsers, with conservative injection states and no claim of independent peer ordering or exactly-once native application; any advertised Claude Remote coexistence uses the official Claude client UI |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 
-OpenCode creation is not part of the M2 real outcome. One focused deterministic
-committed-but-response-lost regression retains the existing create implementation's fail-closed
-unannounced/no-guess/no-recreate boundary for future use.
+OpenCode creation is not part of the M2 release path. The client's retained create helper and its
+focused ambiguity regression are future plumbing, not an advertised capability.
 
 Passing one row does not turn an untested row green. Agent collaboration and inference routing are
 orthogonal, so a Bedrock model response does not prove OpenCode/Claude collaboration and vice versa.

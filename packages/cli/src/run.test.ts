@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DriverContext } from "./host/rc/driver.js";
 import { misappliedDriverFlagWarnings, runWrapper } from "./run.js";
 
@@ -24,7 +24,46 @@ function recordingSpawn(exitCode = 0) {
   return { fn, calls };
 }
 
+const OPENCODE_ENV_KEYS = [
+  "RC_DRIVER",
+  "OPENCODE_URL",
+  "RC_OC_MODEL",
+  "RC_OC_SESSION",
+  "RC_OC_MIRROR_PERMISSIONS",
+  "OPENCODE_SERVER_USERNAME",
+  "OPENCODE_SERVER_PASSWORD",
+] as const;
+
+function clearOpencodeEnv(): () => void {
+  const previous = new Map<string, string | undefined>();
+  for (const key of OPENCODE_ENV_KEYS) {
+    previous.set(key, process.env[key]);
+    delete process.env[key];
+  }
+  return () => {
+    for (const key of OPENCODE_ENV_KEYS) {
+      const value = previous.get(key);
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+}
+
 describe("runWrapper (functional)", () => {
+  // OpenCode's non-RC environment variables intentionally remain available to the opt-in live suite,
+  // so the package-wide Vitest bootstrap cannot scrub them. Keep this functional unit suite hermetic
+  // instead: an ambient OPENCODE_URL/password from a developer shell must not turn an unrelated plain
+  // Claude test into an OpenCode attach request. Individual OpenCode cases can still set exactly the
+  // values they exercise, and the outer restore preserves the caller's shell after each test.
+  let restoreAmbientOpencodeEnv: (() => void) | undefined;
+  beforeEach(() => {
+    restoreAmbientOpencodeEnv = clearOpencodeEnv();
+  });
+  afterEach(() => {
+    restoreAmbientOpencodeEnv?.();
+    restoreAmbientOpencodeEnv = undefined;
+  });
+
   it("forwards claude args to the resolved binary and returns its exit code", async () => {
     const { fn, calls } = recordingSpawn(0);
     const code = await runWrapper(["chat", "--model", "opus"], {
@@ -105,6 +144,100 @@ describe("runWrapper (functional)", () => {
     expect(out.join("")).toContain("remote-claw"); // our --rc-* banner printed first
     expect(out.join("")).toMatch(/--rc-identity/);
     expect(calls).toEqual([{ bin: "claude", args: ["--help"] }]); // claude still gets --help
+  });
+
+  it.each([
+    ["driver flag", ["--rc-driver", "opencode"], undefined],
+    ["URL flag", ["--rc-oc-url", "http://127.0.0.1:4096"], undefined],
+    ["model flag", ["--rc-oc-model", "provider/model"], undefined],
+    ["session flag", ["--rc-oc-session", "ses_test"], undefined],
+    ["permission flag", ["--rc-oc-mirror-permissions"], undefined],
+    ["driver env", [], ["RC_DRIVER", "opencode"]],
+    ["URL env", [], ["OPENCODE_URL", "http://127.0.0.1:4096"]],
+    ["model env", [], ["RC_OC_MODEL", "provider/model"]],
+    ["session env", [], ["RC_OC_SESSION", "ses_test"]],
+    ["permission env", [], ["RC_OC_MIRROR_PERMISSIONS", "0"]],
+    ["username env", [], ["OPENCODE_SERVER_USERNAME", "opencode"]],
+    ["empty password env", [], ["OPENCODE_SERVER_PASSWORD", ""]],
+  ] as const)("rejects OpenCode intent from %s without a broker instead of spawning plain Claude", async (_name, args, envEntry) => {
+    const restoreEnv = clearOpencodeEnv();
+    const { fn, calls } = recordingSpawn();
+    const rcLaunchSpy = vi.fn(async () => 0);
+    const driverSpy = vi.fn(async () => 0);
+    const lines: string[] = [];
+    try {
+      if (envEntry !== undefined) process.env[envEntry[0]] = envEntry[1];
+      const code = await runWrapper([...args], {
+        spawnFn: fn,
+        spawnRcEnv: rcLaunchSpy,
+        runOpencodeDriver: driverSpy,
+        stderr: (line) => lines.push(line),
+      });
+
+      expect(code).toBe(2);
+      expect(calls).toEqual([]);
+      expect(rcLaunchSpy).not.toHaveBeenCalled();
+      expect(driverSpy).not.toHaveBeenCalled();
+      expect(lines).toEqual([
+        "remote-claw: OpenCode attach configuration requires --rc-app (or RC_APP); refusing to launch plain claude\n",
+      ]);
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  it("--rc-driver=opencode --help prints wrapper help but never spawns Claude or the driver", async () => {
+    const restoreEnv = clearOpencodeEnv();
+    const { fn, calls } = recordingSpawn();
+    const rcLaunchSpy = vi.fn(async () => 0);
+    const driverSpy = vi.fn(async () => 0);
+    const out: string[] = [];
+    try {
+      const code = await runWrapper(["--rc-driver", "opencode", "--help"], {
+        spawnFn: fn,
+        spawnRcEnv: rcLaunchSpy,
+        runOpencodeDriver: driverSpy,
+        stdout: (line) => out.push(line),
+        stderr: () => {},
+      });
+
+      expect(code).toBe(2);
+      expect(out.join("")).toContain("remote-claw");
+      expect(calls).toEqual([]);
+      expect(rcLaunchSpy).not.toHaveBeenCalled();
+      expect(driverSpy).not.toHaveBeenCalled();
+    } finally {
+      restoreEnv();
+    }
+  });
+
+  it("OpenCode plus a broker and --help still cannot fall through to plain Claude", async () => {
+    const restoreEnv = clearOpencodeEnv();
+    const { fn, calls } = recordingSpawn();
+    const rcLaunchSpy = vi.fn(async () => 0);
+    const driverSpy = vi.fn(async () => 0);
+    const lines: string[] = [];
+    try {
+      const code = await runWrapper(
+        ["--rc-app", "https://broker.example", "--rc-driver", "opencode", "--help"],
+        {
+          runtime: { platform: "linux", arch: "arm64" },
+          spawnFn: fn,
+          spawnRcEnv: rcLaunchSpy,
+          runOpencodeDriver: driverSpy,
+          stdout: () => {},
+          stderr: (line) => lines.push(line),
+        },
+      );
+
+      expect(code).toBe(2);
+      expect(lines.join("")).toMatch(/remove forwarded arguments/);
+      expect(calls).toEqual([]);
+      expect(rcLaunchSpy).not.toHaveBeenCalled();
+      expect(driverSpy).not.toHaveBeenCalled();
+    } finally {
+      restoreEnv();
+    }
   });
 
   it("runs the local identity action without spawning Claude", async () => {
@@ -302,14 +435,12 @@ describe("runWrapper (functional)", () => {
     const secret = join(dir, "secret");
     const fetchSpy = vi.fn(() => Promise.reject(new Error("unexpected network call")));
     vi.stubGlobal("fetch", fetchSpy);
+    const restoreEnv = clearOpencodeEnv();
     let seenContext: DriverContext | undefined;
     let seenSignal: AbortSignal | undefined;
     try {
       const code = await runWrapper(
         [
-          "chat",
-          "--model",
-          "host-arg",
           "--rc-file",
           secret,
           "--rc-app",
@@ -321,12 +452,13 @@ describe("runWrapper (functional)", () => {
           "--rc-oc-url",
           "http://127.0.0.1:44096",
           "--rc-oc-model",
-          "provider/model",
+          "amazon-bedrock/global.anthropic.claude-sonnet-4-6",
           "--rc-oc-session",
           "ses_test",
-          "--rc-oc-skip-permissions",
+          "--rc-oc-mirror-permissions",
         ],
         {
+          runtime: { platform: "linux", arch: "arm64" },
           runOpencodeDriver: async (ctx, signal) => {
             seenContext = ctx;
             seenSignal = signal;
@@ -341,14 +473,18 @@ describe("runWrapper (functional)", () => {
       expect(seenContext).toMatchObject({
         brokerUrl: "https://broker.example",
         backend: "sqlite",
-        harnessArgs: ["chat", "--model", "host-arg"],
+        harnessArgs: [],
         title: "remote-claw",
         cwd: process.cwd(),
         extra: {
           baseUrl: "http://127.0.0.1:44096",
-          model: { providerID: "provider", modelID: "model" },
+          model: {
+            providerID: "amazon-bedrock",
+            modelID: "global.anthropic.claude-sonnet-4-6",
+          },
           sessionId: "ses_test",
-          mirrorPermissions: false,
+          username: "opencode",
+          mirrorPermissions: true,
         },
       });
       expect(seenContext?.harnessBin).toBeUndefined();
@@ -357,6 +493,167 @@ describe("runWrapper (functional)", () => {
       expect(typeof seenContext?.newClient).toBe("function");
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
+      restoreEnv();
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves OpenCode Basic-auth configuration and enables the env opt-in exactly at 1", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-opencode-auth-"));
+    const secret = join(dir, "secret");
+    const restoreEnv = clearOpencodeEnv();
+    const password = "  secret\tvalue  ";
+    process.env.RC_OC_SESSION = "ses_auth1";
+    process.env.RC_OC_MIRROR_PERMISSIONS = "1";
+    process.env.OPENCODE_SERVER_USERNAME = "alice";
+    process.env.OPENCODE_SERVER_PASSWORD = password;
+    let seenContext: DriverContext | undefined;
+    const lines: string[] = [];
+    try {
+      const code = await runWrapper(
+        ["--rc-file", secret, "--rc-app", "https://broker.example", "--rc-driver", "opencode"],
+        {
+          runtime: { platform: "linux", arch: "arm64" },
+          stderr: (line) => lines.push(line),
+          runOpencodeDriver: async (ctx) => {
+            seenContext = ctx;
+            return 0;
+          },
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(seenContext?.extra).toMatchObject({
+        baseUrl: "http://127.0.0.1:4096",
+        sessionId: "ses_auth1",
+        username: "alice",
+        password,
+        mirrorPermissions: true,
+      });
+      expect(lines.join("")).not.toContain(password);
+    } finally {
+      restoreEnv();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves OpenCode native permission policy untouched by default", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-opencode-default-perm-"));
+    const secret = join(dir, "secret");
+    const restoreEnv = clearOpencodeEnv();
+    let seenContext: DriverContext | undefined;
+    try {
+      const code = await runWrapper(
+        [
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-driver",
+          "opencode",
+          "--rc-oc-session",
+          "ses_default1",
+        ],
+        {
+          runtime: { platform: "linux", arch: "arm64" },
+          runOpencodeDriver: async (ctx) => {
+            seenContext = ctx;
+            return 0;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(seenContext?.extra?.mirrorPermissions).toBe(false);
+    } finally {
+      restoreEnv();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects the retired OpenCode inverse flag with the no-mutation-default guidance", async () => {
+    const { fn, calls } = recordingSpawn();
+    const lines: string[] = [];
+    const code = await runWrapper(["--rc-oc-skip-permissions"], {
+      spawnFn: fn,
+      stderr: (line) => lines.push(line),
+    });
+    expect(code).toBe(2);
+    expect(calls).toEqual([]);
+    expect(lines.join("")).toMatch(/--rc-oc-skip-permissions is retired/);
+    expect(lines.join("")).toMatch(/not mutated by default/);
+    expect(lines.join("")).toMatch(/--rc-oc-mirror-permissions/);
+  });
+
+  it.each([
+    {
+      name: "forwarded arguments",
+      extra: ["chat", "--rc-oc-session", "ses_good1"],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /remove forwarded arguments/,
+    },
+    {
+      name: "unsupported platform",
+      extra: ["--rc-oc-session", "ses_good1"],
+      runtime: { platform: "linux" as const, arch: "x64" },
+      error: /requires the supported Linux arm64 release tuple/,
+    },
+    {
+      name: "missing exact session",
+      extra: [],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /is required and must be a canonical ses_\* session id/,
+    },
+    {
+      name: "malformed session",
+      extra: ["--rc-oc-session", "ses_bad-id"],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /canonical ses_\* session id/,
+    },
+    {
+      name: "non-loopback URL",
+      extra: ["--rc-oc-session", "ses_good1", "--rc-oc-url", "http://localhost:4096"],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /explicit-port HTTP origin on 127\.0\.0\.1 or \[::1\]/,
+    },
+    {
+      name: "non-pinned model",
+      extra: ["--rc-oc-session", "ses_good1", "--rc-oc-model", "provider/model"],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /must be exactly amazon-bedrock\/global\.anthropic\.claude-sonnet-4-6/,
+    },
+  ])("rejects OpenCode $name before identity or network", async ({ extra, runtime, error }) => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-opencode-invalid-"));
+    const secret = join(dir, "secret");
+    const restoreEnv = clearOpencodeEnv();
+    const fetchSpy = vi.fn(() => Promise.reject(new Error("unexpected network call")));
+    const driverSpy = vi.fn(async () => 0);
+    vi.stubGlobal("fetch", fetchSpy);
+    const lines: string[] = [];
+    try {
+      const code = await runWrapper(
+        [
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-driver",
+          "opencode",
+          ...extra,
+        ],
+        {
+          runtime,
+          stderr: (line) => lines.push(line),
+          runOpencodeDriver: driverSpy,
+        },
+      );
+      expect(code).toBe(2);
+      expect(lines.join("")).toMatch(error);
+      expect(existsSync(secret)).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(driverSpy).not.toHaveBeenCalled();
+    } finally {
+      restoreEnv();
       vi.unstubAllGlobals();
       rmSync(dir, { recursive: true, force: true });
     }
@@ -701,7 +998,7 @@ describe("runWrapper (functional)", () => {
   );
 
   it.skipIf(!haveOpenssl())(
-    "warns that --rc-oc-skip-permissions is a no-op for a non-opencode driver (here: mitm)",
+    "warns that --rc-oc-mirror-permissions is a no-op for a non-opencode driver (here: mitm)",
     async () => {
       const dir = mkdtempSync(join(tmpdir(), "rc-run-ocwarn-"));
       const secret = join(dir, "secret");
@@ -714,7 +1011,7 @@ describe("runWrapper (functional)", () => {
             secret,
             "--rc-app",
             "http://broker.example",
-            "--rc-oc-skip-permissions",
+            "--rc-oc-mirror-permissions",
           ],
           {
             claudeCompatibilityCheck: async () => {},
@@ -724,7 +1021,7 @@ describe("runWrapper (functional)", () => {
         );
         expect(code).toBe(0); // a harmless no-op on mitm — we warn, we do NOT fail
         expect(lines.join("")).toMatch(
-          /--rc-oc-skip-permissions only applies to --rc-driver=opencode; ignored for mitm/,
+          /--rc-oc-mirror-permissions only applies to --rc-driver=opencode; ignored for mitm/,
         );
       } finally {
         rmSync(dir, { recursive: true, force: true });
@@ -732,19 +1029,19 @@ describe("runWrapper (functional)", () => {
     },
   );
 
-  it("an UNKNOWN driver with --rc-oc-skip-permissions gets ONLY the unknown-driver error (no double warn)", async () => {
+  it("an UNKNOWN driver with --rc-oc-mirror-permissions gets ONLY the unknown-driver error (no double warn)", async () => {
     const { fn, calls } = recordingSpawn();
     const lines: string[] = [];
-    // Allowlist-gated warn: the oc-skip-permissions nag must NOT fire for an unknown driver — that path
-    // already errors on its own. Otherwise the user sees two messages for one mistake.
+    // Allowlist-gated warning: the OpenCode permission nag must NOT fire for an unknown driver — that
+    // path already errors on its own. Otherwise the user sees two messages for one mistake.
     const code = await runWrapper(
-      ["--rc-app", "http://b", "--rc-driver", "bogus", "--rc-oc-skip-permissions"],
+      ["--rc-app", "http://b", "--rc-driver", "bogus", "--rc-oc-mirror-permissions"],
       { spawnFn: fn, stderr: (l) => lines.push(l) },
     );
     expect(code).toBe(2);
     expect(calls).toHaveLength(0);
     expect(lines.join("")).toMatch(/unknown --rc-driver=bogus/);
-    expect(lines.join("")).not.toMatch(/--rc-oc-skip-permissions only applies/); // no second message
+    expect(lines.join("")).not.toMatch(/--rc-oc-mirror-permissions only applies/); // no second message
   });
 });
 
