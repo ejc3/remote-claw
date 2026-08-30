@@ -2,10 +2,11 @@
 
 **Status: the full product is not implemented.** The shared crypto, broker, browser, and Claude
 private-relay path work. OpenCode, tmux, Bedrock, and accountless paths have useful implementations
-and evidence with narrower guarantees. M1's Linux/exact-2.1.237 structured text companion is now
-implemented. A bounded 2026-08-30 run proved the local TUI, an authenticated Anthropic RC API client,
-and two remote-claw browsers on one provider session. Literal official-app UI validation and the M1
-Graduate gates remain open.
+and evidence with narrower guarantees. M1's Linux/exact-2.1.237 structured text companion and explicit
+same-native-session restart attachment are implemented. Bounded 2026-08-30 runs proved the local TUI,
+an authenticated Anthropic RC API client, two remote-claw browsers, fresh-projection restart,
+broker-loss isolation, installed-package use, and a bounded exact-value/log and raw-storage scan.
+Literal official-app UI validation and the exact-SHA deployed Preview gate remain open.
 
 The active milestone is finishing Claude native coexistence. It is not the entire product or a reason
 to discard the other surfaces.
@@ -108,7 +109,7 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 | Shared broker/browser/security | Sealed frames, identity/pass derivation, durable replay, multi-viewer state, capability gating, and fail-stop behavior | Exercise the same boundaries through each production adapter |
 | Claude private relay | Real Claude behind a local RC façade; browser turns and native output cross the broker | It replaces Anthropic RC, so the official client cannot join |
 | Claude trace | Normal Anthropic RC and official-client control with protocol observation | It does not project to or accept commands from remote-claw browsers |
-| Claude native companion | Exact bridge binding, subscribe-before-history reconciliation, provider-ordered text projection/injection, host-only OAuth, two-browser capability gating, and fail-stop ambiguity handling on Linux with exact Claude 2.1.237 | Literal official-app UI validation, fresh-projection restart/reattach, broker-loss/log/install proof, and deployed exact-SHA acceptance |
+| Claude native companion | Exact launch binding or explicit exact-ID attach-only restart, subscribe-before-history reconciliation, provider-ordered text projection/injection, host-only OAuth, two-browser capability gating, fail-stop ambiguity handling, broker-loss isolation, and installed-package evidence on Linux with exact Claude 2.1.237 | Literal official-app UI validation and deployed exact-SHA acceptance |
 | OpenCode | Experimental server adapter with history/SSE capture, text injection, permissions, and capability limits | Real TUI coexistence, durable binding/recovery, ambiguity handling, and supported release matrix |
 | Codex | Pinned evidence that multiple app-server clients can share one native thread | Product adapter, local TUI plus browser coexistence, and provider-native Codex/ChatGPT Remote integration |
 | tmux | Private pane, transcript capture, conservative input injection, optional permission mirroring, and one bounded Claude/Anthropic/two-browser coexistence run | Productize only its honest fallback contract; verify the official app separately and never claim native peer fidelity it cannot supply |
@@ -128,7 +129,7 @@ Cartesian-product marathon.
 | Delivery | User-visible result | Why this order |
 | --- | --- | --- |
 | M0 — complete | Lower-fidelity topology decision | Already answered whether native/provider and remote-claw surfaces can remain live together |
-| M1 — in progress | Structured Claude text coexistence | The text implementation and bounded API-path run are complete; literal official-app UI and Graduate evidence remain |
+| M1 — in progress | Structured Claude text coexistence | Text plus local Graduate acceptance are green; literal official-app UI and the exact-SHA deployed gate remain |
 | M2 | Supported OpenCode text/interrupt adapter | Existing code makes this the cheapest second structured adapter and tests whether a shared seam is real |
 | M3a | Codex TUI plus remote-claw browsers | Converts pinned app-server evidence into product code without depending on provider Remote |
 | M3b | Codex/ChatGPT Remote coexistence | Ships only after a current supported provider boundary passes a bounded feasibility gate |
@@ -198,14 +199,30 @@ The implementation uses a small readiness-gated bridge helper, not a generalized
 presence or browser mutation is published before exact native identity, capture, and mutation
 prerequisites are ready. Cancellation wins over a late readiness transition.
 
+Restart uses an explicit attach-only command:
+
+```text
+--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>
+```
+
+Apart from the required pinned-version probe, it starts no interactive Claude session or proxy,
+forwards no Claude arguments, performs no session discovery, and creates a fresh projection rather than
+reviving the terminal old one. On 2026-08-30 the packed-installed CLI completed two such projections
+against one still-live native session. The second backfilled local, two-browser, and authenticated API
+turns once; a broker kill failed only the companion, after which the native TUI completed another turn.
+The bounded exact-value scan found no provider/root/pass/bypass value in owned logs or raw broker files,
+and raw broker storage contained none of the labelled plaintext.
+
 Use two closed merge points, each based on the previous merged <code>main</code>:
 
 1. **Coexistence text:** bind one exact native session, reconcile history/SSE, admit browser text with
    one stable caller coordinate, and stop writes on ambiguity. The implementation, local TUI, two-
    browser, and authenticated provider-client API path are green; a literal official Claude client UI
    run remains required before advertising this outcome as fully accepted.
-2. **Graduate:** prove fresh-projection companion restart, broker-loss isolation, credential/log
-   boundaries, installed-package use, and the exact-SHA deployed acceptance.
+2. **Graduate:** fresh-projection companion restart, broker-loss isolation, installed-package use, and
+   the bounded credential/log/storage scan are green locally. Close this merge point with the exact-SHA
+   deployed Preview acceptance; do not conflate that remaining deployment gate with literal official-
+   client UI or rerun unrelated green gates.
 
 ### M2 — OpenCode production adapter
 

@@ -44,9 +44,10 @@ recovery failure requires one.
 The full milestone sequence is [Product goal and release gates](release-finish-line.md). The native text
 vertical keeps Claude connected normally to Anthropic and uses the host-side `AnthropicRcClient` to
 project history/events to the encrypted broker and submit text. It is implemented for one bound
-session, text only, host-only OAuth, stable command UUIDs, and no automatic retry after an ambiguous
-POST, and has passed focused and authenticated provider-API-path acceptance. Literal official Claude
-UI proof and M1 Graduate hardening remain open.
+session, text only, host-only OAuth, stable command UUIDs, no automatic retry after an ambiguous POST,
+and explicit exact-session restart through a fresh projection. This retired-design note intentionally
+does not mirror the changing acceptance ledger; current evidence and remaining gates live in the
+[release roadmap](release-finish-line.md).
 
 This experiment deliberately does not resurrect the generalized runtime or remove later OpenCode,
 Codex, tmux, and provider work. If the provider-native API

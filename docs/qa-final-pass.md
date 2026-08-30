@@ -37,10 +37,11 @@ report if an old decision needs forensic context.
 
 The review did not prove the current Claude native-coexistence milestone. The private `--rc-app` path
 still replaces Anthropic Remote Control, and `--rc-trace` is passive. Since this review,
-`--rc-driver=claude-native` has implemented structured native-RC text coexistence and passed focused
-and authenticated provider-API-path acceptance. Literal official Claude UI proof and M1 Graduate
-hardening remain open; later OpenCode, Codex, tmux, and inference milestones retain their own
-acceptance scenarios.
+`--rc-driver=claude-native` has implemented structured native-RC text coexistence plus an explicit
+exact-session, fresh-projection restart path. This archive intentionally does not duplicate the live
+acceptance ledger; current evidence and remaining gates are maintained in
+[Product goal and release gates](release-finish-line.md). Later OpenCode, Codex, tmux, and inference
+milestones retain their own acceptance scenarios.
 
 ## Current reproduction
 

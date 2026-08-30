@@ -420,6 +420,131 @@ describe("runWrapper (functional)", () => {
     }
   });
 
+  it("dispatches exact-session attach without forwarding arguments or asking the driver to discover", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-claude-native-attach-"));
+    const secret = join(dir, "secret");
+    let seenNativeSessionId: string | undefined;
+    let seenHarnessArgs: string[] | undefined;
+    let spawnCalls = 0;
+    try {
+      const code = await runWrapper(
+        [
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-driver",
+          "claude-native",
+          "--rc-native-session",
+          "cse_Abc-123_exact",
+        ],
+        {
+          claudeCompatibilityCheck: async () => {},
+          spawnRcEnv: async () => {
+            spawnCalls++;
+            return 0;
+          },
+          runClaudeNativeDriver: async (ctx, _signal, deps) => {
+            seenHarnessArgs = ctx.harnessArgs;
+            seenNativeSessionId = deps.nativeSessionId;
+            return 31;
+          },
+        },
+      );
+
+      expect(code).toBe(31);
+      expect(seenHarnessArgs).toEqual([]);
+      expect(seenNativeSessionId).toBe("cse_Abc-123_exact");
+      expect(spawnCalls).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["invalid id", ["--rc-native-session", "not-canonical"], /canonical cse_\* session id/],
+    [
+      "forwarded Claude args",
+      ["--rc-native-session", "cse_exact", "--remote-control"],
+      /remove forwarded Claude arguments/,
+    ],
+  ] as const)("rejects attach-only %s before compatibility, identity, or dispatch", async (_name, extra, message) => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-native-attach-invalid-"));
+    const secret = join(dir, "secret");
+    const lines: string[] = [];
+    let compatibilityChecks = 0;
+    let dispatches = 0;
+    try {
+      const code = await runWrapper(
+        [
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-driver",
+          "claude-native",
+          ...extra,
+        ],
+        {
+          claudeCompatibilityCheck: async () => {
+            compatibilityChecks++;
+          },
+          runClaudeNativeDriver: async () => {
+            dispatches++;
+            return 0;
+          },
+          stderr: (line) => lines.push(line),
+        },
+      );
+
+      expect(code).toBe(2);
+      expect(existsSync(secret)).toBe(false);
+      expect(compatibilityChecks).toBe(0);
+      expect(dispatches).toBe(0);
+      expect(lines.join("")).toMatch(message);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects --rc-native-session on another known driver instead of ignoring ownership", async () => {
+    const lines: string[] = [];
+    const code = await runWrapper(
+      [
+        "--rc-app",
+        "https://broker.example",
+        "--rc-driver",
+        "mitm",
+        "--rc-native-session",
+        "cse_exact",
+      ],
+      { stderr: (line) => lines.push(line) },
+    );
+    expect(code).toBe(2);
+    expect(lines).toEqual([
+      "remote-claw: --rc-native-session requires --rc-driver=claude-native\n",
+    ]);
+  });
+
+  it("does not launch plain Claude when attach-only mode has no broker origin", async () => {
+    const lines: string[] = [];
+    let spawnCalls = 0;
+    const code = await runWrapper(
+      ["--rc-driver", "claude-native", "--rc-native-session", "cse_exact"],
+      {
+        spawnFn: async () => {
+          spawnCalls++;
+          return 0;
+        },
+        stderr: (line) => lines.push(line),
+      },
+    );
+
+    expect(code).toBe(2);
+    expect(spawnCalls).toBe(0);
+    expect(lines).toEqual(["remote-claw: --rc-native-session requires --rc-app (or RC_APP)\n"]);
+  });
+
   it.each([
     ["--rc-inference", ["--rc-inference", "anthropic"]],
     ["--rc-bedrock-region", ["--rc-bedrock-region", "us-west-2"]],

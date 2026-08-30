@@ -31,6 +31,14 @@ describe("classifyArgs (unit)", () => {
     expect(classifyArgs(["--rc-backend=sqlite"]).rc).toEqual({ "rc-backend": "sqlite" });
   });
 
+  it("reserves the exact Claude-native attach session without forwarding it", () => {
+    expect(classifyArgs(["--rc-native-session", "cse_native", "chat"])).toEqual({
+      rc: { "rc-native-session": "cse_native" },
+      claudeArgs: ["chat"],
+      errors: [],
+    });
+  });
+
   it("mixes rc flags and claude args in any order", () => {
     const c = classifyArgs(["chat", "--rc-file", "work", "--model", "opus", "--rc-quiet"]);
     expect(c.rc).toEqual({ "rc-file": "work", "rc-quiet": true });

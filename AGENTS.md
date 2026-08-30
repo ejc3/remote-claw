@@ -8,17 +8,17 @@ account, not no AWS/provider or remote-claw credentials.
 
 **Current truth:** the private Claude replacement relay and narrower OpenCode/tmux adapters work. The
 Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text to remote-claw while
-ordinary Anthropic Remote Control remains active; its local-TUI/two-browser/authenticated-provider-API
-run passed, while literal official-app UI validation and graduation evidence remain open. The
-production Codex adapter is not implemented. The supported durable broker is SQLite/libSQL (Turso in
-deployment); Vercel Workflows remains experimental. Design lives in `docs/v2-architecture.md`; the
-crypto core is `packages/clawsec`, the CLI is `packages/cli`. Historical Claude RC observations are in
-`docs/phase0-findings.md` and `docs/v2-architecture.md` §17.
+ordinary Anthropic Remote Control remains active. Its packed-install restart, broker-loss, and
+credential/log checks passed; literal official-app UI validation and the exact-SHA deployed Preview
+remain open. The production Codex adapter is not implemented. The supported durable broker is
+SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Design lives in
+`docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI is `packages/cli`.
+Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-architecture.md` §17.
 
 ## Driving a real claude through the wrapper (RC modes + the stub gotcha)
 
-For its three proxy-based Claude RC modes, `remote-claw` runs the **real** `claude` with
-`HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`:
+`remote-claw` has three proxy-based Claude RC launch modes, which run the **real** `claude` with
+`HTTPS_PROXY` + `NODE_EXTRA_CA_CERTS`, plus one direct companion-attach form:
 
 - **`--rc-app <origin> [--rc-backend <b>]`** with the default `--rc-driver=mitm`
   (`runRcLaunch`, `launch.ts`) — intercepts claude's RC
@@ -37,6 +37,10 @@ For its three proxy-based Claude RC modes, `remote-claw` runs the **real** `clau
   binds only the spawned child's successful bridge request, and projects provider-ordered text through
   our encrypted broker. The local TUI and provider RC API remain live; remote-claw permissions,
   questions, controls, attachments, and status are disabled. Linux and exact Claude 2.1.237 only.
+- **`--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>`** — attaches a fresh
+  remote-claw projection to that exact already-running native session. Apart from the required pinned-
+  version probe, it starts no interactive Claude session or proxy, performs no session discovery,
+  accepts no forwarded Claude arguments, and never reuses the retired projection.
 
 ### The CLAUDE_CODE_CHILD_SESSION stub gotcha (cost hours, twice)
 
@@ -62,11 +66,14 @@ spawning it — e.g. this harness), the launcher's session identity leaks into t
   omitted). On POSIX, `RC_LOG_FILE=…` writes only to an owned `0600` regular non-symlink file separate
   from the pty's TUI output; unsafe/insecure targets warn and drop records. File capture is disabled on
   Windows because Node cannot enforce the same owner/mode/no-follow contract. Trace bodies can contain
-  conversation text despite credential redaction, so treat the file as sensitive.
+  conversation text despite credential redaction, so treat the file as sensitive. Normal broker errors
+  discard broker-controlled rejection bodies/status text, SSE error data, malformed-frame parser
+  details, and invalid-success parse details.
 - **Verify it's real, not a stub:** the child claude env has **no** `CLAUDE_CODE_CHILD_SESSION`; and —
   private MITM mode: a fresh local `cse_<hex>` is "session created" + announces every ~20s; trace or
-  native-companion mode: the forwarded `POST …/bridge` returns a `worker_jwt`, and the companion then
-  announces a distinct random projection ID.
+  native-companion launch mode: the forwarded `POST …/bridge` returns a `worker_jwt`, and the companion
+  then announces a distinct random projection ID. Attach-only mode owns no child and requires the exact
+  native ID explicitly.
 - **Stable Claude currently requires the exact tested version** `2.1.237 (Claude Code)`. The
   compatibility probe resolves `RC_CLAUDE_BIN` or `claude` on `PATH`, runs its scrubbed `--version`
   check, and fails closed before creating an identity when the version differs. The local OS,
@@ -281,12 +288,15 @@ faithful sentinel.
   durability, and permission boundaries keep deterministic regression tests.
 - The full multi-agent product is **not implemented yet**. M0 retained the lower-fidelity tmux route.
   The Linux/exact-2.1.237 `claude-native` companion now implements the structured text path: no presence
-  or mutation before the spawned child's exact bridge binding and capture prerequisites are ready;
-  provider history/SSE owns canonical order; OAuth stays host-only; and rejected or ambiguous sends
-  fence only the projection. Its 2026-08-30 local-TUI/two-browser/authenticated-provider-API run passed.
-  Literal official Claude app UI acceptance and Graduate restart, broker-loss, log, install, and
-  deployed exact-SHA gates remain open. This milestone does not remove OpenCode, Codex, tmux, Bedrock,
-  or accountless from the product goal.
+  or mutation before the launch form's exact child bridge binding, or the attach form's explicit exact
+  native ID, and capture prerequisites are ready; provider history/SSE owns canonical order; OAuth
+  stays host-only; and rejected or ambiguous sends fence only the projection. Its packed-installed run
+  exercised two fresh projections of
+  one explicitly named live native session with the local TUI, two browsers, and provider API; broker
+  loss stopped only the companion, and bounded log/storage inspection found none of the tested
+  credentials or plaintext labels. Literal official Claude app UI acceptance and the exact-SHA
+  deployed Preview remain open. Current evidence lives in `docs/release-finish-line.md`; this milestone
+  does not remove OpenCode, Codex, tmux, Bedrock, or accountless from the product goal.
 - TypeScript is strict: `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, and
   `verbatimModuleSyntax`. Root secrets and known credential material never go on argv or normal output,
   and credential-shaped trace values are redacted. `--rc-json`/`--rc-quiet` never print `S`; only

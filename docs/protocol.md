@@ -12,7 +12,8 @@ serves them locally, so that Claude session does **not** register with Anthropic
 official Claude app cannot attach. `--rc-trace` does the opposite—it passes Remote Control through to
 Anthropic but does not bridge the session to remote-claw. The Linux/exact-2.1.237
 `--rc-driver=claude-native` path now keeps ordinary Anthropic Remote Control active while projecting
-provider-ordered text to remote-claw; literal official Claude app UI acceptance remains open.
+provider-ordered text to remote-claw, including an explicit exact-session restart attachment. Literal
+official Claude app UI acceptance and the exact-SHA deployed Preview remain open.
 
 ## 1. Topology
 
@@ -30,8 +31,10 @@ The default `mitm` driver runs the real `claude` behind a local TLS proxy. In th
 profile it intercepts `/v1/code/sessions/**` and `/v1/code/triggers` while `/v1/messages`, OAuth,
 telemetry, and unrelated traffic tunnel to Anthropic. With `--rc-inference=bedrock`, remote-claw
 translates inference to Bedrock and synthesizes the required Anthropic control plane, so no request
-reaches Anthropic. The `claude-native` driver instead uses the proxy transparently to observe one exact
-successful bridge, then uses Anthropic history/SSE/text POST as an app client. The experimental
+reaches Anthropic. The `claude-native` launch form instead uses the proxy transparently to observe one
+exact successful bridge, then uses Anthropic history/SSE/text POST as an app client. Its attach-only
+form accepts an explicit exact native session ID and starts no interactive Claude session or proxy;
+the pinned-version probe still runs. The experimental
 OpenCode adapter and tmux fallback reach the same `Session` seam through their own native surfaces.
 See
 [pluggable-harness.md](pluggable-harness.md).
@@ -159,11 +162,15 @@ Anthropic and records redacted protocol shapes; it creates no broker bridge.
 
 ### 4.2 Provider-native text companion
 
-`--rc-driver=claude-native` runs ordinary `claude --remote-control` through that transparent proxy and
-binds only after the spawned child completes a successful canonical
-`POST /v1/code/sessions/{cse_*}/bridge`. It inspects no bridge body or worker bearer, rejects a second
-different binding, and gives the remote-claw projection a fresh random `cse_*` distinct from the native
-session ID.
+The launch form, `--rc-driver=claude-native --remote-control`, runs ordinary Claude through that
+transparent proxy and binds only after the spawned child completes a successful canonical
+`POST /v1/code/sessions/{cse_*}/bridge`. It inspects no bridge body or worker bearer and rejects a
+second different binding. The restart form,
+`--rc-driver=claude-native --rc-native-session <cse_...>`, requires the exact canonical ID explicitly,
+accepts no forwarded Claude arguments, performs no discovery, and starts no interactive Claude session
+or proxy; the pinned-version probe still runs.
+Both give the remote-claw projection a fresh random `cse_*` distinct from the native session ID; the
+restart form never revives or consumes commands from the retired projection.
 
 One reconciler owns provider order. It opens and validates one client SSE stream before paging bounded
 ascending history, follows `next_cursor` or `resume_cursor` under cursor/page/event caps, sorts by
@@ -182,8 +189,10 @@ uses one UUID and timestamp through broker admission and provider POST. A seq-le
 then publishes the canonical accepted coordinate and user row in provider order. One serialized writer
 issues no automatic retry; a rejected or outcome-unknown POST fences the projection before any
 successor. Accepted provider events and browser mutations share a fixed lifetime ceiling; exhausting it
-fails only the projection instead of growing companion state without bound. Projection/broker failure
-leaves the transparent proxy and healthy Claude child running.
+fails only the projection instead of growing companion state without bound. Projection or broker
+failure closes only that remote-claw projection. In launch form the transparent proxy and healthy
+Claude child remain running; in attach-only form the companion exits nonzero while the independently
+owned native session remains live.
 
 ## 5. `Session` and the relay
 
@@ -360,8 +369,10 @@ does not claim durable exactly-once collaboration:
 4. The private-facade Claude worker does not backfill old native history: the bridge response contains a
    worker bearer, its downstream SSE carries new input, and the worker posts only new output. A resumed
    conversation's pre-resume transcript therefore cannot be recovered from the RC wire.
-5. The process-local readiness bridge has no durable host-wide inventory. A wrapper restart cannot
-   recover all old driver bindings or safely resume a writable bridge.
+5. The process-local readiness bridge has no durable host-wide inventory and cannot recover all old
+   driver bindings or resume an old writable bridge. Claude-native alone can attach a **new** projection
+   when the operator supplies one exact still-live native `cse_*`; it does not discover or persist that
+   ID.
 6. Presence proves recent authenticated publication, not delivery, native application, or a complete
    final tail.
 7. Session logs, inbound dedup, and the identity bus have no general compaction policy and can grow
@@ -372,11 +383,16 @@ does not claim durable exactly-once collaboration:
    companion projects pinned top-level provider user events from both local-worker and app-client
    sources.
 9. The default `--rc-driver=mitm` topology replaces Anthropic Remote Control. The native companion
-   preserves that provider topology, but literal official Claude app UI acceptance and companion
-   process restart/reattach are not yet proven.
+   preserves that provider topology, and packed-install restart plus broker-loss isolation are locally
+   proven. Literal official Claude app UI acceptance and exact-SHA deployed acceptance remain open.
 
-These are product limits, not invitations to rebuild a second protocol stack. Finish the remaining
-native-companion UI and Graduate outcomes before adding more protocol machinery.
+Broker-controlled HTTP rejection bodies/status text, SSE error data, malformed-frame parser details,
+and invalid-success parse details are discarded before errors reach normal relay logs. Successful
+publish and recovery-cursor bodies are shape-checked. The exact `410 + channel_storage_lost` pair
+remains the only typed permanent channel-loss response.
+
+These are product limits, not invitations to rebuild a second protocol stack. Finish the literal
+native-companion UI and deployed acceptance outcomes before adding more protocol machinery.
 
 ## 13. Code and test map
 

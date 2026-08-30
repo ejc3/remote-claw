@@ -131,6 +131,26 @@ describe("sseData idle-watchdog", () => {
     expect(error).toBeInstanceOf(BrokerTimeoutError);
   });
 
+  it("does not retain untrusted broker error-event data", async () => {
+    const canary = "broker-sse-credential-canary";
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode(`: open\n\nevent: error\ndata: ${canary}\n\n`));
+        controller.close();
+      },
+    });
+
+    const { out, error } = await collectUntilIdle(stream, 50);
+
+    expect(out).toEqual([]);
+    expect(error).toMatchObject({
+      name: "BrokerError",
+      status: 502,
+      message: "broker 502: broker stream reported an error",
+    });
+    expect(String(error)).not.toContain(canary);
+  });
+
   it("FAILS the stream when no bytes arrive for idleMs (so the relay counts the stall)", async () => {
     const b = body([
       [0, "data: one\n\n"],
