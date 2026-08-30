@@ -104,9 +104,9 @@ test("numbered architecture steps render as list items, not run-on paragraphs", 
   await page.goto("/index.html#v2");
   await expect(page.locator("article ol li")).not.toHaveCount(0, { timeout: 15000 });
   for (const t of [
-    "Bind to one exact native session",
-    "Page native history",
-    "Preserve unknown live frames",
+    "Bind only from the spawned child's successfully forwarded bridge request",
+    "Open and validate SSE first",
+    "Admit only pinned supported provider event shapes",
   ]) {
     await expect(page.locator("article li", { hasText: t }).first()).toBeVisible();
   }

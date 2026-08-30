@@ -116,7 +116,7 @@ function isStablePlainTextSurface(
 ): boolean {
   return (
     harness.agent === "claude-code" &&
-    harness.mode === "rc" &&
+    (harness.mode === "rc" || harness.mode === "native-rc") &&
     !capabilities.structuredPermissions &&
     !capabilities.attachments &&
     !capabilities.controls.interrupt &&
@@ -238,6 +238,9 @@ export function defaultAttachmentsDir(sessionId: string): string {
 interface OutItem {
   kind: string;
   text: string;
+  /** Browser source coordinate for a provider-canonical user event. Only the native companion sets
+   * this; the outbound queue publishes the matching accepted receipt at the canonical transcript seq. */
+  clientMsgId?: string;
 }
 
 /** Cap a tool_result's relayed output so a huge stdout can't bloat the durable transcript log. */
@@ -353,7 +356,14 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
     // it). The driver must mark ONLY prompts it did NOT inject, or the double-echo returns.
     if (ev.payload.local_prompt === true) {
       const text = userPromptText(message);
-      if (text !== "") items.push({ kind: "user", text });
+      if (text !== "") {
+        const clientMsgId = ev.payload.client_msg_id;
+        items.push({
+          kind: "user",
+          text,
+          ...(typeof clientMsgId === "string" ? { clientMsgId } : {}),
+        });
+      }
     }
     for (const b of blocks) {
       const bb = (typeof b === "object" && b !== null ? b : {}) as {
@@ -1193,6 +1203,17 @@ export class HostRcRelay {
           }
           const seq = this.#seq++;
           try {
+            // A provider-native browser prompt is not echoed at inbound admission: Anthropic history
+            // owns its place in the shared order. Reconcile the optimistic browser row only now, at the
+            // canonical provider event's seq, immediately before publishing that user frame.
+            if (item.clientMsgId !== undefined) {
+              await this.#post(
+                "accepted",
+                null,
+                `accepted-${this.#sessionId}-${seq}`,
+                JSON.stringify({ client_msg_id: item.clientMsgId, seq }),
+              );
+            }
             await this.#emit(item.kind, seq, `${item.kind}-${seq}`, item.text);
           } catch (e) {
             if (gateId !== null) {
@@ -1348,25 +1369,45 @@ export class HostRcRelay {
           admitted();
           continue;
         }
-        // Ack the client's frame (meta), echo the prompt (content, so every device sees it), then
-        // inject it into the real claude as ONE queued unit. Its seq is allocated only at the queue
-        // head, and the synchronous injection stays inside the unit so later publications cannot
-        // overtake the native side effect. A failed post closes the Session before any injection.
-        const userSeq = await this.#publishUnit(async () => {
-          const seq = this.#seq++;
-          await this.#post(
-            "accepted",
-            null,
-            `accepted-${this.#sessionId}-${seq}`,
-            JSON.stringify({ client_msg_id: frame.clientMsgId ?? null, seq }),
-          );
-          await this.#emit("user", seq, `user-${seq}`, text);
-          this.#assertSessionOpen();
-          this.#session.pushUserInput(text);
-          return seq;
-        });
-        // Debug records shape and size only; conversation content requires explicit trace mode.
-        this.#trace.debug("user prompt", { seq: userSeq, bytes: text.length });
+        if (this.#harness.mode === "native-rc") {
+          // The provider is the ordering authority for this companion. First prove the broker can
+          // durably record a pre-mutation admission, then enqueue one immutable native UUID/timestamp.
+          // This seq-null shape is intentionally ignored by current viewers; the canonical history
+          // event later emits the ordinary {client_msg_id,seq} receipt and the one user frame together.
+          await this.#publishUnit(async () => {
+            await this.#post(
+              "accepted",
+              null,
+              `admitted-${frame.msgId}`,
+              JSON.stringify({ client_msg_id: frame.clientMsgId ?? null, native_pending: true }),
+            );
+            this.#assertSessionOpen();
+            this.#session.pushUserInput(text, {
+              ...(frame.clientMsgId !== undefined ? { clientMsgId: frame.clientMsgId } : {}),
+            });
+          });
+          this.#trace.debug("native user prompt admitted", { bytes: text.length });
+        } else {
+          // Ack the client's frame (meta), echo the prompt (content, so every device sees it), then
+          // inject it into the real claude as ONE queued unit. Its seq is allocated only at the queue
+          // head, and the synchronous injection stays inside the unit so later publications cannot
+          // overtake the native side effect. A failed post closes the Session before any injection.
+          const userSeq = await this.#publishUnit(async () => {
+            const seq = this.#seq++;
+            await this.#post(
+              "accepted",
+              null,
+              `accepted-${this.#sessionId}-${seq}`,
+              JSON.stringify({ client_msg_id: frame.clientMsgId ?? null, seq }),
+            );
+            await this.#emit("user", seq, `user-${seq}`, text);
+            this.#assertSessionOpen();
+            this.#session.pushUserInput(text);
+            return seq;
+          });
+          // Debug records shape and size only; conversation content requires explicit trace mode.
+          this.#trace.debug("user prompt", { seq: userSeq, bytes: text.length });
+        }
       } else if (frame.recordKind === "catch_up") {
         if (this.#durable) {
           // The durable backend's own log answers catch_up: the viewer's subscribe(startIndex:0) already

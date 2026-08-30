@@ -23,7 +23,7 @@ reboot.
 - Runtime protocol parsing, mutation admission, deduplication, ambiguous-send fail-stop behavior,
   secret handling, and local-session survival remain safety boundaries.
 - `AnthropicRcClient` provides the host-side native session list, history, SSE, and text-post
-  primitives needed for the next Claude experiment.
+  primitives used by the bounded native text companion.
 
 There is no durable host coordinator, runtime-owner daemon, server signer, A1 command adjudicator,
 A1 browser route, or A1 migration schema in the current implementation.
@@ -41,10 +41,12 @@ recovery failure requires one.
 
 ## Current direction
 
-The full milestone sequence is [Product goal and release gates](release-finish-line.md). The next vertical
-keeps Claude connected normally to Anthropic and uses the existing host-side `AnthropicRcClient` to
-project history/events to the encrypted broker and submit text. It begins with one active session,
-text only, host-only OAuth, stable command UUIDs, and no automatic retry after an ambiguous POST.
+The full milestone sequence is [Product goal and release gates](release-finish-line.md). The native text
+vertical keeps Claude connected normally to Anthropic and uses the host-side `AnthropicRcClient` to
+project history/events to the encrypted broker and submit text. It is implemented for one bound
+session, text only, host-only OAuth, stable command UUIDs, and no automatic retry after an ambiguous
+POST, and has passed focused and authenticated provider-API-path acceptance. Literal official Claude
+UI proof and M1 Graduate hardening remain open.
 
 This experiment deliberately does not resurrect the generalized runtime or remove later OpenCode,
 Codex, tmux, and provider work. If the provider-native API

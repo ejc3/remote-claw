@@ -279,6 +279,8 @@ async function startHarness(
       callback: Parameters<UpstreamRequest>[1],
     ) => void;
     log?: "warn" | "trace";
+    mode?: "relay" | "trace";
+    onTraceBridge?: (sessionId: string) => void;
     onUpstreamResponse?: (response: IncomingMessage) => void;
   } = {},
 ): Promise<Harness> {
@@ -295,8 +297,9 @@ async function startHarness(
     port: 0,
     leafCert: certs.leafPem,
     leafKey: certs.leafKey,
-    mode: "trace",
+    mode: options.mode ?? "trace",
     tracer,
+    ...(options.onTraceBridge === undefined ? {} : { onTraceBridge: options.onTraceBridge }),
     upstreamRequest: loopbackRequest(
       upstreamPort,
       options.onUpstreamResponse,
@@ -325,6 +328,144 @@ function rendered(records: TraceRecord[]): string {
 }
 
 describe.skipIf(!RUN)("MITM trace passthrough", () => {
+  it("observes each canonical successful bridge only after its response finishes forwarding", async () => {
+    const workerJwt = `sk-${["ant", "si", "observer-must-not-read"].join("-")}`;
+    const responseBody = Buffer.from(`not-json:{"worker_jwt":"${workerJwt}"}`);
+    const observed: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let markFirstChunk: (() => void) | undefined;
+    const firstChunk = new Promise<void>((resolve) => {
+      markFirstChunk = resolve;
+    });
+    let requestCount = 0;
+    const harness = await startHarness(
+      (req, res) => {
+        void readRequest(req).then(() => {
+          requestCount += 1;
+          res.writeHead(201, {
+            "content-type": "application/json",
+            "content-length": String(responseBody.length),
+          });
+          if (requestCount === 1) {
+            const cut = Math.floor(responseBody.length / 2);
+            res.write(responseBody.subarray(0, cut));
+            markFirstChunk?.();
+            void firstRelease.then(() => res.end(responseBody.subarray(cut)));
+          } else {
+            res.end(responseBody);
+          }
+        });
+      },
+      {
+        log: "warn",
+        onTraceBridge: (sessionId) => {
+          observed.push(sessionId);
+          throw new Error("observer failure must not affect the native response");
+        },
+      },
+    );
+
+    try {
+      const first = requestThroughProxy(
+        harness.agent,
+        "POST",
+        "/v1/code/sessions/cse_Native-01/bridge",
+        Buffer.from("{}"),
+        { "content-type": "application/json" },
+      );
+      await firstChunk;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(observed).toEqual([]);
+
+      releaseFirst?.();
+      const firstResponse = await first;
+      expect(firstResponse.status).toBe(201);
+      expect(firstResponse.body.equals(responseBody)).toBe(true);
+      expect(observed).toEqual(["cse_Native-01"]);
+
+      const repeated = await requestThroughProxy(
+        harness.agent,
+        "POST",
+        "/v1/code/sessions/cse_Native-01/bridge?retry=1",
+        Buffer.from("{}"),
+        { "content-type": "application/json" },
+      );
+      expect(repeated.status).toBe(201);
+      expect(repeated.body.equals(responseBody)).toBe(true);
+      expect(observed).toEqual(["cse_Native-01", "cse_Native-01"]);
+    } finally {
+      releaseFirst?.();
+      await harness.close();
+    }
+  });
+
+  it("does not observe failed, noncanonical, non-bridge, or relay-mode requests", async () => {
+    const observed: string[] = [];
+    const harness = await startHarness(
+      (req, res) => {
+        res.writeHead(req.url?.includes("cse_failure") ? 503 : 200, {
+          "content-type": "application/json",
+        });
+        res.end("{}");
+      },
+      { log: "warn", onTraceBridge: (sessionId) => observed.push(sessionId) },
+    );
+
+    try {
+      const cases: Array<{ method: string; path: string }> = [
+        { method: "POST", path: "/v1/code/sessions/cse_failure/bridge" },
+        { method: "GET", path: "/v1/code/sessions/cse_valid/bridge" },
+        { method: "POST", path: "/v1/code/sessions/cse_valid/bridges" },
+        { method: "POST", path: "/v1/code/sessions/cse_valid/bridge/extra" },
+        { method: "POST", path: "/v1/code/sessions/%63se_valid/bridge" },
+        { method: "POST", path: "/v1/code/sessions/sess_valid/bridge" },
+        { method: "POST", path: `/v1/code/sessions/cse_${"a".repeat(509)}/bridge` },
+      ];
+      for (const testCase of cases) {
+        await requestThroughProxy(
+          harness.agent,
+          testCase.method,
+          testCase.path,
+          Buffer.from("{}"),
+          { "content-type": "application/json" },
+        );
+      }
+      expect(observed).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+
+    let relayUpstreamRequests = 0;
+    const relay = await startHarness(
+      (_req, res) => {
+        relayUpstreamRequests += 1;
+        res.end("{}");
+      },
+      {
+        log: "warn",
+        mode: "relay",
+        onTraceBridge: (sessionId) => observed.push(sessionId),
+      },
+    );
+    try {
+      const response = await requestThroughProxy(
+        relay.agent,
+        "POST",
+        "/v1/code/sessions/cse_valid/bridge",
+        Buffer.from("{}"),
+        { "content-type": "application/json" },
+      );
+      expect(response.status).toBe(404);
+      expect(relayUpstreamRequests).toBe(0);
+      expect(observed).toEqual([]);
+    } finally {
+      await relay.close();
+    }
+  });
+
   it("preserves the fully-buffered HTTP-200 reset boundary and an explicit identical retry", async () => {
     const path = "/v1/code/sessions/cse_trace/worker/events";
     const requestBody = Buffer.from(

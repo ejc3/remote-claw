@@ -20,6 +20,14 @@ export {
   type RcUserEventInput,
 } from "./anthropic/client.js";
 export {
+  type ClaudeNativeClient,
+  ClaudeNativeDriver,
+  type ClaudeNativeDriverOptions,
+  type ClaudeNativeProxy,
+  claudeNativeChildEnv,
+  runClaudeNativeDriver,
+} from "./anthropic/driver.js";
+export {
   AnthropicRcError,
   type AnthropicRcErrorKind,
 } from "./anthropic/errors.js";
@@ -31,6 +39,8 @@ export type {
 } from "./anthropic/transport.js";
 export { type CertPaths, certPaths, ensureCerts, MITM_HOST } from "./certs.js";
 export {
+  CLAUDE_NATIVE_CAPABILITIES,
+  CLAUDE_NATIVE_HARNESS,
   type ContentBlock,
   type ControlCapabilities,
   type Driver,

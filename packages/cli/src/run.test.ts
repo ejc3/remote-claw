@@ -221,6 +221,47 @@ describe("runWrapper (functional)", () => {
     }
   });
 
+  it("rejects an unproved exact Claude version before native identity creation or dispatch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-native-unsupported-"));
+    const secret = join(dir, "secret");
+    const lines: string[] = [];
+    let dispatched = 0;
+    try {
+      const code = await runWrapper(
+        [
+          "--remote-control",
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-driver",
+          "claude-native",
+        ],
+        {
+          claudeBin: "/private/claude",
+          claudeCompatibilityCheck: async (bin) => {
+            expect(bin).toBe("/private/claude");
+            throw new Error("raw version probe must not escape");
+          },
+          runClaudeNativeDriver: async () => {
+            dispatched++;
+            return 0;
+          },
+          stderr: (line) => lines.push(line),
+        },
+      );
+
+      expect(code).toBe(1);
+      expect(existsSync(secret)).toBe(false);
+      expect(dispatched).toBe(0);
+      expect(lines.join("")).toContain("Claude 2.1.237 (Claude Code)");
+      expect(lines.join("")).not.toContain("/private/claude");
+      expect(lines.join("")).not.toContain("raw version probe");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(!haveOpenssl())(
     "--rc-app launches claude behind the MITM (RC enabled), auto-creating the identity",
     async () => {
@@ -321,6 +362,110 @@ describe("runWrapper (functional)", () => {
     }
   });
 
+  it("dispatches claude-native with the shared context after exact-version compatibility", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-claude-native-"));
+    const secret = join(dir, "secret");
+    let seenContext: DriverContext | undefined;
+    let seenCertsDir = "";
+    let seenClaudeBin = "";
+    let seenSpawnClaude: unknown;
+    const spawnClaude = vi.fn(async () => 0);
+    const compatibilityBins: string[] = [];
+    try {
+      const code = await runWrapper(
+        [
+          "chat",
+          "--remote-control",
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-backend",
+          "sqlite",
+          "--rc-driver",
+          "claude-native",
+        ],
+        {
+          claudeBin: "/opt/claude",
+          claudeCompatibilityCheck: async (bin) => {
+            compatibilityBins.push(bin);
+          },
+          spawnRcEnv: spawnClaude,
+          runClaudeNativeDriver: async (ctx, _signal, deps) => {
+            seenContext = ctx;
+            seenCertsDir = deps.certsDir;
+            seenClaudeBin = deps.claudeBin;
+            seenSpawnClaude = deps.spawnClaude;
+            return 29;
+          },
+        },
+      );
+
+      expect(code).toBe(29);
+      expect(existsSync(secret)).toBe(true);
+      expect(compatibilityBins).toEqual(["/opt/claude"]);
+      expect(seenContext).toMatchObject({
+        brokerUrl: "https://broker.example",
+        backend: "sqlite",
+        harnessArgs: ["chat", "--remote-control"],
+        harnessBin: "/opt/claude",
+        title: "remote-claw",
+        cwd: process.cwd(),
+      });
+      expect(seenCertsDir).toBe(join(dir, "mitm-certs"));
+      expect(seenClaudeBin).toBe("/opt/claude");
+      expect(seenSpawnClaude).toBe(spawnClaude);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["--rc-inference", ["--rc-inference", "anthropic"]],
+    ["--rc-bedrock-region", ["--rc-bedrock-region", "us-west-2"]],
+    ["--rc-bedrock-model", ["--rc-bedrock-model", "provider/model"]],
+    ["--rc-accountless", ["--rc-accountless"]],
+  ] as const)("rejects %s before native compatibility or dispatch", async (flag, incompatible) => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-native-incompatible-"));
+    const secret = join(dir, "secret");
+    const lines: string[] = [];
+    let compatibilityChecks = 0;
+    let dispatches = 0;
+    try {
+      const code = await runWrapper(
+        [
+          "--remote-control",
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-driver",
+          "claude-native",
+          ...incompatible,
+        ],
+        {
+          claudeCompatibilityCheck: async () => {
+            compatibilityChecks++;
+          },
+          runClaudeNativeDriver: async () => {
+            dispatches++;
+            return 0;
+          },
+          stderr: (line) => lines.push(line),
+        },
+      );
+
+      expect(code).toBe(2);
+      expect(existsSync(secret)).toBe(false);
+      expect(compatibilityChecks).toBe(0);
+      expect(dispatches).toBe(0);
+      expect(lines.join("")).toContain(flag);
+      expect(lines.join("")).toContain("cannot be used with --rc-driver=claude-native");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("dispatches tmux with its harness settings without touching the network", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rc-run-tmux-"));
     const secret = join(dir, "secret");
@@ -389,7 +534,7 @@ describe("runWrapper (functional)", () => {
     expect(code).toBe(2);
     expect(calls).toHaveLength(0);
     expect(lines.join("")).toMatch(/unknown --rc-driver=bogus/);
-    expect(lines.join("")).toMatch(/mitm \| tmux \| opencode/);
+    expect(lines.join("")).toMatch(/mitm \| claude-native \| tmux \| opencode/);
   });
 
   it("--rc-driver=tmux without --rc-app warns and runs plain claude (no broker)", async () => {

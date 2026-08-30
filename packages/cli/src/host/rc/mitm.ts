@@ -50,6 +50,8 @@ function omittedTraceBody(bytes: number): string {
 }
 
 const SESS_RE = /^\/v1\/code\/sessions\/([^/?]+)(\/[^?]*)?/;
+const TRACE_BRIDGE_RE = /^\/v1\/code\/sessions\/([^/]+)\/bridge$/;
+const CANONICAL_CSE_RE = /^cse_[A-Za-z0-9_-]+$/;
 
 /** Injectable only so transparent forwarding can be proved against a loopback fake upstream. */
 export type UpstreamRequest = (
@@ -79,6 +81,9 @@ export interface MitmOptions {
   tracer?: Tracer;
   /** Request transport for the real upstream. Defaults to node:https.request; injectable for tests. */
   upstreamRequest?: UpstreamRequest;
+  /** Trace mode only: called with the native cse id after a successful bridge response has completely
+   *  reached the spawned Claude child. Observer failures are isolated from transparent forwarding. */
+  onTraceBridge?: (sessionId: string) => void;
   /** Where inference (`/v1/messages*`) goes: "anthropic" (default — pass through to the real upstream)
    *  or "bedrock" (translate to Amazon Bedrock and synthesize the rest of the Anthropic control plane,
    *  so NOTHING reaches api.anthropic.com). Only meaningful in "relay" mode. */
@@ -621,6 +626,8 @@ export class MitmProxy {
     rc: string | null = null,
   ): void {
     if (this.#stopped || res.destroyed) return;
+    const traceBridgeSession = traceBridgeSessionId(this.#opts.mode, req.method, path);
+    const traceBridgeObserver = this.#opts.onTraceBridge;
     // Forward to the REAL upstream over a fresh TLS connection (default CA validation). Drop
     // hop-by-hop + framing headers; set an exact Content-Length from the fully-read body.
     const headers: Record<string, string> = {};
@@ -646,6 +653,29 @@ export class MitmProxy {
         if (this.#stopped || res.destroyed) {
           up.destroy();
           return;
+        }
+        const status = up.statusCode ?? 502;
+        if (
+          traceBridgeSession !== null &&
+          traceBridgeObserver !== undefined &&
+          status >= 200 &&
+          status < 300
+        ) {
+          let upstreamFinished = up.readableEnded && up.complete;
+          if (!upstreamFinished) {
+            up.once("end", () => {
+              upstreamFinished = up.complete;
+            });
+          }
+          res.once("finish", () => {
+            // A downstream finish that overtakes the complete upstream end was not full forwarding.
+            if (!upstreamFinished) return;
+            try {
+              traceBridgeObserver(traceBridgeSession);
+            } catch {
+              // This is an after-forward observer. Its failure cannot change native RC behavior.
+            }
+          });
         }
         res.writeHead(up.statusCode ?? 502, up.headers);
         if (rc !== null)
@@ -755,6 +785,28 @@ const HOP_BY_HOP = new Set([
   "proxy-authenticate",
   "proxy-authorization",
 ]);
+
+/** Identify the one transparent native-RC response that establishes a bridge. Requiring the raw path
+ * segment to equal its decoded value rejects percent-encoded aliases for the same native identity. */
+function traceBridgeSessionId(
+  mode: MitmOptions["mode"],
+  method: string | undefined,
+  requestTarget: string,
+): string | null {
+  if (mode !== "trace" || method !== "POST") return null;
+  const path = requestTarget.split("?", 1)[0] ?? "";
+  const matched = TRACE_BRIDGE_RE.exec(path);
+  if (matched === null) return null;
+  const raw = matched[1] as string;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  if (raw !== decoded || decoded.length > 512 || !CANONICAL_CSE_RE.test(decoded)) return null;
+  return decoded;
+}
 
 /** Parse a CONNECT authority (`host:port`, IPv6-literal safe) into (host, port). */
 export function splitAuthority(authority: string): { host: string; port: number } {

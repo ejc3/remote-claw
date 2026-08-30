@@ -444,6 +444,10 @@ describe("parseHarness", () => {
       agent: "claude-code",
       mode: "rc",
     });
+    expect(parseHarness({ agent: "claude-code", mode: "native-rc" })).toEqual({
+      agent: "claude-code",
+      mode: "native-rc",
+    });
     expect(parseHarness({ agent: "claude-code", mode: "tmux" })).toEqual({
       agent: "claude-code",
       mode: "tmux",
@@ -472,6 +476,7 @@ describe("parseHarness", () => {
     // back to the MITM label, never be mislabelled (e.g. as "Claude Code · RC"). codex.
     expect(parseHarness({ agent: "claude-code", mode: "opencode" })).toBeUndefined();
     expect(parseHarness({ agent: "opencode", mode: "rc" })).toBeUndefined();
+    expect(parseHarness({ agent: "opencode", mode: "native-rc" })).toBeUndefined();
     expect(parseHarness({ agent: "opencode", mode: "tmux" })).toBeUndefined();
   });
 });

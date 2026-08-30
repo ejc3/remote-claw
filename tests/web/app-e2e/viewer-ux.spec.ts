@@ -106,11 +106,12 @@ test("the session row title carries branch + cwd as a hover tooltip", async ({
 // #164: the session list labels WHICH agent + bridge mode each session is, so native-RC Claude Code, tmux
 // Claude Code, and opencode don't look identical. The host announces its HarnessDescriptor; the badge is
 // driven end-to-end from that announce (RC_E2E_HARNESS picks which the scripted host declares).
-test("the session-list badge labels the harness (RC / TX / opencode) from the announce", async ({
+test("the session-list badge labels native RC, tmux, and opencode from the announce", async ({
   page,
   seedHost,
 }) => {
   for (const [harness, caps, label, agent] of [
+    ["native-rc", "native-rc", "Claude Code · Native RC", "claude-code"],
     ["tmux", "tmux", "Claude Code · TX", "claude-code"],
     ["opencode", "opencode-skip", "opencode", "opencode"],
   ] as const) {
@@ -458,6 +459,46 @@ test.describe("capability gating (#149)", () => {
     const sheet = page.locator(".sheet");
     await expect(sheet).toContainText("can’t switch model");
     await expect(sheet.locator(".mode-row", { hasText: "Opus" })).toHaveCount(0);
+    await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
+  });
+
+  test("the native Claude companion is text-only without the private-relay transcript warning", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost({ caps: "native-rc", harness: "native-rc" });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    const row = page.locator("button.row", { hasText: "rc box" });
+    await expect(row.locator(".agent-badge")).toHaveText("Claude Code · Native RC");
+    await row.click();
+
+    await expect(page.locator(".chat-head .agent-badge")).toHaveText("Claude Code · Native RC");
+    await expect(page.locator(".perms-local")).toHaveText("permissions local");
+    await expect(page.locator(".perms-bypassed")).toHaveCount(0);
+    await expect(page.locator(".local-input-disclosure")).toHaveCount(0);
+    await expect(page.getByTestId("composer-mode")).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Attach photos" })).toBeDisabled();
+
+    const composer = page.getByRole("textbox", { name: "Message" });
+    await composer.fill("   ");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await composer.fill(" /compact");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await expect(page.getByText(/Slash commands aren.t available remotely/)).toBeVisible();
+
+    await composer.fill("native companion text");
+    await page.getByRole("button", { name: "Send", exact: true }).click();
+    const sent = page.locator(".row-user", { hasText: "native companion text" });
+    await expect(sent).toHaveCount(1);
+    // The UI fixture has no Anthropic history leg, so it cannot fabricate the canonical native event
+    // that changes this optimistic row to "Received by host". Remaining in Sending proves the valid text
+    // passed the browser gate; companion integration separately proves provider-ordered reconciliation.
+    await expect(sent.locator('.delivery-status[data-state="sending"]')).toHaveText("Sending");
+
+    await page.locator("button.chat-menu").click();
+    const sheet = page.locator(".sheet");
+    await expect(sheet).toContainText("can’t switch model");
     await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
   });
 

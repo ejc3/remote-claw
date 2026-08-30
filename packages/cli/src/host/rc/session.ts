@@ -242,15 +242,19 @@ export class Session {
     return ev;
   }
 
-  /** Push a `user` prompt downstream to the worker (the client→claude direction). */
-  pushUserInput(content: string): RcEvent {
-    return this.#pushDownstream("user", {
+  /** Push a `user` prompt downstream to the worker (the client→claude direction). A provider-native
+   * companion keeps the authenticated browser coordinate alongside the immutable UUID/timestamp so the
+   * later canonical provider event can reconcile the viewer's optimistic echo without pre-ordering it. */
+  pushUserInput(content: string, options: { clientMsgId?: string } = {}): RcEvent {
+    const payload: Record<string, unknown> = {
       type: "user",
       message: { role: "user", content },
       session_id: this.id,
       timestamp: nowIso(this.#clock),
       parent_tool_use_id: null,
-    });
+    };
+    if (options.clientMsgId !== undefined) payload.client_msg_id = options.clientMsgId;
+    return this.#pushDownstream("user", payload);
   }
 
   /** Append the `initialize` control_request — guaranteed first downstream event. Idempotent. */

@@ -15,6 +15,8 @@ import { createInterface } from "node:readline";
 import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import {
+  CLAUDE_NATIVE_CAPABILITIES,
+  CLAUDE_NATIVE_HARNESS,
   type DriverCapabilities,
   type HarnessDescriptor,
   HostRcRelay,
@@ -29,18 +31,20 @@ import {
 import { scenario, smokeScenario } from "./scenario.js";
 
 /** Which harness the announce declares (RC_E2E_HARNESS), so the agent+mode badge (#164) can be exercised
- *  end-to-end for all three drivers without a real tmux/opencode host. Unset ⇒ MITM (native-RC). */
+ * end-to-end without each real harness. Unset is the private MITM relay. */
 function presetHarness(p: string | undefined): HarnessDescriptor {
+  if (p === "native-rc") return CLAUDE_NATIVE_HARNESS;
   if (p === "tmux") return TMUX_HARNESS;
   if (p === "opencode") return OPENCODE_HARNESS;
   return MITM_HARNESS;
 }
 
 /** Capability presets the browser e2e can drive (RC_E2E_CAPS) so the capability-gated viewer (#149) can be
- * exercised end-to-end without a real tmux/opencode host. Unset is the shipped stable Claude tuple;
- * maximal native-RC plumbing is deliberately opt-in as `compat-mitm`. */
+ * exercised end-to-end without each real harness. Unset is the shipped private-relay Claude tuple;
+ * maximal MITM plumbing is deliberately opt-in as `compat-mitm`. */
 function presetCaps(p: string | undefined): DriverCapabilities {
   if (p === "compat-mitm") return MITM_CAPABILITIES;
+  if (p === "native-rc") return CLAUDE_NATIVE_CAPABILITIES;
   // Explicitly choose the default READY posture. The driver itself starts conservative and publishes
   // this tuple only after its permission hook is proved ready; a static pre-ready constant previously
   // let this fixture silently advertise the wrong permission posture.

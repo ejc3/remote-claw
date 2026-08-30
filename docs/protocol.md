@@ -7,11 +7,12 @@ viewer translates it back into a transcript and controls.
 
 The full Claude Code, Codex, OpenCode, and tmux product goal and release status live in
 [release-finish-line.md](release-finish-line.md). One important limitation belongs here too:
-`--rc-app` intercepts Claude's Remote Control endpoints and
+the default `--rc-driver=mitm` path intercepts Claude's Remote Control endpoints and
 serves them locally, so that Claude session does **not** register with Anthropic Remote Control and the
 official Claude app cannot attach. `--rc-trace` does the opposite—it passes Remote Control through to
-Anthropic so the official app works, but it does not bridge the session to remote-claw. Native official
-collaboration and remote-claw collaboration do not yet coexist in one session.
+Anthropic but does not bridge the session to remote-claw. The Linux/exact-2.1.237
+`--rc-driver=claude-native` path now keeps ordinary Anthropic Remote Control active while projecting
+provider-ordered text to remote-claw; literal official Claude app UI acceptance remains open.
 
 ## 1. Topology
 
@@ -29,9 +30,10 @@ The default `mitm` driver runs the real `claude` behind a local TLS proxy. In th
 profile it intercepts `/v1/code/sessions/**` and `/v1/code/triggers` while `/v1/messages`, OAuth,
 telemetry, and unrelated traffic tunnel to Anthropic. With `--rc-inference=bedrock`, remote-claw
 translates inference to Bedrock and synthesizes the required Anthropic control plane, so no request
-reaches Anthropic. The experimental OpenCode adapter and
-tmux fallback reach the same `Session` seam without using the Claude Remote Control MITM. They are
-intended product surfaces with narrower current guarantees. See
+reaches Anthropic. The `claude-native` driver instead uses the proxy transparently to observe one exact
+successful bridge, then uses Anthropic history/SSE/text POST as an app client. The experimental
+OpenCode adapter and tmux fallback reach the same `Session` seam through their own native surfaces.
+See
 [pluggable-harness.md](pluggable-harness.md).
 
 The broker is a ciphertext router. Its active API is:
@@ -122,7 +124,9 @@ before using the reassembled plaintext.
 
 ## 4. The Claude Remote Control adapter
 
-In `--rc-app` mode, `packages/cli/src/host/rc/mitm.ts` implements the worker-facing subset of Claude's
+### 4.1 Private facade
+
+In the default `--rc-driver=mitm` mode, `packages/cli/src/host/rc/mitm.ts` implements the worker-facing subset of Claude's
 Remote Control service:
 
 - `POST /v1/code/sessions` creates a fresh `cse_*`, mints a session-scoped worker bearer, and queues
@@ -153,6 +157,34 @@ event.
 `--rc-trace` uses the same interception machinery as a transparent inspector. It forwards RC to
 Anthropic and records redacted protocol shapes; it creates no broker bridge.
 
+### 4.2 Provider-native text companion
+
+`--rc-driver=claude-native` runs ordinary `claude --remote-control` through that transparent proxy and
+binds only after the spawned child completes a successful canonical
+`POST /v1/code/sessions/{cse_*}/bridge`. It inspects no bridge body or worker bearer, rejects a second
+different binding, and gives the remote-claw projection a fresh random `cse_*` distinct from the native
+session ID.
+
+One reconciler owns provider order. It opens and validates one client SSE stream before paging bounded
+ascending history, follows `next_cursor` or `resume_cursor` under cursor/page/event caps, sorts by
+arbitrary-precision provider sequence, and then drains the already-open stream. Reconnect pauses new
+writes, opens the replacement stream first, reconciles history, and resumes only after continuity is
+restored. Exact provider repeats are no-ops; a changed event identity, reused sequence, or unseen event
+behind the committed high-water mark closes the projection. Opposite-source client/worker replicas with
+the same provider user UUID and normalized text are one logical prompt whichever source arrives first;
+optional worker identity enrichment is validated but need not be byte-identical. Attachment-bearing
+user replicas remain non-projectable even if a later worker echo rewrites their text.
+
+Top-level text user events, worker assistant text, and worker text results are projected. Nested/nontext
+user records and unknown controls stay native; invalid pinned identity fields fail closed. Browser text
+uses one UUID and timestamp through broker admission and provider POST. A seq-less
+`{native_pending:true}` acceptance means only that the host admitted the command. Provider history/SSE
+then publishes the canonical accepted coordinate and user row in provider order. One serialized writer
+issues no automatic retry; a rejected or outcome-unknown POST fences the projection before any
+successor. Accepted provider events and browser mutations share a fixed lifetime ceiling; exhausting it
+fails only the projection instead of growing companion state without bound. Projection/broker failure
+leaves the transparent proxy and healthy Claude child running.
+
 ## 5. `Session` and the relay
 
 `packages/cli/src/host/rc/session.ts` is one in-memory event bus:
@@ -172,11 +204,13 @@ local adapter.
 2. The inbound pump authenticates browser frames, deduplicates by `msg_id`, and turns them into session
    input or controls.
 
-For a browser `user` frame, one queued unit publishes `accepted`, publishes the canonical `user` echo,
-and only then calls `Session.pushUserInput`. A failed required publication prevents the native side
-effect. Permission resolution uses the same ordering: publish `permission_resolved`, then deliver the
-worker response. Both pumps share the queue so a later native action cannot overtake an earlier frame
-whose publication fails.
+For a browser `user` frame on the private facade, one queued unit publishes `accepted`, publishes the
+canonical `user` echo, and only then calls `Session.pushUserInput`. Native-companion text instead
+publishes only a seq-less pending admission before delivery; provider history/SSE later owns the
+canonical accepted coordinate and user row. A failed required publication prevents the native side
+effect. Permission resolution uses the private-facade ordering: publish `permission_resolved`, then
+deliver the worker response. Both pumps share the queue so a later native action cannot overtake an
+earlier frame whose publication fails.
 
 The first required publication failure latches the cause, closes only that session, and rejects queued
 successors before they publish or mutate the worker. One logical publish—including sealing, chunks,
@@ -245,6 +279,7 @@ cannot bypass a disabled button:
 | Driver | Structured permissions | Status | Interrupt | Set model | Set mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
+| Claude native companion | no | no | no | no | no | no | no |
 | Experimental tmux, default mirroring | yes | no | yes | yes | no | no | yes |
 | Experimental OpenCode, default mirroring | yes | no | yes | no | no | no | no |
 
@@ -322,7 +357,7 @@ does not claim durable exactly-once collaboration:
    from publishing beyond a failed unit.
 3. Durable broker replay preserves the remote-claw projection, not Claude's complete native context or
    every prompt typed locally.
-4. Claude's Remote Control worker does not backfill old native history: the bridge response contains a
+4. The private-facade Claude worker does not backfill old native history: the bridge response contains a
    worker bearer, its downstream SSE carries new input, and the worker posts only new output. A resumed
    conversation's pre-resume transcript therefore cannot be recovered from the RC wire.
 5. The process-local readiness bridge has no durable host-wide inventory. A wrapper restart cannot
@@ -333,13 +368,15 @@ does not claim durable exactly-once collaboration:
    with a long-lived session.
 8. Tmux and OpenCode can recognize local prompts only after native observation, with documented
    correlation limits. Stable MITM intentionally drops ordinary native user echoes to avoid duplicating
-   remote prompts, so a local Claude TUI prompt may execute without appearing in the viewer.
-9. The current `--rc-app` topology replaces Anthropic Remote Control. It does not meet the product goal
-   of simultaneous local TUI, official Claude client, and remote-claw clients.
+   remote prompts, so a local Claude TUI prompt may execute without appearing in the viewer. The native
+   companion projects pinned top-level provider user events from both local-worker and app-client
+   sources.
+9. The default `--rc-driver=mitm` topology replaces Anthropic Remote Control. The native companion
+   preserves that provider topology, but literal official Claude app UI acceptance and companion
+   process restart/reattach are not yet proven.
 
-These are product limits, not invitations to rebuild a second protocol stack. The next vertical should
-prove the user-visible collaboration outcome with the smallest native sidecar that preserves host-only
-credentials and encrypted broker transport.
+These are product limits, not invitations to rebuild a second protocol stack. Finish the remaining
+native-companion UI and Graduate outcomes before adding more protocol machinery.
 
 ## 13. Code and test map
 
@@ -349,6 +386,8 @@ The active protocol is concentrated in these paths:
 - `packages/cli/src/security/provider.ts` — sealed/open provider selection.
 - `packages/cli/src/broker/{protocol,client,order}.ts` — taxonomy, HTTP/SSE client, viewer ordering.
 - `packages/cli/src/host/rc/{session,relay,mitm,launch}.ts` — Claude adapter and host relay.
+- `packages/cli/src/host/rc/anthropic/{client,driver,transport,credentials}.ts` — provider-native
+  history/SSE/text transport, exact binding, and projection lifecycle.
 - `packages/cli/src/host/rc/drivers/{bridge,ready-bridge}.ts` — process-local readiness and broker
   bridge lifecycle shared by current adapters.
 - `apps/web/app/api/{relay,stream,seq,frame-count}/route.ts` — broker API.

@@ -8,8 +8,9 @@ focused compatibility tests.
 
 These findings matter because they identified both the working private replacement relay and the
 native client seam for structured coexistence. A later bounded M0 run first proved the cheaper
-lower-fidelity tmux route; structured fidelity remains the next Claude milestone and one part of the
-broader Claude/Codex/OpenCode/tmux product.
+lower-fidelity tmux route. M1 structured native-RC text coexistence is now implemented and has passed
+focused and authenticated provider-API-path acceptance; literal official Claude UI proof and M1
+Graduate hardening remain open. It is one part of the broader Claude/Codex/OpenCode/tmux product.
 
 ## 1. `--sdk-url` is not a custom Remote Control relay hook
 

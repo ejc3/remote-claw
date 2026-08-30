@@ -46,12 +46,19 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      keeping (and replaying) an in-memory transcript. Stable Claude requires that
                      durable profile and fails closed before discovery on vercel/local; production
                      should default the deployment to sqlite/Turso so host and viewer agree.
-  --rc-driver <d>    capture/inject driver (or set RC_DRIVER): mitm | tmux | opencode (default mitm).
-                     mitm is the only supported private-relay driver and runs the real claude behind
-                     our MITM. tmux and opencode are retained experimental/internal compatibility
-                     drivers. tmux leaves Claude's own --remote-control untouched; one bounded run
-                     passed through the Anthropic Remote API and two browsers, but official-app UI and
-                     supported-version acceptance remain pending.
+  --rc-driver <d>    capture/inject driver (or set RC_DRIVER): mitm | claude-native | tmux | opencode
+                     (default mitm). mitm is the supported private relay and replaces Anthropic RC.
+                     claude-native is the Linux/Claude 2.1.237 text-only companion: it leaves ordinary
+                     Anthropic Remote Control intact alongside the local TUI and remote-claw browsers.
+                     Literal official-client UI acceptance remains pending. Use it with claude's own
+                     --remote-control.
+                     tmux and opencode remain experimental/internal compatibility drivers.
+
+Claude native companion (--rc-driver=claude-native):
+  Starts ordinary Claude behind a transparent session-binding observer, then mirrors the exact native
+  session through the sealed broker. Only non-empty, non-slash text is supported. Permissions,
+  questions, interrupts, model/mode changes, attachments, and end remain native/local and disabled in
+  the viewer. --rc-inference, --rc-bedrock-*, and --rc-accountless are rejected for this driver.
 
 Inference (mitm driver; the supported default is anthropic):
   --rc-inference <t> anthropic | bedrock (or set RC_INFERENCE; default anthropic = pass through).

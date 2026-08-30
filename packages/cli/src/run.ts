@@ -10,6 +10,7 @@ import { deriveIdentity } from "@remote-claw/clawsec";
 import { classifyArgs } from "./args.js";
 import { BrokerClient } from "./broker/client.js";
 import { RC_HELP } from "./help.js";
+import { runClaudeNativeDriver } from "./host/rc/anthropic/driver.js";
 import { parseStripKeys } from "./host/rc/bedrock/translate.js";
 import {
   assertStableClaudeCompatibility,
@@ -59,7 +60,7 @@ export function misappliedDriverFlagWarnings(
       `remote-claw: ${flags.join(" / ")} only appl${flags.length > 1 ? "y" : "ies"} to --rc-driver=${appliesTo}; ignored for ${driver}\n`,
     );
   };
-  if (driver === "mitm" || driver === "opencode") {
+  if (driver === "mitm" || driver === "claude-native" || driver === "opencode") {
     emit(
       [
         ...(rc["rc-session-hook"] === true ? ["--rc-session-hook"] : []),
@@ -69,7 +70,7 @@ export function misappliedDriverFlagWarnings(
       "tmux",
     );
   }
-  if (driver === "mitm" || driver === "tmux") {
+  if (driver === "mitm" || driver === "claude-native" || driver === "tmux") {
     emit(
       [
         ...(rc["rc-oc-skip-permissions"] === true ? ["--rc-oc-skip-permissions"] : []),
@@ -117,6 +118,8 @@ export interface RunOptions {
   spawnRcEnv?: SpawnClaudeEnv;
   /** Injectable OpenCode driver boundary (tests). */
   runOpencodeDriver?: typeof runOpencodeDriver;
+  /** Injectable Claude native-companion boundary (tests). */
+  runClaudeNativeDriver?: typeof runClaudeNativeDriver;
   /** Injectable tmux driver boundary (tests). */
   runTmuxDriver?: typeof runTmuxDriver;
   /** Injectable stable-Claude compatibility boundary (tests). Defaults to the fail-closed probe. */
@@ -334,13 +337,18 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     if (driver === "mitm") {
       return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
     }
+    if (driver === "claude-native") {
+      return runClaudeNativeDriverPath(rcApp, rc, claudeArgs, bin, opts, warn);
+    }
     if (driver === "opencode") {
       return runOpencodeDriverPath(rcApp, rc, claudeArgs, opts, warn);
     }
     if (driver === "tmux") {
       return runTmuxDriverPath(rcApp, rc, claudeArgs, bin, opts, warn);
     }
-    warn(`remote-claw: unknown --rc-driver=${driver} (expected mitm | tmux | opencode)\n`);
+    warn(
+      `remote-claw: unknown --rc-driver=${driver} (expected mitm | claude-native | tmux | opencode)\n`,
+    );
     return 2;
   }
   if (rcApp === "" && rcNames.length > 0 && !helpWanted) {
@@ -455,6 +463,74 @@ async function runRcLaunchPath(
     });
   } catch (e) {
     warn(`remote-claw: could not start remote control: ${(e as Error)?.message ?? e}\n`);
+    return 1;
+  }
+}
+
+/**
+ * Launch ordinary Anthropic-hosted Claude behind a transparent binding observer and project that exact
+ * native Remote Control session into the sealed broker. Unlike the private MITM path, Anthropic remains
+ * the sync service and the official Claude client can coexist with the local TUI and remote-claw.
+ */
+async function runClaudeNativeDriverPath(
+  brokerUrl: string,
+  rc: Record<string, unknown>,
+  claudeArgs: string[],
+  bin: string,
+  opts: RunOptions,
+  warn: (line: string) => void,
+): Promise<number> {
+  const incompatible = [
+    ...(typeof rc["rc-inference"] === "string" && rc["rc-inference"].trim() !== ""
+      ? ["--rc-inference"]
+      : []),
+    ...(typeof rc["rc-bedrock-region"] === "string" && rc["rc-bedrock-region"].trim() !== ""
+      ? ["--rc-bedrock-region"]
+      : []),
+    ...(typeof rc["rc-bedrock-model"] === "string" && rc["rc-bedrock-model"].trim() !== ""
+      ? ["--rc-bedrock-model"]
+      : []),
+    ...(rc["rc-accountless"] === true ? ["--rc-accountless"] : []),
+  ];
+  if (incompatible.length > 0) {
+    warn(
+      `remote-claw: ${incompatible.join(" / ")} cannot be used with --rc-driver=claude-native; this driver preserves Anthropic Remote Control\n`,
+    );
+    return 2;
+  }
+
+  try {
+    await (opts.claudeCompatibilityCheck ?? assertStableClaudeCompatibility)(bin);
+  } catch {
+    warn(`remote-claw: ${STABLE_CLAUDE_REQUIREMENT}\n`);
+    return 1;
+  }
+
+  const secretPath = resolveSecretFile(rc);
+  try {
+    const ctx = await createDriverContext({
+      brokerUrl,
+      rc,
+      harnessArgs: claudeArgs,
+      harnessBin: bin,
+      tracerTarget: "rc.claude-native",
+    });
+    const ac = new AbortController();
+    const onSignal = () => ac.abort();
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+    try {
+      return await (opts.runClaudeNativeDriver ?? runClaudeNativeDriver)(ctx, ac.signal, {
+        certsDir: join(dirname(secretPath), "mitm-certs"),
+        claudeBin: bin,
+        spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
+      });
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+    }
+  } catch {
+    warn("remote-claw: could not start Claude native companion\n");
     return 1;
   }
 }

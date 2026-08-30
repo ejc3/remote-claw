@@ -4,11 +4,10 @@ This plan maps tests to product outcomes and safety boundaries. It is intentiona
 historical gate stack: a green result should mean that a user-facing path or a concrete invariant was
 tested, not that one script vouched for another script.
 
-The structured Claude coexistence acceptance is still red, and the full
-Claude/Codex/OpenCode/tmux matrix is incomplete. The bounded M0 tmux architecture experiment passed;
-maintained tmux support waits for M4. The immediate red acceptance is M1's structured Anthropic path
-plus the official Claude app UI. See [Product goal and release gates](release-finish-line.md) and
-[Architecture](v2-architecture.md).
+The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude text implementation
+and bounded local-TUI/provider-API/two-browser run are green; literal official Claude app UI and the
+Graduate recovery/deployment gates are still red. Maintained tmux support waits for M4. See
+[Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
 
 ## 1. Gate policy
 
@@ -81,7 +80,7 @@ pnpm --filter @remote-claw/web run test:run
 | CLI identity and install | <code>packages/cli/src/identity*.test.ts</code>, <code>store.test.ts</code>, <code>scripts/test-installed-cli.mjs</code> | Secret custody, output redaction, wrapper behavior, install artifact |
 | Broker transport | <code>packages/cli/src/broker/*.test.ts</code> | Authenticated HTTP/SSE, retries, ordering, and cursor handling |
 | Claude private facade | <code>packages/cli/src/host/rc/mitm*.test.ts</code>, <code>session.test.ts</code>, <code>relay.test.ts</code>, <code>launch.test.ts</code> | Strict native intake, worker delivery, translation, fail-stop, and child isolation |
-| Anthropic direct client | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, bounded REST/SSE parsing, conservative write outcomes |
+| Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, exact bridge binding, subscribe/history reconciliation, provider-coordinate dedup, conservative writes, and child/projection isolation |
 | Alternate adapters and inference | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, <code>opencode/*.test.ts</code>, <code>bedrock/*.test.ts</code> | Current adapter-local contracts and honest capability limits; not full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
 | HTTP routes | <code>apps/web/test/api/*.test.ts</code>, <code>auth.test.ts</code> | Bearer binding, route validation, error mapping, handoff semantics |
@@ -274,9 +273,22 @@ value was the architecture decision, not a permanent new proof harness.
 This run did not exercise the official Claude web/mobile UI and does not promote tmux to structured or
 exactly-once peer collaboration.
 
-### M1 structured Claude native acceptance — currently unimplemented
+### M1 structured Claude native acceptance — implementation present, milestone incomplete
 
-This is the outcome that decides whether the next milestone is finished:
+On 2026-08-30, a production-built local SQLite broker and exact Claude Code 2.1.237 exercised the
+implemented <code>claude-native</code> path. One local-TUI prompt and prompts from two simultaneous
+remote-claw Chromium contexts were accepted by Anthropic, answered by Claude, and rendered once in
+both browsers. A separate authenticated <code>AnthropicRcClient.postEvent</code> prompt traversed the
+same live session and was also rendered once in both browsers. Deterministic tests own binding,
+subscribe-before-history overlap, both client/worker echo orders, reconnect reconciliation, reused or
+regressing provider coordinates, unsupported controls, and ambiguous POST fencing.
+
+That run proves the structured provider API path and multiple-viewer outcome. It does **not** prove a
+literal official Claude web/mobile UI interaction: headless and Xvfb Chromium were redirected to
+<code>/login</code> behind Cloudflare and had no authenticated Claude web session. It also does not
+close the Graduate restart, broker-loss, log/credential, packed-install, or deployed exact-SHA gates.
+
+The complete milestone still requires:
 
 1. Launch a normal Anthropic-hosted <code>claude --remote-control</code> session.
 2. Keep its local TUI interactive.
@@ -292,12 +304,13 @@ This is the outcome that decides whether the next milestone is finished:
 10. Interrupt or fail the broker; verify the native TUI and official client remain usable.
 11. Confirm provider OAuth exists only on the host and broker records remain sealed.
 
-The test must use the small readiness-gated native bridge around the existing Anthropic client, not
-<code>--rc-app</code>. The replacement path cannot satisfy step 3 by design, and trace mode cannot
-satisfy steps 4 through 6.
+The test must use
+<code>--rc-app &lt;origin&gt; --rc-driver=claude-native --remote-control</code>, not the default
+<code>--rc-driver=mitm</code> / <code>runRcLaunch</code> replacement path. The replacement path cannot
+satisfy step 3 by design, and trace mode cannot satisfy steps 4 through 6.
 
-Until this passes against the deployed durable broker, CI green means the implemented foundation is
-healthy. It does not mean M1 or the full product is complete.
+Until the remaining UI and Graduate steps pass against the supported deployed durable broker, CI green
+means the implemented text slice is healthy. It does not mean M1 or the full product is complete.
 
 ## 8. Remaining adapter acceptance
 

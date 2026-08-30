@@ -38,9 +38,9 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   "rc-inference": "value",
   "rc-bedrock-region": "value",
   "rc-bedrock-model": "value",
-  // Which capture/inject driver runs the harness: mitm (default — real claude behind our MITM),
-  // tmux (plain claude in a tmux pane; provider-agnostic, Bedrock-capable), or opencode (drive
-  // `opencode serve`). Same broker/client/viewer for all (§ pluggable-harness).
+  // Which capture/inject driver runs the harness: mitm (default — private Claude RC facade),
+  // claude-native (ordinary Anthropic RC plus a structured app-client companion), tmux (plain claude
+  // in a tmux pane), or opencode (`opencode serve`). Same sealed broker/viewer for all.
   "rc-driver": "value",
   // OpenCode driver knobs (only meaningful with --rc-driver=opencode). The server origin
   // (default 127.0.0.1:4096, env OPENCODE_URL) and the model as "providerID/modelID" (default

@@ -2,9 +2,10 @@
 
 > **Current context (2026-08-24):** this is an unabridged historical notebook, not current product
 > direction. The full product covers Claude Code, Codex, OpenCode, and tmux. A bounded M0 run proved
-> lower-fidelity coexistence through the retained tmux route; the next structured milestone uses the
-> client REST/SSE seam summarized in [Phase 0 findings](phase0-findings.md) to preserve normal Claude
-> Remote Control while adding encrypted browsers and verifying the official app UI. Current contracts live in
+> lower-fidelity coexistence through the retained tmux route. The M1 native-RC structured text vertical
+> now uses the client REST/SSE seam summarized in [Phase 0 findings](phase0-findings.md) and has passed
+> focused and authenticated provider-API-path acceptance. Literal official Claude UI proof and M1
+> Graduate hardening remain open. Current contracts live in
 > [Architecture](v2-architecture.md) and [Product goal and release gates](release-finish-line.md).
 
 > **Purpose of this document.** Capture, in exhaustive detail, everything we

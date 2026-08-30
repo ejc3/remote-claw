@@ -35,10 +35,12 @@ Historical suite counts, removed backends, old `test:app:*` variants, generalize
 and receipt-based release evidence are intentionally omitted. Git history preserves the original
 report if an old decision needs forensic context.
 
-The review did not prove the current Claude native-coexistence milestone. The implemented private `--rc-app` path
-replaces Anthropic Remote Control, and `--rc-trace` is passive. Official-client plus remote-claw
-coexistence remains unimplemented; later OpenCode, Codex, tmux, and inference milestones retain their
-own acceptance scenarios.
+The review did not prove the current Claude native-coexistence milestone. The private `--rc-app` path
+still replaces Anthropic Remote Control, and `--rc-trace` is passive. Since this review,
+`--rc-driver=claude-native` has implemented structured native-RC text coexistence and passed focused
+and authenticated provider-API-path acceptance. Literal official Claude UI proof and M1 Graduate
+hardening remain open; later OpenCode, Codex, tmux, and inference milestones retain their own
+acceptance scenarios.
 
 ## Current reproduction
 

@@ -2,12 +2,13 @@
 
 **Status: the full product is not implemented.** The shared crypto, broker, browser, and Claude
 private-relay path work. OpenCode, tmux, Bedrock, and accountless paths have useful implementations
-and evidence with narrower guarantees. A bounded M0 run proved lower-fidelity Claude/tmux coexistence
-through the Anthropic Remote API; structured fidelity and official-app UI acceptance are still missing.
+and evidence with narrower guarantees. M1's Linux/exact-2.1.237 structured text companion is now
+implemented. A bounded 2026-08-30 run proved the local TUI, an authenticated Anthropic RC API client,
+and two remote-claw browsers on one provider session. Literal official-app UI validation and the M1
+Graduate gates remain open.
 
-The next milestone is structured Claude native coexistence because the retained tmux route has now
-answered the basic topology question. It is not the entire product or a reason to discard the other
-surfaces.
+The active milestone is finishing Claude native coexistence. It is not the entire product or a reason
+to discard the other surfaces.
 
 ## Decision policy
 
@@ -107,7 +108,7 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 | Shared broker/browser/security | Sealed frames, identity/pass derivation, durable replay, multi-viewer state, capability gating, and fail-stop behavior | Exercise the same boundaries through each production adapter |
 | Claude private relay | Real Claude behind a local RC façade; browser turns and native output cross the broker | It replaces Anthropic RC, so the official client cannot join |
 | Claude trace | Normal Anthropic RC and official-client control with protocol observation | It does not project to or accept commands from remote-claw browsers |
-| Native Anthropic client | Bounded session list/history/SSE/text POST transport and host-only credential source | Readiness-gated bridge, exact session binding, reconciliation, and browser wiring |
+| Claude native companion | Exact bridge binding, subscribe-before-history reconciliation, provider-ordered text projection/injection, host-only OAuth, two-browser capability gating, and fail-stop ambiguity handling on Linux with exact Claude 2.1.237 | Literal official-app UI validation, fresh-projection restart/reattach, broker-loss/log/install proof, and deployed exact-SHA acceptance |
 | OpenCode | Experimental server adapter with history/SSE capture, text injection, permissions, and capability limits | Real TUI coexistence, durable binding/recovery, ambiguity handling, and supported release matrix |
 | Codex | Pinned evidence that multiple app-server clients can share one native thread | Product adapter, local TUI plus browser coexistence, and provider-native Codex/ChatGPT Remote integration |
 | tmux | Private pane, transcript capture, conservative input injection, optional permission mirroring, and one bounded Claude/Anthropic/two-browser coexistence run | Productize only its honest fallback contract; verify the official app separately and never claim native peer fidelity it cannot supply |
@@ -127,7 +128,7 @@ Cartesian-product marathon.
 | Delivery | User-visible result | Why this order |
 | --- | --- | --- |
 | M0 — complete | Lower-fidelity topology decision | Already answered whether native/provider and remote-claw surfaces can remain live together |
-| M1 — next | Structured Claude text coexistence | Resolves the primary product and provider-boundary risk first |
+| M1 — in progress | Structured Claude text coexistence | The text implementation and bounded API-path run are complete; literal official-app UI and Graduate evidence remain |
 | M2 | Supported OpenCode text/interrupt adapter | Existing code makes this the cheapest second structured adapter and tests whether a shared seam is real |
 | M3a | Codex TUI plus remote-claw browsers | Converts pinned app-server evidence into product code without depending on provider Remote |
 | M3b | Codex/ChatGPT Remote coexistence | Ships only after a current supported provider boundary passes a bounded feasibility gate |
@@ -170,14 +171,22 @@ the Anthropic-side surface was the typed host client. M1 remains scoped to those
 
 ### M1 — structured Claude native coexistence
 
-Keep normal `claude --remote-control` connected to Anthropic. Add a small, initially Linux and
-text-only host bridge that:
+The first text implementation now exists behind <code>--rc-driver=claude-native</code>. On 2026-08-30,
+exact Claude Code 2.1.237 ran with ordinary Anthropic Remote Control, one local TUI, an authenticated
+Anthropic RC API client, and two simultaneous remote-claw Chromium contexts. Local, API-client, and
+both browser prompts were provider-observed and rendered once in both browsers. This is real
+structured/API-path evidence, not literal official-app UI evidence: the isolated browser was redirected
+to Claude login behind Cloudflare and had no authenticated Claude web session.
+
+The Linux/exact-2.1.237 text-only host bridge keeps normal `claude --remote-control` connected to
+Anthropic. It:
 
 1. waits until one exact native `cse_*` is selected and ready;
 2. reconciles ascending history with one live SSE reader;
 3. projects supported events into the E2E-encrypted broker;
 4. submits text with one caller-owned UUID and timestamp; and
-5. treats a potentially completed POST as outcome-unknown instead of issuing a fresh command.
+5. permanently fences its projection after a rejected or outcome-unknown POST instead of issuing a
+   fresh command.
 
 Acceptance: one local Claude TUI, the official Claude client, and two remote-claw browsers share one
 session; labeled text from every surface appears once; browser reconnect on one projection adds no
@@ -185,22 +194,18 @@ duplicate; companion restart creates a fresh random projection of the same nativ
 history once, consumes no retired commands, and repeats no native mutation; broker loss leaves the
 native surfaces alive.
 
-This milestone needs a small readiness-gated bridge helper, not a generalized host coordinator. No
+The implementation uses a small readiness-gated bridge helper, not a generalized host coordinator. No
 presence or browser mutation is published before exact native identity, capture, and mutation
-prerequisites are ready. Cancellation must win over a late readiness transition.
+prerequisites are ready. Cancellation wins over a late readiness transition.
 
 Use two closed merge points, each based on the previous merged <code>main</code>:
 
 1. **Coexistence text:** bind one exact native session, reconcile history/SSE, admit browser text with
-   one stable caller coordinate, stop writes on ambiguity, and prove the local TUI, official client,
-   and two browsers contribute exactly once.
+   one stable caller coordinate, and stop writes on ambiguity. The implementation, local TUI, two-
+   browser, and authenticated provider-client API path are green; a literal official Claude client UI
+   run remains required before advertising this outcome as fully accepted.
 2. **Graduate:** prove fresh-projection companion restart, broker-loss isolation, credential/log
    boundaries, installed-package use, and the exact-SHA deployed acceptance.
-
-Read-only binding/capture may be a bounded feasibility run inside the first slice, but it is not an
-announced product merge point: the current session contract has no truthful read-only capability.
-Do not add one merely to manufacture a PR boundary, and do not merge placeholder interfaces or
-provisional architecture merely to increase PR count.
 
 ### M2 — OpenCode production adapter
 
