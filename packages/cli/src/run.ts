@@ -796,7 +796,7 @@ async function runCodexDriverPath(
     url = normalizeCodexAppServerUrl(configuredUrl);
   } catch {
     warn(
-      "remote-claw: --rc-codex-url / RC_CODEX_URL must be an explicit-port ws origin on 127.0.0.1 or [::1], with no credentials, path, query, or fragment\n",
+      "remote-claw: --rc-codex-url / RC_CODEX_URL must be literal unix:// for Codex's same-user managed control socket, or an explicit-port ws origin on 127.0.0.1 or [::1], with no credentials, path, query, or fragment; arbitrary Unix paths are not accepted\n",
     );
     return 2;
   }

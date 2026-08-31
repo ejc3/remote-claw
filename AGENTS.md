@@ -18,8 +18,23 @@ after the official client disconnected. The Graduate commit's separate exact-SHA
 passed. M1, OpenCode M2, and narrow Codex M3a are complete. M3a peer-attaches exact Codex app-server
 0.151.0/Linux arm64 on an explicit-port loopback WebSocket to one supplied UUIDv7, requires an attached
 local TUI and paired durable broker cursors, and exposes only text plus real status; every browser
-control, attachment, approval, and question response remains disabled. M3b—same-thread coexistence
-with the supported ChatGPT desktop/phone Remote topology—is next. The supported durable broker is
+control, attachment, approval, and question response remains disabled. M3b is also complete on an
+exact official Remote thread for Codex 0.151.0/Linux arm64 through the literal managed Unix socket and
+legacy full-turn hydration. The local TUI remained sole approval/question owner. One provider-origin
+marker appeared exactly once in two independent browsers; one browser-origin prompt and acknowledgement
+appeared exactly once in the official thread, TUI, and both browsers, and the sending browser received
+the host receipt. An ephemeral provider transport was then disabled and remained disabled while a
+browser-B turn completed; the managed daemon, TUI, companion, and both browsers stayed live, after
+which provider transport restored to connected. This proves provider-transport isolation, not a
+per-device unsubscribe. It does not graduate richer controls, companion restart/backfill, or broker-loss
+recovery. The attachment path
+accepts literal `unix://` only as Codex's same-user managed control socket
+(`$CODEX_HOME/app-server-control/app-server-control.sock`, falling back to `~/.codex`), while retaining
+the historical explicit-port loopback WebSocket form and rejecting arbitrary Unix paths. Resume's
+reported `historyMode` selects bounded ascending `thread/items/list` for `paginated` or
+`thread/turns/list` with `itemsView:"full"` for `legacy`; unsupported tool/reasoning items are filtered
+before the 10,000 projected-text-item cap. Codex coordinates are `(turnId,itemId)`, and changed
+projected bytes at an already-seen coordinate fence the projection. The supported durable broker is
 SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Design lives in
 `docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI is `packages/cli`.
 Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-architecture.md` §17.

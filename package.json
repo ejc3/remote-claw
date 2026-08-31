@@ -2,6 +2,7 @@
   "name": "remote-claw",
   "private": true,
   "version": "0.0.0",
+  "type": "module",
   "description": "remote-claw — an E2E-encrypted multiplayer layer for native coding-agent sessions.",
   "bin": {
     "remote-claw": "dist/remote-claw.js"

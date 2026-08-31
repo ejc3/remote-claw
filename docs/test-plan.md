@@ -8,8 +8,9 @@ The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude
 web UI coexistence on the user's phone, fresh-projection restart, broker-loss isolation, packed install,
 bounded credential/storage checks, and exact-SHA deployed Preview are green. The pinned OpenCode M2
 text/interrupt tuple and its real-TUI/two-browser acceptance are also green. Codex M3a's exact
-0.151.0/Linux arm64 app-server text/status tuple and real-TUI/two-browser acceptance are green; M3b
-provider-Remote coexistence is next, and maintained tmux support waits for M4. See
+0.151.0/Linux arm64 app-server text/status tuple and real-TUI/two-browser acceptance are green. M3b's
+exact official-Remote/TUI/two-browser coexistence and provider-transport-isolation outcome is also
+green for that tuple; maintained tmux support waits for M4. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
 
 ## 1. Gate policy
@@ -85,7 +86,7 @@ pnpm --filter @remote-claw/web run test:run
 | Claude private facade | <code>packages/cli/src/host/rc/mitm*.test.ts</code>, <code>session.test.ts</code>, <code>relay.test.ts</code>, <code>launch.test.ts</code> | Strict native intake, worker delivery, translation, fail-stop, and child isolation |
 | Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, exact launch/attach binding, subscribe/history reconciliation, provider-coordinate dedup, fresh-projection restart, conservative writes, and native/projection isolation |
 | Pinned OpenCode adapter | <code>packages/cli/src/host/rc/opencode/*.test.ts</code>, focused relay/viewer tests | Exact-session capture, native coordinates and parents, marker correlation, FIFO idle admission, reconnect fencing, interrupt, restart projection, and honest capabilities for the supported M2 tuple |
-| Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/viewer tests | Loopback URL, UUID/version/platform checks, subscribe/history/readiness, native item correlation and deadline, response-less server requests, disconnect/archive/revert fencing, teardown, dispatch intent, and honest M3a capabilities |
+| Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/viewer tests | Explicit-port loopback and literal same-user managed-socket URL boundaries, UUID/version/platform checks, `historyMode` API selection, supported-text filtering before bounds, `(turnId,itemId)` identity and changed-byte fencing, subscribe/history/readiness, native item correlation and deadline, response-less server requests, disconnect/archive/revert fencing, teardown, dispatch intent, and honest M3a/M3b capabilities |
 | Experimental adapters and inference | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, <code>bedrock/*.test.ts</code> | Current adapter-local contracts and honest capability limits; not full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
 | HTTP routes | <code>apps/web/test/api/*.test.ts</code>, <code>auth.test.ts</code> | Bearer binding, route validation, error mapping, handoff semantics |
@@ -334,10 +335,10 @@ forwarded Claude arguments. Neither may use the default <code>--rc-driver=mitm</
 <code>runRcLaunch</code> replacement path: it cannot satisfy official-client coexistence by design, and
 trace mode cannot connect remote-claw browsers.
 
-M1 is complete. CI green alone still does not establish M3b, broader Codex/OpenCode tuples, tmux,
-Bedrock/accountless, or the full product matrix.
+M1 and the bounded Codex M3b live gate are complete. CI green alone still does not establish broader
+Codex/OpenCode tuples, tmux, Bedrock/accountless, or the full product matrix.
 
-## 8. OpenCode M2, Codex M3a, and remaining adapter acceptance
+## 8. OpenCode M2, Codex M3a/M3b, and remaining adapter acceptance
 
 On 2026-08-30, the exact supported OpenCode 1.17.5/Linux arm64/Bedrock Sonnet tuple passed with the
 real TUI and two independent browser contexts. Its OpenCode server used `AWS_REGION=us-west-1` plus
@@ -361,12 +362,26 @@ faithfully established by a mock. It is a bounded acceptance outcome, not a perm
 Focused tests own the deterministic boundaries listed in the ownership table. Restart/backfill and a
 live broker-loss run are not claimed.
 
+M3b used an exact official Remote thread on Codex 0.151.0/Linux arm64, literal `unix://` to Codex's
+same-user managed control socket, and `historyMode:"legacy"` full-turn hydration. The attached local TUI
+remained the sole approval/question owner. A provider-origin marker appeared exactly once in two
+independent browsers. A browser-origin prompt and acknowledgement appeared exactly once in the official
+thread, TUI, and both browsers, and the sending browser showed its host receipt. An ephemeral provider
+transport then stayed disabled while a browser-B turn completed; the managed daemon, TUI, companion,
+and both browsers stayed live before provider transport restored to connected.
+
+That failure step proves provider-transport isolation, not per-device unsubscribe: the gate did not
+selectively disconnect one official provider device while retaining another. It also did not exercise
+richer controls, attachments, companion restart/backfill, or broker-loss. Deterministic tests continue
+to own URL boundaries, both history modes, filtering, `(turnId,itemId)` identity, changed-byte fencing,
+and the other adapter invariants in the ownership table.
+
 The later milestones use the same shared security checks but keep product-specific truth:
 
 | Surface | Required real outcome |
 | --- | --- |
 | OpenCode beyond M2 | Each added version, platform, model, permission/control family, or native collaboration surface needs its own exact tuple and bounded outcome; it does not reopen the completed text/interrupt tuple |
-| Codex beyond M3a | M3b separately proves same-thread coexistence with the current Codex Remote topology; later versions, platforms, controls, attachments, and restart/backfill need their own bounded outcome without reopening M3a |
+| Codex beyond M3a/M3b | Later versions, platforms, controls, attachments, restart/backfill, broker-loss, and any per-device unsubscribe claim need their own bounded outcome without reopening the completed exact-tuple text/status/coexistence result |
 | tmux | Recoverable local pane plus two browsers, with conservative injection states and no claim of independent peer ordering or exactly-once native application; any advertised Claude Remote coexistence uses the official Claude client UI |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 

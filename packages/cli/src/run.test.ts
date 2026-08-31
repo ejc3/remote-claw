@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -191,6 +191,7 @@ describe("runWrapper (functional)", () => {
   it.each([
     ["driver flag", ["--rc-driver", "codex"], undefined],
     ["URL flag", ["--rc-codex-url", "ws://127.0.0.1:4500"], undefined],
+    ["managed socket URL flag", ["--rc-codex-url", "unix://"], undefined],
     ["thread flag", ["--rc-codex-thread", "0194f8d8-10b4-7abc-8def-0123456789ab"], undefined],
     ["driver env", [], ["RC_DRIVER", "codex"]],
     ["URL env", [], ["RC_CODEX_URL", "ws://127.0.0.1:4500"]],
@@ -593,6 +594,60 @@ describe("runWrapper (functional)", () => {
     }
   });
 
+  it("dispatches literal unix:// without writing the native thread id or host secret", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-codex-managed-socket-"));
+    const secret = join(dir, "secret");
+    const threadId = "0194f8d8-10b4-7abc-8def-0123456789ab";
+    const stdout: string[] = [];
+    const stderr: string[] = [];
+    let seenOptions:
+      | {
+          url: string;
+          threadId: string;
+          runtime?: Readonly<{ platform: NodeJS.Platform; arch: string }>;
+        }
+      | undefined;
+    try {
+      const code = await runWrapper(
+        [
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-driver",
+          "codex",
+          "--rc-codex-url",
+          "unix://",
+          "--rc-codex-thread",
+          threadId,
+        ],
+        {
+          runtime: { platform: "linux", arch: "arm64" },
+          stdout: (line) => stdout.push(line),
+          stderr: (line) => stderr.push(line),
+          runCodexDriver: async (_ctx, _signal, options) => {
+            seenOptions = options;
+            return 31;
+          },
+        },
+      );
+
+      expect(code).toBe(31);
+      expect(seenOptions).toEqual({
+        url: "unix://",
+        threadId,
+        runtime: { platform: "linux", arch: "arm64" },
+      });
+      const hostSecret = readFileSync(secret, "utf8").trim();
+      expect(hostSecret).not.toBe("");
+      const output = stdout.join("") + stderr.join("");
+      expect(output).not.toContain(threadId);
+      expect(output).not.toContain(hostSecret);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       name: "forwarded arguments",
@@ -628,6 +683,28 @@ describe("runWrapper (functional)", () => {
       ],
       runtime: { platform: "linux" as const, arch: "arm64" },
       error: /explicit-port ws origin on 127\.0\.0\.1 or \[::1\]/,
+    },
+    {
+      name: "arbitrary Unix socket URL",
+      extra: [
+        "--rc-codex-thread",
+        "0194f8d8-10b4-7abc-8def-0123456789ab",
+        "--rc-codex-url",
+        "unix:///tmp/codex-app-server.sock",
+      ],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /arbitrary Unix paths are not accepted/,
+    },
+    {
+      name: "arbitrary Unix filesystem path",
+      extra: [
+        "--rc-codex-thread",
+        "0194f8d8-10b4-7abc-8def-0123456789ab",
+        "--rc-codex-url",
+        "/tmp/codex-app-server.sock",
+      ],
+      runtime: { platform: "linux" as const, arch: "arm64" },
+      error: /arbitrary Unix paths are not accepted/,
     },
   ])("rejects Codex $name before identity or network", async ({ extra, runtime, error }) => {
     const dir = mkdtempSync(join(tmpdir(), "rc-run-codex-invalid-"));

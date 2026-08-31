@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>remote-claw — protocol &amp; plan</title>
-<meta name="description" content="Add zero-knowledge browser clients to a native Claude Remote Control session; coexistence is the active unfinished goal.">
+<meta name="description" content="Add zero-knowledge browser collaborators to native Claude Code, Codex, and OpenCode sessions through an end-to-end encrypted broker.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css">
 <style>
   :root{
@@ -132,7 +132,7 @@
   <p>remote-claw's target is to add multiple browser collaborators to Claude Code, Codex, OpenCode, and an honest lower-fidelity tmux fallback through a <b>zero-knowledge</b>, <b>end-to-end encrypted</b> broker while keeping the local TUI and provider-native collaboration where available. The shared core is a developer beta; the full surface matrix is not implemented yet, and model routing—including Anthropic, OpenAI, and Bedrock—remains a separate choice.</p>
   <div class="badges">
     <span class="badge ok">shared core · <b>developer beta</b></span>
-    <span class="badge">structured Claude coexistence · <b>next</b></span>
+    <span class="badge">structured adapters · <b>pinned milestones green</b></span>
     <span class="badge">OpenCode · Codex · tmux · <b>product surfaces</b></span>
     <span class="badge">end-to-end encrypted</span>
     <span class="badge">zero-knowledge broker</span>
@@ -161,7 +161,7 @@ const DOCS = [
   {id:"research", file:"remote-control-research.md",label:"RC Research"},
   {id:"astryx",   file:"astryx-migration.md",       label:"Astryx Migration"},
   {id:"future",   file:"future-directions.md",      label:"Deferred Directions"},
-  {id:"native",   file:"native-rc-passthrough-scoping.md",label:"Next: Structured Claude"},
+  {id:"native",   file:"native-rc-passthrough-scoping.md",label:"Claude native"},
   {id:"harness",  file:"pluggable-harness.md",      label:"Adapter Harness"},
   {id:"tmux",     file:"tmux-driver.md",            label:"tmux Fallback"},
   {id:"opencode", file:"opencode-driver.md",        label:"OpenCode Adapter"},

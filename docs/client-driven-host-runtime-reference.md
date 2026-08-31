@@ -13,7 +13,10 @@ Use these current sources:
 - [Retired host-runtime decision](client-driven-host-runtime.md) for why the generalized coordinator
   was removed.
 
-The exact OpenCode M2 text/interrupt tuple and exact Codex M3a app-server text/status tuple are
-supported. Other OpenCode/Codex tuples are unsupported; only OpenCode's positive permission-mirroring
-opt-in and the tmux adapter retain experimental guarantees. Codex/ChatGPT Remote coexistence remains
-M3b. See the current architecture and driver documents for each exact boundary.
+The exact OpenCode M2 text/interrupt tuple and exact Codex 0.151.0/Linux arm64 M3a app-server
+text/status tuple are supported. M3b also proved same-thread ChatGPT Remote text coexistence through
+the managed Unix socket and continued browser turns after provider-transport disconnect. It did not
+prove per-device Remote unsubscribe, Codex companion restart/backfill, broker-loss acceptance, richer
+controls/content, or another version/platform. Other OpenCode/Codex tuples are unsupported; only
+OpenCode's positive permission-mirroring opt-in and the tmux adapter retain experimental guarantees.
+See the current architecture and driver documents for each exact boundary.

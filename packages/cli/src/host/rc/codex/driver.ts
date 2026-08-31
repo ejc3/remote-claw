@@ -4,6 +4,7 @@ import { ReadyBridge } from "../drivers/ready-bridge.js";
 import { type RcEvent, RelayCore, type Session } from "../session.js";
 import {
   assertCodexCompatibility,
+  CODEX_HISTORY_ITEM_LIMIT,
   CodexAppServerClient,
   CodexAppServerError,
   type CodexClient,
@@ -14,8 +15,9 @@ import {
   parseCodexStatus,
 } from "./client.js";
 
-const ITEM_LIMIT = 10_000;
-const PAGE_LIMIT = 100;
+// A paginated thread may contain far more raw tool/reasoning items than projected text. Keep the raw
+// pager bounded while allowing roughly 100k native items at app-server's 100-item page size.
+const HISTORY_PAGE_LIMIT = 1_000;
 const CORRELATION_TIMEOUT_MS = 15_000;
 
 export class CodexProjectionError extends Error {
@@ -35,7 +37,7 @@ export interface CodexDriverOptions {
 interface BrowserMutation {
   text: string;
   clientMsgId?: string;
-  itemId: string | null;
+  itemCoordinate: string | null;
   correlated: PromiseWithResolvers<void>;
 }
 
@@ -130,22 +132,26 @@ class CodexReconciler {
     this.#mutations = mutations;
   }
 
-  accept(item: CodexThreadItem): void {
+  accept(turnId: string, item: CodexThreadItem): void {
+    // Codex item ids are stable only within one turn. The app-server stores and reconciles them by
+    // (turn_id, item_id), and legacy histories may legitimately reuse an id after rollback. JSON's
+    // tuple encoding is an exact, collision-free session coordinate for arbitrary string ids.
+    const coordinate = JSON.stringify([turnId, item.id]);
     if (item.type === "userMessage") {
       const text = userText(item);
       if (text === null) return;
       const clientId = typeof item.clientId === "string" ? item.clientId : null;
-      if (!this.#admit(item.id, JSON.stringify([item.type, clientId, text]))) return;
+      if (!this.#admit(coordinate, JSON.stringify([item.type, clientId, text]))) return;
       const mutation = clientId === null ? undefined : this.#mutations.get(clientId);
       if (mutation !== undefined) {
-        if (mutation.itemId !== null || mutation.text !== text) {
+        if (mutation.itemCoordinate !== null || mutation.text !== text) {
           throw new CodexProjectionError("Codex browser coordinate changed or repeated");
         }
-        mutation.itemId = item.id;
+        mutation.itemCoordinate = coordinate;
       }
       this.#session.pushUpstream({
         type: "user",
-        uuid: item.id,
+        uuid: coordinate,
         local_prompt: true,
         message: { role: "user", content: text },
         ...(mutation?.clientMsgId !== undefined ? { client_msg_id: mutation.clientMsgId } : {}),
@@ -155,10 +161,10 @@ class CodexReconciler {
     }
 
     if (item.type === "agentMessage" && typeof item.text === "string" && item.text !== "") {
-      if (!this.#admit(item.id, JSON.stringify([item.type, item.text]))) return;
+      if (!this.#admit(coordinate, JSON.stringify([item.type, item.text]))) return;
       this.#session.pushUpstream({
         type: "assistant",
-        uuid: item.id,
+        uuid: coordinate,
         message: { role: "assistant", content: [{ type: "text", text: item.text }] },
       });
     }
@@ -168,11 +174,13 @@ class CodexReconciler {
     const previous = this.#seen.get(id);
     if (previous !== undefined) {
       if (previous !== fingerprint) {
-        throw new CodexProjectionError("Codex reused a projected item id with changed content");
+        throw new CodexProjectionError(
+          "Codex reused a projected item coordinate with changed content",
+        );
       }
       return false;
     }
-    if (this.#seen.size >= ITEM_LIMIT) {
+    if (this.#seen.size >= CODEX_HISTORY_ITEM_LIMIT) {
       throw new CodexProjectionError("Codex projection exceeded its item limit");
     }
     this.#seen.set(id, fingerprint);
@@ -234,7 +242,7 @@ export class CodexDriver implements Driver {
       const gate = new IdleGate(resumed.thread.status);
       const reconciler = new CodexReconciler(session, this.#mutations);
       session.workerStatus = resumed.thread.status.type === "active" ? "running" : "idle";
-      await this.#reconcileHistory(reconciler, signal);
+      await this.#reconcileHistory(reconciler, resumed.thread.historyMode, signal);
       for (const inbound of this.#client.drainInbound()) {
         this.#acceptInbound(inbound, session, reconciler, gate);
       }
@@ -274,18 +282,20 @@ export class CodexDriver implements Driver {
     return exitCode;
   }
 
-  async #reconcileHistory(reconciler: CodexReconciler, signal: AbortSignal): Promise<void> {
+  async #reconcileHistory(
+    reconciler: CodexReconciler,
+    historyMode: "legacy" | "paginated",
+    signal: AbortSignal,
+  ): Promise<void> {
     const cursors = new Set<string>();
     let cursor: string | undefined;
-    let count = 0;
-    for (let pageNo = 0; pageNo < PAGE_LIMIT; pageNo += 1) {
-      const page = await this.#client.listItems(this.#options.threadId, cursor, signal);
+    for (let pageNo = 0; pageNo < HISTORY_PAGE_LIMIT; pageNo += 1) {
+      const page =
+        historyMode === "legacy"
+          ? await this.#client.listTurnItems(this.#options.threadId, cursor, signal)
+          : await this.#client.listItems(this.#options.threadId, cursor, signal);
       for (const entry of page.data) {
-        count += 1;
-        if (count > ITEM_LIMIT) {
-          throw new CodexProjectionError("Codex history exceeded its item limit");
-        }
-        reconciler.accept(entry.item);
+        reconciler.accept(entry.turnId, entry.item);
       }
       if (page.nextCursor === null) return;
       if (page.nextCursor === "" || cursors.has(page.nextCursor)) {
@@ -321,10 +331,14 @@ export class CodexDriver implements Driver {
     if (params.threadId !== this.#options.threadId) return;
     if (method === "item/completed") {
       const item = record(params.item);
-      if (typeof item?.type !== "string" || typeof item.id !== "string") {
+      if (
+        typeof params.turnId !== "string" ||
+        typeof item?.type !== "string" ||
+        typeof item.id !== "string"
+      ) {
         throw new CodexProjectionError("Codex emitted an invalid completed item");
       }
-      reconciler.accept(item as CodexThreadItem);
+      reconciler.accept(params.turnId, item as CodexThreadItem);
       return;
     }
     if (method === "thread/status/changed") {
@@ -379,14 +393,14 @@ export class CodexDriver implements Driver {
     if (clientMsgId !== undefined && typeof clientMsgId !== "string") {
       throw new CodexProjectionError("browser mutation carried an invalid client coordinate");
     }
-    if (this.#mutations.size >= ITEM_LIMIT || this.#mutations.has(event.eventId)) {
+    if (this.#mutations.size >= CODEX_HISTORY_ITEM_LIMIT || this.#mutations.has(event.eventId)) {
       throw new CodexProjectionError("Codex browser coordinate limit or reuse");
     }
     await gate.wait(signal);
     const mutation: BrowserMutation = {
       text,
       ...(typeof clientMsgId === "string" ? { clientMsgId } : {}),
-      itemId: null,
+      itemCoordinate: null,
       correlated: Promise.withResolvers<void>(),
     };
     this.#mutations.set(event.eventId, mutation);

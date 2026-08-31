@@ -100,8 +100,10 @@ Pinned OpenCode driver (--rc-driver=opencode):
                      Supported tuple: Linux arm64 and exact OpenCode 1.17.5. No forwarded arguments.
 
 Pinned Codex companion (--rc-driver=codex):
-  --rc-codex-url <origin>  caller-owned \`codex app-server\` WebSocket origin (or set RC_CODEX_URL;
-                     default ws://127.0.0.1:4500). Only explicit-port loopback ws origins are accepted.
+  --rc-codex-url <endpoint>  Codex app-server endpoint (or set RC_CODEX_URL; default
+                     ws://127.0.0.1:4500). Accepts literal \`unix://\` for Codex's same-user managed
+                     control socket, or a caller-owned explicit-port loopback \`ws://\` origin. Arbitrary
+                     Unix paths, credentials, paths, queries, and fragments are rejected.
   --rc-codex-thread <id>   required exact existing Codex UUIDv7 (or set RC_CODEX_THREAD).
                      Attach-only: the companion never starts or stops the app-server and never
                      discovers, selects, creates, deletes, or stops a thread. It resumes/joins only the

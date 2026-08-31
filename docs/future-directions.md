@@ -12,8 +12,10 @@ remote-claw browsers. M1 completed the small readiness-gated native companion, e
 fresh-projection restart, and literal official-client coexistence path. M2 completed the pinned
 OpenCode 1.17.5 text/interrupt adapter and its real-TUI, two-browser acceptance. M3a completed the exact
 Codex 0.151.0/Linux arm64 app-server text/status companion, including a local TUI, two browsers, and
-TUI-only approval/question handling. To avoid duplicating volatile pass/fail lists here, current
-evidence and remaining gates live in
+TUI-only approval/question handling. M3b then completed same-thread ChatGPT Remote text coexistence
+through the managed Unix socket, including provider-origin and browser-origin text plus continued
+browser turns after provider-transport disconnect. To avoid duplicating volatile pass/fail lists here,
+current evidence and remaining gates live in
 [native coexistence](native-rc-passthrough-scoping.md) and the
 [release roadmap](release-finish-line.md).
 
@@ -55,14 +57,16 @@ OpenCode-native collaboration surfaces need their own later gate; they do not re
 
 M3a is complete for exact Codex 0.151.0 on Linux arm64. One local TUI and two browsers exchanged
 native-ordered text on one exact app-server thread; one approval and one question remained solely in the
-TUI while the structurally response-less companion stayed live. Keep that surface narrow: caller-owned
-loopback app-server, explicit UUIDv7, attached-TUI precondition, non-empty non-slash text, real status,
-and no other browser controls.
+TUI while the structurally response-less companion stayed live. M3b is also complete at that pinned
+boundary: the companion attached through literal `unix://` to the same official ChatGPT Remote thread,
+provider-origin and browser-origin text appeared once in two browsers, and a second browser turn
+completed after the provider transport disconnected.
 
-Codex Remote already exists: phone pairing starts in the ChatGPT desktop app on macOS or Windows, and
-that desktop app can run a project on a Linux/other SSH host. M3b is now the bounded same-thread
-coexistence feasibility gate, not hypothetical product discovery. Historical and M3a evidence are
-reasons to test that supported topology, not proof of the final result.
+Keep the result narrow: explicit UUIDv7, attached-TUI precondition, non-empty non-slash text, real
+status, and no other browser controls. Provider-transport isolation does not prove that a particular
+phone or desktop client unsubscribed. Companion restart/backfill, broker-loss acceptance, stable
+projection identity, richer content and controls, and other Codex versions/platforms remain later
+adapter-local gates; they do not reopen M3a or M3b.
 
 ### tmux compatibility
 

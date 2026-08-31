@@ -60,8 +60,10 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // default leaves the externally owned session's permission policy untouched. Env opt-in:
   // RC_OC_MIRROR_PERMISSIONS=1.
   "rc-oc-mirror-permissions": "boolean",
-  // Codex companion: resume/join one exact supplied thread on a caller-owned loopback app-server.
-  // It never discovers/selects/creates threads or owns the app-server/TUI lifecycle.
+  // Codex companion: resume/join one exact supplied thread through either the literal `unix://`
+  // same-user managed control socket or a caller-owned explicit-port loopback WebSocket app-server.
+  // Arbitrary Unix paths are rejected. The companion never discovers/selects/creates threads or owns
+  // the app-server/TUI lifecycle.
   "rc-codex-url": "value",
   "rc-codex-thread": "value",
   // Retained only so an invocation of the retired inverse flag gets a precise usage error instead of

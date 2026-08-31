@@ -21,6 +21,11 @@ await build({
 	format: "esm",
 	target: "node22.13",
 	packages: "bundle",
+	// Some bundled CommonJS dependencies (notably ws) retain dynamic requires for Node built-ins.
+	// Give esbuild's ESM require shim the native loader while keeping the published CLI self-contained.
+	banner: {
+		js: 'import { createRequire as __remoteClawCreateRequire } from "node:module"; const require = __remoteClawCreateRequire(import.meta.url);',
+	},
 	legalComments: "none",
 	sourcemap: false,
 	minify: false,

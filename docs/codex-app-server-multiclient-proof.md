@@ -2,8 +2,9 @@
 
 **Status:** M3a product companion implemented and accepted 2026-08-30 against exact Codex CLI
 `0.151.0` on Linux arm64. One local Codex TUI and two remote-claw browsers shared one exact native
-thread. M3b—same-thread Codex/ChatGPT Remote coexistence through its supported desktop topology—remains
-open. The earlier `0.146.0` observations below remain historical seam evidence.
+thread through an explicit-port loopback app-server. M3b then passed on an exact official Remote thread
+for the same Codex version/platform through the literal managed Unix socket and legacy full-turn
+hydration. The earlier `0.146.0` observations below remain historical seam evidence.
 
 ## M3a product result
 
@@ -98,12 +99,11 @@ M3a has now proved:
 Focused deterministic tests own broker/projection fail-stop and teardown behavior; the live gate did
 not simulate a broker failure.
 
-M3b now tests same-thread coexistence with the current Codex Remote product through its supported
-topology. Official phone pairing begins in ChatGPT desktop on macOS or Windows, which can run a project
-reached over SSH; product existence is not the open question. See
-[Remote connections](https://learn.chatgpt.com/docs/remote-connections). M3a does not justify a
+M3b subsequently proved same-thread coexistence with the current Codex Remote product through its
+supported topology, the local TUI, and two independent remote-claw browsers. It does not justify a
 generalized coordinator, outward gateway, signing hierarchy, or durable command schema. Add state only
-for a demonstrated native failure with an executable fault test.
+for a demonstrated native failure with an executable fault test. See
+[Remote connections](https://learn.chatgpt.com/docs/remote-connections).
 
 ## What this does not prove
 
@@ -111,7 +111,8 @@ for a demonstrated native failure with an executable fault test.
 - every notification, rich item family, or full TUI rendering parity;
 - companion restart/backfill acceptance or stable projection identity;
 - exactly-once native application after an ambiguous request;
-- official Codex/ChatGPT Remote coexistence;
+- per-device provider unsubscribe or device-specific failure isolation;
+- broker-loss isolation or recovery;
 - a non-loopback socket/authentication boundary; or
 - compatibility beyond the pinned binary/platform.
 
@@ -125,3 +126,36 @@ history is the recapture archive.
 The current adapter's focused client/driver tests and one bounded current-version native acceptance own
 the M3a claim. Ordinary changes should run the cheapest affected boundary and should not replay or
 rebuild the historical proof machinery unless the supported native tuple changes.
+
+## M3b product result
+
+The historical M3a acceptance above remains an explicit-port loopback WebSocket result. For M3b, the
+current companion additionally accepts the exact literal `unix://`, which resolves only to Codex's
+same-user managed socket at `$CODEX_HOME/app-server-control/app-server-control.sock` (or under
+`~/.codex` when `CODEX_HOME` is unset). It does not accept `unix:///path` or any other arbitrary Unix
+socket path. Explicit-port literal loopback WebSocket origins remain available.
+
+The resumed thread's native `historyMode` now chooses the bounded reader rather than assuming one API:
+`paginated` pages `thread/items/list` ascending; `legacy` pages `thread/turns/list` ascending with
+`itemsView:"full"`. Each reader validates its native shape and filters away tool, reasoning, and every
+other unsupported family before the shared 10,000 projected user/assistant text-item cap is counted.
+The immutable projection coordinate is `(turnId,itemId)`, because Codex may reuse one item ID in
+different turns. Same-coordinate, same-byte history/live overlap deduplicates; changed projected bytes
+at the same coordinate fence the companion.
+
+The bounded live acceptance used an exact official Remote thread on Codex 0.151.0/Linux arm64, the
+literal managed Unix socket, legacy full-turn hydration, one attached local TUI, and two independent
+remote-claw browsers. The TUI remained the sole owner of approval and question handling. One marker
+originating at the provider appeared exactly once in each browser. One browser-origin prompt and its
+acknowledgement appeared exactly once in the official thread, the TUI, and both browsers; the sending
+browser also showed its host receipt.
+
+For the isolation step, an ephemeral provider transport was disabled and remained disabled while a
+browser-B turn completed. The managed daemon, local TUI, companion, and both browsers stayed live, and
+provider transport subsequently restored to connected. This proves failure isolation when provider
+transport is absent. It does **not** prove that one specific provider device was unsubscribed while
+another provider device remained connected, and must not be described as per-device unsubscribe.
+
+M3b graduates only this exact text/status/coexistence and provider-transport-isolation tuple. It does
+not graduate richer controls, attachments, approval/question ownership by browsers, companion
+restart/backfill, or broker-loss behavior.

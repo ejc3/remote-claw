@@ -103,6 +103,9 @@ importers:
       qrcode-terminal:
         specifier: ^0.12.0
         version: 0.12.0
+      ws:
+        specifier: 8.21.0
+        version: 8.21.0
     devDependencies:
       '@biomejs/biome':
         specifier: ^2.4.16
@@ -113,6 +116,9 @@ importers:
       '@types/qrcode-terminal':
         specifier: ^0.12.2
         version: 0.12.2
+      '@types/ws':
+        specifier: 8.18.1
+        version: 8.18.1
       tsx:
         specifier: ^4.22.4
         version: 4.22.4

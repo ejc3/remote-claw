@@ -1,8 +1,16 @@
+import { createConnection } from "node:net";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import NodeWebSocket from "ws";
+
 const REQUEST_TIMEOUT_MS = 15_000;
+const CODEX_UNIX_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
 
 export const CODEX_APP_SERVER_VERSION = "0.151.0";
 export const CODEX_APP_SERVER_REQUIREMENT = `Codex app-server ${CODEX_APP_SERVER_VERSION} on Linux arm64`;
 export const DEFAULT_CODEX_APP_SERVER_URL = "ws://127.0.0.1:4500";
+export const CODEX_HISTORY_ITEM_LIMIT = 10_000;
+export const CODEX_LEGACY_TURN_PAGE_LIMIT = 10;
 
 export interface CodexThreadStatus {
   type: "notLoaded" | "idle" | "systemError" | "active";
@@ -43,6 +51,7 @@ export interface CodexResumeResult {
     id: string;
     status: CodexThreadStatus;
     canAcceptDirectInput: boolean | null;
+    historyMode: "legacy" | "paginated";
   };
 }
 
@@ -57,6 +66,11 @@ export interface CodexClient {
   initialize(signal: AbortSignal): Promise<CodexInitializeResult>;
   resume(threadId: string, signal: AbortSignal): Promise<CodexResumeResult>;
   listItems(
+    threadId: string,
+    cursor: string | undefined,
+    signal: AbortSignal,
+  ): Promise<CodexItemsPage>;
+  listTurnItems(
     threadId: string,
     cursor: string | undefined,
     signal: AbortSignal,
@@ -87,6 +101,25 @@ interface SocketLike {
 }
 
 type SocketFactory = (url: string) => SocketLike;
+
+function defaultControlSocketPath(): string {
+  const configured = (process.env.CODEX_HOME ?? "").trim();
+  const codexHome = configured === "" ? join(homedir(), ".codex") : configured;
+  return join(codexHome, "app-server-control", "app-server-control.sock");
+}
+
+function createSocket(url: string): SocketLike {
+  if (url !== "unix://") return new WebSocket(url);
+  // The managed daemon's Unix upgrader intentionally does not negotiate extensions. `ws` lets us
+  // suppress permessage-deflate (which Node's built-in WebSocket always offers) and supply the
+  // same private control socket used by `codex resume --remote unix://`.
+  return new NodeWebSocket("ws://localhost/", {
+    createConnection: () => createConnection(defaultControlSocketPath()),
+    handshakeTimeout: REQUEST_TIMEOUT_MS,
+    maxPayload: CODEX_UNIX_MAX_PAYLOAD_BYTES,
+    perMessageDeflate: false,
+  }) as unknown as SocketLike;
+}
 
 export class CodexAppServerError extends Error {
   constructor(message: string) {
@@ -140,9 +173,13 @@ export function isCodexThreadId(value: unknown): value is string {
   );
 }
 
-/** Accept only a literal, explicit-port loopback WebSocket origin. No path, credentials, query, or
- * fragment means a hostile URL cannot turn the companion into a network client or leak via routing. */
+/** Accept only Codex's literal managed-socket shorthand or an explicit-port loopback WebSocket
+ * origin. No arbitrary socket path, credentials, query, or fragment can redirect the companion. */
 export function normalizeCodexAppServerUrl(raw: string): string {
+  // The literal shorthand resolves only Codex's same-user managed control socket. Deliberately do
+  // not accept arbitrary unix:/// paths: the companion remains attach-only and cannot be turned
+  // into a local socket scanner.
+  if (raw === "unix://") return raw;
   let url: URL;
   try {
     url = new URL(raw);
@@ -176,7 +213,7 @@ export class CodexAppServerClient implements CodexClient {
   #wake = Promise.withResolvers<void>();
   #closed = false;
 
-  constructor(url: string, socketFactory: SocketFactory = (value) => new WebSocket(value)) {
+  constructor(url: string, socketFactory: SocketFactory = createSocket) {
     this.#url = normalizeCodexAppServerUrl(url);
     this.#socketFactory = socketFactory;
   }
@@ -236,7 +273,8 @@ export class CodexAppServerClient implements CodexClient {
     const thread = record(result?.thread);
     if (
       !isCodexThreadId(thread?.id) ||
-      (thread.canAcceptDirectInput !== null && typeof thread.canAcceptDirectInput !== "boolean")
+      (thread.canAcceptDirectInput !== null && typeof thread.canAcceptDirectInput !== "boolean") ||
+      (thread.historyMode !== "legacy" && thread.historyMode !== "paginated")
     ) {
       throw new CodexAppServerError("Codex returned an invalid resumed thread");
     }
@@ -245,6 +283,7 @@ export class CodexAppServerClient implements CodexClient {
         id: thread.id,
         status: parseCodexStatus(thread.status),
         canAcceptDirectInput: thread.canAcceptDirectInput,
+        historyMode: thread.historyMode,
       },
     };
   }
@@ -278,7 +317,52 @@ export class CodexAppServerClient implements CodexClient {
       ) {
         throw new CodexAppServerError("Codex returned an invalid thread item");
       }
-      data.push({ turnId: entry.turnId, item: item as CodexThreadItem });
+      if (item.type === "userMessage" || item.type === "agentMessage") {
+        data.push({ turnId: entry.turnId, item: item as CodexThreadItem });
+      }
+    }
+    return { data, nextCursor: result.nextCursor };
+  }
+
+  async listTurnItems(
+    threadId: string,
+    cursor: string | undefined,
+    signal: AbortSignal,
+  ): Promise<CodexItemsPage> {
+    const result = record(
+      await this.#request(
+        "thread/turns/list",
+        {
+          threadId,
+          limit: CODEX_LEGACY_TURN_PAGE_LIMIT,
+          sortDirection: "asc",
+          itemsView: "full",
+          ...(cursor ? { cursor } : {}),
+        },
+        signal,
+      ),
+    );
+    if (
+      !Array.isArray(result?.data) ||
+      (result.nextCursor !== null && typeof result.nextCursor !== "string")
+    ) {
+      throw new CodexAppServerError("Codex returned an invalid turn page");
+    }
+    const data: CodexItemsPage["data"] = [];
+    for (const value of result.data) {
+      const turn = record(value);
+      if (typeof turn?.id !== "string" || !Array.isArray(turn.items)) {
+        throw new CodexAppServerError("Codex returned an invalid full turn");
+      }
+      for (const rawItem of turn.items) {
+        const item = record(rawItem);
+        if (typeof item?.type !== "string" || typeof item.id !== "string") {
+          throw new CodexAppServerError("Codex returned an invalid full turn item");
+        }
+        if (item.type === "userMessage" || item.type === "agentMessage") {
+          data.push({ turnId: turn.id, item: item as CodexThreadItem });
+        }
+      }
     }
     return { data, nextCursor: result.nextCursor };
   }
