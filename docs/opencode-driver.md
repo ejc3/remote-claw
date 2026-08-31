@@ -1,4 +1,4 @@
-# OpenCode 1.17.5 text/interrupt driver
+# OpenCode 1.17.5 text/interrupt/status driver
 
 `--rc-driver=opencode` attaches remote-claw to one already-running OpenCode session through the
 OpenCode HTTP/SSE server. M2 is complete for one frozen tuple:
@@ -10,6 +10,10 @@ OpenCode HTTP/SSE server. M2 is complete for one frozen tuple:
   server process;
 - one caller-supplied existing canonical `ses_*` over literal loopback; and
 - non-empty non-slash browser text plus interrupt.
+
+That list records the completed M2 acceptance boundary. A later bounded follow-on now advertises
+read-only MAIN-session running/idle status. Its implementation and separate real-TUI/two-browser
+acceptance are complete; this does not change the 2026-08-30 M2 evidence.
 
 Other OpenCode versions, platforms, models, permission graduation, controls, and collaboration
 surfaces are not implied by that support claim. The external OpenCode process owns the native
@@ -154,7 +158,7 @@ handcrafted client sends them. The supported actions are:
 | ordinary text | FIFO wait, atomic transport+idle claim, one `prompt_async`, exact marker+text correlation, then downstream event acknowledgement |
 | interrupt | wait for trustworthy transport, one `abort`, require literal JSON `true`, then downstream event acknowledgement |
 | initialize | no native mutation |
-| model, mode, status, end, attachment, slash command | unsupported; no native mutation |
+| model, mode, status mutation, end, attachment, slash command | unsupported; no native mutation |
 
 One process-local latch owns both transport trust and native-idle admission. A text writer claims both
 conditions synchronously and consumes idle before posting. Browser turns wait FIFO. A newly observed
@@ -165,9 +169,13 @@ and `/session/status`. For an active browser turn, the exact marker must remain 
 and the turn must have crossed a native busy epoch before live idle releases the next writer. This
 prevents a stale or unrelated idle event from admitting concurrent text.
 
-SSE loss pauses transport admission and marks the session non-idle. Before any write resumes, reconnect
-must establish a new ready stream and re-prove exact version, exact session, strict history and parents,
-browser correlation, and exact status. Failure to prove continuity closes the writable projection.
+SSE loss pauses transport admission while retaining the last verified viewer status. Before any write
+resumes, reconnect must establish a new ready stream and re-prove exact version, exact session, strict
+history and parents, browser correlation, and exact status; that reproof converges the viewer state.
+Failure to prove continuity closes the writable projection.
+
+A MAIN `session.error` surfaces the failure, then re-reads exact native status for the viewer without
+opening write admission or clearing browser correlation. Child errors never drive MAIN status.
 
 Prompt and interrupt are separate irreversible native HTTP boundaries. Each receives one attempt. A
 rejection, timeout, malformed acknowledgement, or response-unknown outcome is never retried and fences
@@ -192,7 +200,7 @@ The default supported vector is:
 | Capability | Value | Meaning |
 | --- | --- | --- |
 | Structured permissions | false | policy and gates stay native/local |
-| Status | false | status is an internal write-admission proof, not a viewer status contract |
+| Status | true | read-only MAIN status: native `busy`/`retry` maps to running; ordinary idle requires exact history/status reproof |
 | Interrupt | true | exact-session native abort |
 | Set model | false | tuple is pinned |
 | Set mode | false | no graduated mapping |
@@ -232,6 +240,14 @@ Focused client, driver, relay, and viewer tests own malformed or reused coordina
 invariants, FIFO and busy/retry admission, local-user exclusion, live-idle reproof, reconnect-before-
 write, ambiguous mutation fencing, broker-projection loss, and no teardown abort.
 
+The status follow-on adds deterministic ownership for startup idle/busy/retry, live MAIN
+running-to-reproved-idle, child isolation, retained last-known status during SSE loss, reconnect
+convergence, and exact-status reread after a MAIN error without reopening admission. At
+2026-08-31T05:09:54Z, the exact OpenCode 1.17.5/Linux arm64/pinned Bedrock Sonnet/
+`us-west-1` temporary-SigV4-environment tuple passed its separate status acceptance: an attached TUI
+drove the MAIN session from native busy to idle, two independent Chromium contexts both showed and
+cleared “working,” and each displayed one user and assistant copy.
+
 The optional package live suite remains a narrower driver/native-seam check:
 
 ```bash
@@ -241,8 +257,9 @@ pnpm --filter @remote-claw/cli run test:opencode-live
 ```
 
 It requires the script's explicit `RC_OPENCODE_E2E_RUN=1` opt-in and never probes a coincidental local
-server during ordinary tests. That suite is useful regression evidence, but the real-TUI/two-browser
-acceptance above is the M2 product proof.
+server during ordinary tests. That suite compares projected status with an independent native event
+reader, but it does not replace the completed real two-browser status acceptance. The earlier real-
+TUI/two-browser acceptance remains the historical M2 text/interrupt product proof.
 
 The retained [OpenCode protocol fixture](opencode-native-proof.md) records narrower 1.17.5 API
 observations. It is research evidence, not runtime authority or a broader compatibility promise.

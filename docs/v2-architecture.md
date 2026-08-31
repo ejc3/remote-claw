@@ -32,7 +32,7 @@ What exists today:
 | <code>--rc-trace</code> | Implemented transparent inspector; the official client works, but no remote-claw browser is connected |
 | Direct Anthropic RC client | Implemented and wired into the Linux/exact-2.1.237 <code>claude-native</code> companion |
 | Claude native collaboration plus multiple remote-claw browsers | M1 complete on Linux/exact-2.1.237: structured provider-ordered text, local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and exact-SHA deployed-broker acceptance |
-| OpenCode server adapter | M2 complete for exact 1.17.5/Linux arm64, the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart |
+| OpenCode server adapter | M2 complete for exact 1.17.5/Linux arm64, the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux fallback | Experimental lower-fidelity implementation with documented limits |
 | Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation; per-device unsubscribe, richer controls, restart/backfill, and broker-loss are not claimed |
 | Bedrock and no-Anthropic-account launch | Experimental inference/account paths, separate from adapter fidelity |
@@ -399,7 +399,7 @@ Claude and its provider session remain alive. The viewer advertises
 <code>{agent:"claude-code",mode:"native-rc"}</code> with permissions, status, controls, and
 attachments all disabled. This surface is Linux-only and pins exact Claude 2.1.237.
 
-### 10.5 Pinned OpenCode text/interrupt companion
+### 10.5 Pinned OpenCode text/interrupt/status companion
 
 <code>--rc-app &lt;origin&gt; --rc-driver=opencode --rc-oc-session &lt;ses_…&gt;</code> attaches to one
 exact already-running OpenCode 1.17.5 session on Linux arm64 through an explicit-port literal HTTP
@@ -415,13 +415,18 @@ complete immutable text before acknowledging the downstream event and publishing
 user row. One atomic transport-plus-idle latch serializes browser text FIFO. An observed intervening
 local TUI user, <code>busy</code>, or <code>retry</code> blocks admission; live idle merely triggers
 bounded history plus exact status reproof. The status snapshot is corroboration, not a native atomic
-lock. Reconnect reconciles before writes resume.
+lock. Read-only viewer status is MAIN-session scoped: <code>busy</code>/<code>retry</code> maps to
+running, an ordinary idle lifecycle transition is published only after exact history/status reproof,
+and child lifecycle never drives MAIN. SSE loss pauses admission while retaining the last verified
+viewer state; exact reconnect reproof converges it. A MAIN error instead re-reads exact status without
+reopening admission.
 
-Only non-empty non-slash text and interrupt are advertised. Permissions remain native/local and
-structured permissions are false by default; the separate positive permission-mirroring opt-in is
-experimental. Companion teardown and broker/capture loss never abort the native run. Restart against
-the same exact <code>ses_*</code> creates a fresh remote-claw projection and does not consume old broker
-commands.
+Only non-empty non-slash text and interrupt are advertised as mutations; status is observation-only.
+Permissions remain native/local and structured permissions are false by default; the separate positive
+permission-mirroring opt-in is experimental. Model/mode, attachments, end, and browser-origin status
+mutation remain unsupported. Companion teardown and broker/capture loss never abort the native run.
+Restart against the same exact <code>ses_*</code> creates a fresh remote-claw projection and does not
+consume old broker commands.
 
 ### 10.6 Pinned Codex text/status companion
 
@@ -462,7 +467,7 @@ labeled guarantees.
 | --- | --- | --- |
 | Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart and literal official-client coexistence | Exact Linux/2.1.237 only; no remote controls, permissions, attachments, or status |
 | tmux | Experimental Claude compatibility driver | Transcript/pane correlation is weaker than native RC; permission mirroring uses hooks |
-| OpenCode | Supported text/interrupt server companion for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; broader tuples and permission mirroring are not graduated |
+| OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
 | Codex | Supported text/status app-server companion for exact 0.151.0/Linux arm64, including bounded same-thread official Remote coexistence | One explicit thread and attached local-TUI precondition; provider-transport isolation is proved, but per-device unsubscribe, browser controls, restart/backfill, and broker-loss are not |
 | Bedrock inference | Experimental MITM connector | Replaces Anthropic inference while preserving the private local RC facade |
 | Accountless mode | Experimental Bedrock companion | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
@@ -603,8 +608,8 @@ The OpenCode companion intentionally reuses the `Session`, relay, broker, and vi
 introducing a second control plane. Its native boundary is different from Claude's: attach to one exact
 externally owned `ses_*`; subscribe first; reconcile a bounded append-only native message graph; admit
 FIFO browser text only through one atomic transport-plus-idle latch; and use an exact caller part marker
-to bind OpenCode's generated native user coordinate. Native status is an internal admission proof, not
-an advertised viewer capability.
+to bind OpenCode's generated native user coordinate. At the M2 cutoff, native status was an internal
+admission proof, not an advertised viewer capability.
 
 On 2026-08-30, the exact OpenCode 1.17.5/Linux arm64/pinned-Bedrock tuple passed with the real TUI and
 two independent browsers. The OpenCode server used <code>AWS_REGION=us-west-1</code> plus explicit
@@ -619,6 +624,15 @@ abort. Other regions or credential modes require their own gate.
 The supported path leaves permissions native/local. Experimental permission mirroring, stable same-row
 identity, other OpenCode versions/platforms/models, and richer control families are separate future
 capabilities and do not reopen M2.
+
+The post-M2 status implementation is now complete and advertises read-only MAIN running/idle. Native
+<code>busy</code>/<code>retry</code> maps to running; ordinary idle requires exact history/status reproof;
+child activity never drives MAIN; SSE loss retains the last verified viewer state while admission
+pauses; reconnect reproof converges it; and a MAIN error instead re-reads exact status without opening
+admission. At 2026-08-31T05:09:54Z, an attached TUI drove the exact pinned MAIN session from native
+busy to idle; two independent Chromium contexts both showed and cleared “working,” with one user and
+assistant copy each. This separate status acceptance does not rewrite the 2026-08-30 M2 evidence. No
+permission, question, other control, model, attachment, or end boundary changed.
 
 ## 15.1 M3a complete: pinned Codex app-server companion
 

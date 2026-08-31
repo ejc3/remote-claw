@@ -17,7 +17,9 @@ official Claude web UI acceptance and the Graduate commit's separate exact-SHA d
 gate passed. The exact OpenCode 1.17.5/Linux arm64/pinned-Bedrock text-and-interrupt tuple is also a
 supported adapter after its real-TUI/two-browser M2 acceptance. Its proved server environment was
 `AWS_REGION=us-west-1` plus explicit temporary SigV4 credential values; other regions or credential
-modes remain outside that claim, as do broader OpenCode tuples. The exact Codex 0.151.0/Linux arm64
+modes remain outside that claim, as do broader OpenCode tuples. The current OpenCode implementation
+also advertises read-only MAIN-session running/idle status; its separate real-TUI/two-browser status
+acceptance passed on 2026-08-31 without rewriting the M2 evidence. The exact Codex 0.151.0/Linux arm64
 app-server text/status companion passed M3a with one local TUI and two browsers. M3b also passed on one
 exact official Remote thread through the literal managed Unix socket and legacy full-turn hydration;
 its bounded failure result is provider-transport isolation, not per-device unsubscribe.
@@ -203,7 +205,7 @@ failure closes only that remote-claw projection. In launch form the transparent 
 Claude child remain running; in attach-only form the companion exits nonzero while the independently
 owned native session remains live.
 
-### 4.3 Pinned OpenCode text/interrupt companion
+### 4.3 Pinned OpenCode text/interrupt/status companion
 
 The supported OpenCode path requires exact version 1.17.5 on Linux arm64, the pinned
 `amazon-bedrock/global.anthropic.claude-sonnet-4-6` model, one explicit existing `ses_*`, and a literal
@@ -227,6 +229,14 @@ writes resume. Prompt and interrupt get one attempt each; ambiguous outcomes fen
 Only an authenticated browser interrupt calls native `/abort`. Teardown, broker/capture loss, and
 companion restart do not abort the externally owned OpenCode run. Restart is a fresh projection against
 the same exact `ses_*` and consumes no commands from the old broker session.
+
+Status is a read-only MAIN-session observation surface. Native `busy` and `retry` map to viewer
+`running`; an ordinary idle lifecycle transition is published only after exact history/status reproof.
+Child lifecycle never drives the MAIN state. SSE loss pauses write admission but retains the last
+verified viewer status until exact reproof converges after reconnect. A MAIN error instead re-reads
+exact status for the viewer without opening admission; browser-origin status mutation remains
+unsupported. Permissions, questions, model/mode, attachments, end, and the interrupt-only control
+boundary are unchanged.
 
 ### 4.4 Pinned Codex app-server companion
 
@@ -371,8 +381,8 @@ cannot bypass a disabled button:
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
 | Claude native companion | no | no | no | no | no | no | no |
 | Experimental tmux, default mirroring | yes | no | yes | yes | no | no | yes |
-| Pinned OpenCode M2, default native/local permissions | no | no | yes | no | no | no | no |
-| OpenCode experimental permission opt-in | yes | no | yes | no | no | no | no |
+| Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
+| OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | Pinned Codex M3a | no | yes | no | no | no | no | no |
 
 The stable Claude and pinned Codex surfaces accept only non-empty, non-slash text. Internal

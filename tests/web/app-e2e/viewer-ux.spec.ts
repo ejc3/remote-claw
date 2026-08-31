@@ -458,7 +458,7 @@ test.describe("capability gating (#149)", () => {
     hasTouch: false,
   });
 
-  test("the supported OpenCode host keeps permissions native and exposes only text plus interrupt", async ({
+  test("the supported OpenCode host exposes status while keeping only text plus interrupt mutable", async ({
     page,
     seedHost,
   }) => {

@@ -53,11 +53,11 @@ function presetCaps(p: string | undefined): DriverCapabilities {
   // let this fixture silently advertise the wrong permission posture.
   if (p === "tmux") return tmuxCapabilities(true);
   if (p === "opencode")
-    // Exact supported OpenCode default: permission interaction remains native/local, status is not
-    // claimed without an initial snapshot, and only plain text + interrupt cross the viewer boundary.
+    // Exact supported OpenCode default: permission interaction remains native/local, MAIN-session status
+    // is read-only, and only plain text + interrupt cross the viewer mutation boundary.
     return {
       structuredPermissions: false,
-      status: false,
+      status: true,
       controls: { interrupt: true, setModel: false, setMode: false, end: false },
       attachments: false,
     };

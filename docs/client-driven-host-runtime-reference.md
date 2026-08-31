@@ -14,7 +14,9 @@ Use these current sources:
   was removed.
 
 The exact OpenCode M2 text/interrupt tuple and exact Codex 0.151.0/Linux arm64 M3a app-server
-text/status tuple are supported. M3b also proved same-thread ChatGPT Remote text coexistence through
+text/status tuple are supported. OpenCode now also advertises implemented read-only MAIN running/idle
+status; its separate real-TUI/two-browser status acceptance passed on 2026-08-31 without rewriting M2.
+M3b also proved same-thread ChatGPT Remote text coexistence through
 the managed Unix socket and continued browser turns after provider-transport disconnect. It did not
 prove per-device Remote unsubscribe, Codex companion restart/backfill, broker-loss acceptance, richer
 controls/content, or another version/platform. Other OpenCode/Codex tuples are unsupported; only

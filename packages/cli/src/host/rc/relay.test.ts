@@ -91,10 +91,10 @@ describe("extForMime / isLikelyBase64", () => {
 const ID = new Uint8Array(16);
 const enc = (s: string) => new TextEncoder().encode(s);
 
-/** The exact default OpenCode M2 surface. */
+/** The exact current OpenCode surface (M2 text/interrupt plus the read-only status graduation). */
 const OPENCODE_M2_CAPABILITIES: DriverCapabilities = {
   structuredPermissions: false,
-  status: false,
+  status: true,
   controls: { interrupt: true, setModel: false, setMode: false, end: false },
   attachments: false,
 };

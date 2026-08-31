@@ -234,9 +234,9 @@ interface OpencodeConnection {
 function opencodeViewerCapabilities(structuredPermissions: boolean): DriverCapabilities {
   return {
     structuredPermissions,
-    // Startup/reconnect status snapshots are sufficient for conservative write admission, but not a
-    // continuous viewer-status contract across every SSE edge.
-    status: false,
+    // MAIN-session busy/retry and strictly reconciled idle are a supported read-only viewer surface.
+    // Child lifecycle never drives this status, and transport recovery retains the last proved value.
+    status: true,
     controls: { interrupt: true, setModel: false, setMode: false, end: false },
     // The compatibility prompt translator has no proved native OpenCode file-part fidelity.
     attachments: false,
@@ -954,8 +954,6 @@ export class OpencodeDriver implements Driver {
         if (signal.aborted || session.closed) return;
         this.#admission.pauseTransport();
         this.#admission.markNativeBusy();
-        session.workerStatus = "running";
-        session.wake();
 
         let recovered = false;
         let backoffMs = RECONNECT_BACKOFF_MIN_MS;
@@ -1180,9 +1178,9 @@ export class OpencodeDriver implements Driver {
       }
       case "session.error": {
         // A run FAILED (provider 5xx, bad model, OOM, …). Flush THIS session's partials first, then surface
-        // the error as a `result` frame so the viewer SHOWS the failure AND leaves the "working" state —
-        // otherwise it just flips idle with no explanation (the documented contract). Only the main error
-        // flips the bridge idle; a child sub-agent error is surfaced but doesn't end the parent turn (#102).
+        // the error as a `result` frame so the viewer SHOWS the failure. Re-read the MAIN session's exact
+        // status so a failed turn cannot leave a stale "working" indicator; this viewer update deliberately
+        // does NOT open write admission or clear browser correlation. Child errors never drive MAIN (#102).
         this.#flushSessionBuffers(session, evSession);
         const msg = errText(ev.properties.error);
         this.#tracer.warn(
@@ -1190,7 +1188,11 @@ export class OpencodeDriver implements Driver {
           sessionErrorTraceFields(ev.properties.error, evSession),
         );
         session.pushUpstream({ type: "result", result: `⚠ OpenCode error: ${msg}` });
-        if (evSession === this.#mainSessionId) session.wake();
+        if (evSession === this.#mainSessionId) {
+          const status = await this.#client.getSessionStatus(this.#mainSessionId, signal);
+          session.workerStatus = status === "busy" || status === "retry" ? "running" : "idle";
+          session.wake();
+        }
         break;
       }
       case "permission.asked":
