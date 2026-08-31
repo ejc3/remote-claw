@@ -126,8 +126,8 @@ function isStablePlainTextSurface(
   );
 }
 
-/** The one native-ordered OpenCode text surface. Permission mirroring is an orthogonal experimental
- *  capability: toggling structuredPermissions must not change prompt ordering/correlation semantics. */
+/** The one native-ordered OpenCode text surface. Permission mirroring and viewer-status fidelity are
+ * orthogonal: neither may change prompt ordering/correlation semantics, including for older hosts. */
 function isOpencodeNativeTextSurface(
   capabilities: DriverCapabilities,
   harness: HarnessDescriptor,
@@ -135,7 +135,6 @@ function isOpencodeNativeTextSurface(
   return (
     harness.agent === "opencode" &&
     harness.mode === "opencode" &&
-    !capabilities.status &&
     capabilities.controls.interrupt &&
     !capabilities.controls.setModel &&
     !capabilities.controls.setMode &&

@@ -7,7 +7,8 @@ tested, not that one script vouched for another script.
 The full Claude/Codex/OpenCode/tmux matrix is incomplete. M1's structured Claude text, literal official
 web UI coexistence on the user's phone, fresh-projection restart, broker-loss isolation, packed install,
 bounded credential/storage checks, and exact-SHA deployed Preview are green. The pinned OpenCode M2
-text/interrupt tuple and its real-TUI/two-browser acceptance are also green. Codex M3a's exact
+text/interrupt tuple and its real-TUI/two-browser acceptance are also green. Its read-only MAIN status
+follow-on and separate real-TUI/two-browser running-to-idle acceptance are also green. Codex M3a's exact
 0.151.0/Linux arm64 app-server text/status tuple and real-TUI/two-browser acceptance are green. M3b's
 exact official-Remote/TUI/two-browser coexistence and provider-transport-isolation outcome is also
 green for that tuple; maintained tmux support waits for M4. See
@@ -85,7 +86,7 @@ pnpm --filter @remote-claw/web run test:run
 | Broker transport | <code>packages/cli/src/broker/*.test.ts</code> | Authenticated HTTP/SSE, retries, ordering, and cursor handling |
 | Claude private facade | <code>packages/cli/src/host/rc/mitm*.test.ts</code>, <code>session.test.ts</code>, <code>relay.test.ts</code>, <code>launch.test.ts</code> | Strict native intake, worker delivery, translation, fail-stop, and child isolation |
 | Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, exact launch/attach binding, subscribe/history reconciliation, provider-coordinate dedup, fresh-projection restart, conservative writes, and native/projection isolation |
-| Pinned OpenCode adapter | <code>packages/cli/src/host/rc/opencode/*.test.ts</code>, focused relay/viewer tests | Exact-session capture, native coordinates and parents, marker correlation, FIFO idle admission, reconnect fencing, interrupt, restart projection, and honest capabilities for the supported M2 tuple |
+| Pinned OpenCode adapter | <code>packages/cli/src/host/rc/opencode/*.test.ts</code>, focused relay/viewer tests | Exact-session capture, native coordinates and parents, marker correlation, FIFO idle admission, reconnect fencing, interrupt, restart projection, and honest text/interrupt plus read-only MAIN-status capabilities |
 | Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/viewer tests | Explicit-port loopback and literal same-user managed-socket URL boundaries, UUID/version/platform checks, `historyMode` API selection, supported-text filtering before bounds, `(turnId,itemId)` identity and changed-byte fencing, subscribe/history/readiness, native item correlation and deadline, response-less server requests, disconnect/archive/revert fencing, teardown, dispatch intent, and honest M3a/M3b capabilities |
 | Experimental adapters and inference | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, <code>bedrock/*.test.ts</code> | Current adapter-local contracts and honest capability limits; not full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
@@ -177,8 +178,9 @@ pnpm --filter @remote-claw/cli run test:opencode-live
 
 The package script sets `RC_OPENCODE_E2E_RUN=1`; without that exact opt-in the live file skips before
 any network call. Once opted in, an unreachable declared target is a failure. This is a narrow
-driver/native-seam regression with model-bearing turns; it does not replace the completed
-real-TUI/two-browser M2 product acceptance.
+driver/native-seam regression with model-bearing turns; it now compares projected running/idle with an
+independent native event reader. It does not replace either the completed real-TUI/two-browser M2
+text/interrupt acceptance or the completed separate real two-browser status acceptance.
 
 Bedrock and accountless changes require an explicitly credentialed provider smoke before release of
 those surfaces. Accountless means no Anthropic account; the smoke must still prove the expected
@@ -338,7 +340,7 @@ trace mode cannot connect remote-claw browsers.
 M1 and the bounded Codex M3b live gate are complete. CI green alone still does not establish broader
 Codex/OpenCode tuples, tmux, Bedrock/accountless, or the full product matrix.
 
-## 8. OpenCode M2, Codex M3a/M3b, and remaining adapter acceptance
+## 8. OpenCode M2/status, Codex M3a/M3b, and remaining adapter acceptance
 
 On 2026-08-30, the exact supported OpenCode 1.17.5/Linux arm64/Bedrock Sonnet tuple passed with the
 real TUI and two independent browser contexts. Its OpenCode server used `AWS_REGION=us-west-1` plus
@@ -350,6 +352,18 @@ restart against the same `ses_*` created a fresh projection with the identical h
 every old command once. Deterministic tests own malformed or reused coordinates, parent/order rules,
 FIFO and busy/retry admission, local-user exclusion, live-idle history/status reproof,
 reconnect-before-write, ambiguous writes, broker projection loss, and no teardown abort.
+
+That 2026-08-30 M2 run did not prove viewer status. The current follow-on advertises
+<code>status:true</code> for read-only MAIN state: native <code>busy</code>/<code>retry</code> maps to
+running; ordinary idle requires exact history/status reproof; child activity never drives MAIN; SSE
+loss retains the last verified viewer state while admission pauses; reconnect reproof converges it;
+and a MAIN error instead re-reads exact status without opening admission. Deterministic driver, relay,
+and viewer tests own those startup/live/reconnect/child/error boundaries. The separate real gate used
+one installed OpenCode 1.17.5 session in which two independent browsers observed the same MAIN
+running-to-idle turn; it passed at 2026-08-31T05:09:54Z on Linux arm64 with the pinned Bedrock Sonnet,
+<code>us-west-1</code>, temporary SigV4 environment credentials, and an attached TUI. Both Chromium
+contexts showed and cleared “working,” with one user and assistant copy each. Permissions, questions,
+remaining controls, model/mode, attachments, and end remain unchanged.
 
 The exact Codex 0.151.0/Linux arm64 M3a tuple also passed on 2026-08-30 with the production web build,
 durable SQLite broker, one attached real TUI, and two independent Chromium contexts on one exact
@@ -380,6 +394,7 @@ The later milestones use the same shared security checks but keep product-specif
 
 | Surface | Required real outcome |
 | --- | --- |
+| OpenCode status follow-on | Complete: one installed exact 1.17.5 session's MAIN running-to-idle transition was observed consistently by an attached TUI and two independent Chromium contexts; this does not reopen M2 |
 | OpenCode beyond M2 | Each added version, platform, model, permission/control family, or native collaboration surface needs its own exact tuple and bounded outcome; it does not reopen the completed text/interrupt tuple |
 | Codex beyond M3a/M3b | Later versions, platforms, controls, attachments, restart/backfill, broker-loss, and any per-device unsubscribe claim need their own bounded outcome without reopening the completed exact-tuple text/status/coexistence result |
 | tmux | Recoverable local pane plus two browsers, with conservative injection states and no claim of independent peer ordering or exactly-once native application; any advertised Claude Remote coexistence uses the official Claude client UI |

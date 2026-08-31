@@ -98,7 +98,7 @@ describe("RC_HELP banner", () => {
   it("distinguishes the pinned OpenCode tuple from experimental tmux and Bedrock inference", () => {
     expect(RC_HELP).toContain("tmux remains an experimental/internal compatibility driver");
     expect(RC_HELP).toContain("Pinned OpenCode driver (--rc-driver=opencode)");
-    expect(RC_HELP).toMatch(/pinned supported text\/interrupt tuple/);
+    expect(RC_HELP).toMatch(/pinned supported text\/interrupt\/status tuple/);
     expect(RC_HELP).toMatch(/outside the primary coexistence\s+path/);
   });
 
@@ -107,6 +107,7 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toMatch(/Attach-only: the companion never discovers, selects, or creates/);
     expect(RC_HELP).toMatch(/Default leaves native permission policy untouched/);
     expect(RC_HELP).toMatch(/retired --rc-oc-skip-permissions is an error/);
+    expect(RC_HELP).toMatch(/MAIN-session running\/idle\s+status is read-only/);
     expect(RC_HELP).toMatch(/No forwarded arguments/);
   });
 

@@ -54,7 +54,7 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      Literal official-client coexistence acceptance passed for the pinned release.
                      Use it with claude's own --remote-control.
                      tmux remains an experimental/internal compatibility driver. OpenCode has one
-                     pinned supported text/interrupt tuple. Codex has one pinned text-only companion
+                     pinned supported text/interrupt/status tuple. Codex has one pinned text-only companion
                      tuple described below.
 
 Claude native companion (--rc-driver=claude-native):
@@ -97,7 +97,8 @@ Pinned OpenCode driver (--rc-driver=opencode):
   --rc-oc-mirror-permissions  EXPERIMENTAL: opt in to permission mirroring (or set
                      RC_OC_MIRROR_PERMISSIONS=1). Default leaves native permission policy untouched;
                      permissions remain native/local. The retired --rc-oc-skip-permissions is an error.
-                     Supported tuple: Linux arm64 and exact OpenCode 1.17.5. No forwarded arguments.
+                     Supported tuple: Linux arm64 and exact OpenCode 1.17.5. MAIN-session running/idle
+                     status is read-only. No forwarded arguments.
 
 Pinned Codex companion (--rc-driver=codex):
   --rc-codex-url <endpoint>  Codex app-server endpoint (or set RC_CODEX_URL; default

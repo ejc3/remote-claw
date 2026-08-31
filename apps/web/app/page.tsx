@@ -176,7 +176,7 @@ export function isOpenCodeNativeTextSurface(
   return (
     harness?.agent === "opencode" &&
     harness.mode === "opencode" &&
-    capabilities?.status === false &&
+    capabilities !== undefined &&
     capabilities.attachments === false &&
     capabilities.controls.interrupt === true &&
     capabilities.controls.setModel === false &&

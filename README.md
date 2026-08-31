@@ -15,7 +15,9 @@ credentials.
 > disconnected. The Graduate commit's separate
 > exact-SHA deployed-broker gate is also green. M1 is complete. The pinned OpenCode M2
 > text/interrupt adapter also passed its real-TUI, two-browser, interrupt, reload, and companion-
-> restart acceptance on 2026-08-30. Codex M3a is also complete for exact Codex 0.151.0 on Linux arm64:
+> restart acceptance on 2026-08-30. Its read-only MAIN-session running/idle status follow-on is now
+> complete after a separate real-TUI/two-browser acceptance on 2026-08-31.
+> Codex M3a is also complete for exact Codex 0.151.0 on Linux arm64:
 > one local TUI and two independent remote-claw browsers shared an exact app-server thread, exchanged
 > uniquely labelled text once, and left one native approval and one native question solely to the TUI.
 > M3b is also complete on an exact official Remote thread through Codex's managed Unix socket and
@@ -44,7 +46,7 @@ The intended surface matrix is:
 | --- | --- | --- | --- | --- |
 | Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; M1's exact-2.1.237 native companion passed local TUI, literal official web UI on the user's phone, two-browser, fresh-projection restart, broker-loss, packed-install, and exact-SHA deployed-broker acceptance |
 | Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket; failure isolation is proved at the provider-transport boundary, not as per-device unsubscribe |
-| OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | M2 complete for exact OpenCode 1.17.5 on Linux arm64 with the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart |
+| OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | M2 complete for exact OpenCode 1.17.5 on Linux arm64 with the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux compatibility | Terminal pane | Plain Claude retains its own provider remote when requested | Multiple browsers | Experimental and deliberately lower fidelity; one Claude 2.1.237 coexistence run passed, but the official app UI was not exercised |
 
 Agent integration and inference routing are separate axes. Claude Code or OpenCode may route model
@@ -65,7 +67,7 @@ The implemented native modes are:
 | `--rc-trace` | Passes traffic to Anthropic while recording bounded, redacted protocol diagnostics. The official client can drive the session, but remote-claw browsers cannot. |
 | `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text to remote-claw. Linux and exact Claude 2.1.237 only; permissions, questions, interrupts, model/mode changes, attachments, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
-| `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The supported tuple accepts non-empty non-slash text and interrupt only; native/local UI owns permissions, questions, status, model/mode, attachments, and end. |
+| `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The mutable surface remains non-empty non-slash text plus interrupt. Read-only MAIN-session running/idle status is advertised; native/local UI still owns permissions, questions, model/mode, attachments, and end. |
 | `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. Exact Codex 0.151.0/Linux arm64 only. Non-empty non-slash text and native status are supported; the attached local TUI solely owns approvals and questions, and every other browser control is disabled. |
 | `--rc-app <origin> --rc-driver=tmux --remote-control [name]` | Runs plain Claude with its own Anthropic Remote Control intact while the lower-fidelity tmux adapter projects transcript and pane input to remote-claw. A bounded real run passed through the Anthropic API and two browsers; official-app UI acceptance is still pending. |
 
@@ -85,8 +87,8 @@ Existing foundations:
 - **`apps/web`** — authenticated ciphertext broker, durable SQLite/libSQL storage, and the browser
   client. Vercel Workflows remains an experimental backend.
 - **`packages/cli`** — identity/pass custody, broker transport, Claude private RC façade and trace
-  inspector, the native Anthropic companion/client, the pinned OpenCode text/interrupt adapter, the
-  pinned Codex app-server companion, and experimental tmux/Bedrock adapters.
+  inspector, the native Anthropic companion/client, the pinned OpenCode text/interrupt/status adapter,
+  the pinned Codex app-server companion, and experimental tmux/Bedrock adapters.
 - **Provider evidence** — bounded Claude/OpenCode/Codex fixtures and documented Bedrock live runs.
   They establish specific compatibility facts, not whole-product completion.
 
@@ -106,9 +108,13 @@ runtime parsing and fail-closed mutation admission remain the protocol safety bo
 
 Other supported and experimental paths have narrower current claims:
 
-- The pinned OpenCode M2 path connects to an exact loopback HTTP/SSE server and maps native-ordered
-  text plus interrupt. Other versions, models, and platforms are unsupported; permission mirroring is
-  a separate experimental opt-in.
+- The pinned OpenCode path connects to an exact loopback HTTP/SSE server and maps native-ordered text
+  plus interrupt. It also advertises read-only MAIN-session status: native `busy`/`retry` maps to
+  running, while an ordinary idle lifecycle transition is published only after exact history/status
+  reproof. Child activity never drives MAIN status, and reconnect retains the last verified viewer
+  state until exact reproof.
+  Other versions, models, and platforms are unsupported; permission mirroring is a separate
+  experimental opt-in. A separate 2026-08-31 real-TUI/two-browser run accepted the status surface.
 - The pinned Codex M3a acceptance used an explicit-port loopback app-server and remains the historical
   text/status result. The current companion also accepts literal `unix://` for Codex's same-user
   managed control socket; it rejects arbitrary Unix paths. The local TUI must stay attached and owns
@@ -213,6 +219,13 @@ loopback origin. No forwarded Claude/OpenCode arguments are accepted.
 Permission handling stays native/local by default. The browser can neither answer nor bypass native
 gates. `--rc-oc-mirror-permissions` is a separate experimental positive opt-in that mutates the native
 session's append-only policy; it is not part of the supported M2 tuple.
+
+Viewer status is observation-only. MAIN `busy` and `retry` map to running; an ordinary idle lifecycle
+transition appears only after exact history/status reproof. Child sessions never drive MAIN status.
+SSE loss pauses write admission without inventing a new viewer state, and reconnect re-proves the exact
+state before convergence. A MAIN error re-reads exact status for display without opening admission.
+At 2026-08-31T05:09:54Z, an attached TUI drove the exact pinned session from native busy to idle; two
+independent Chromium contexts both showed and cleared “working,” with one user and assistant copy each.
 
 ### Run the pinned Codex companion
 

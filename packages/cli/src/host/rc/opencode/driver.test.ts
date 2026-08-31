@@ -562,7 +562,7 @@ describe("OpenCode M2 registration", () => {
     await waitFor(() => broker.posts.some((post) => post.recordKind === "session_announce"));
     expect(driver.capabilities).toEqual({
       structuredPermissions: false,
-      status: false,
+      status: true,
       controls: {
         interrupt: true,
         setModel: false,
@@ -572,6 +572,20 @@ describe("OpenCode M2 registration", () => {
       attachments: false,
     });
     await stop(ac, run);
+  });
+
+  it.each([
+    ["idle", "idle"],
+    ["busy", "running"],
+    ["retry", "running"],
+  ] as const)("publishes an initial native %s snapshot as %s", async (status, projected) => {
+    const client = new FakeOpencodeClient();
+    client.sessionStatus = status;
+    const running = await launch(client);
+
+    expect(running.driver.capabilities.status).toBe(true);
+    expect(running.session.workerStatus).toBe(projected);
+    await stop(running.ac, running.run);
   });
 
   it.each([
@@ -992,20 +1006,88 @@ describe("OpenCode M2 canonical projection", () => {
     expect(running.client.aborts).toBe(0);
   });
 
-  it("surfaces native session errors without aborting the owned session", async () => {
+  it.each([
+    ["idle", "idle"],
+    ["busy", "running"],
+    ["retry", "running"],
+  ] as const)("surfaces a native session error and converges viewer status from exact %s", async (nativeStatus, viewerStatus) => {
     const running = await launch();
+    running.client.emit(statusEvent(MAIN, "busy"));
+    await waitFor(() => running.session.workerStatus === "running");
+    running.client.sessionStatus = nativeStatus;
     running.client.emit({
       type: "session.error",
       properties: { sessionID: MAIN, error: { data: { message: "provider failed" } } },
     });
-    await waitFor(() => upstream(running.session, "result").length === 1);
+    await waitFor(
+      () =>
+        upstream(running.session, "result").length === 1 &&
+        running.client.sessionStatusGets.length === 2,
+    );
     expect(upstream(running.session, "result")[0]?.result).toContain("provider failed");
+    expect(running.session.workerStatus).toBe(viewerStatus);
+
+    // Viewer-status convergence is read-only: even an exact idle result does not bypass the stricter
+    // history/correlation gate that owns the next browser mutation.
+    running.session.pushUserInput("must remain gated after provider failure");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(running.client.prompts).toEqual([]);
     await stop(running.ac, running.run);
     expect(running.client.aborts).toBe(0);
   });
 });
 
 describe("OpenCode M2 recovery and ownership", () => {
+  it("projects only exact main lifecycle and requires strict idle reproof", async () => {
+    const running = await launch();
+    expect(running.session.workerStatus).toBe("idle");
+    const statusGets = running.client.sessionStatusGets.length;
+
+    running.client.emit({
+      type: "session.created",
+      properties: {
+        sessionID: CHILD,
+        info: { id: CHILD, parentID: MAIN, agent: "research" },
+      },
+    });
+    running.client.emit(statusEvent(CHILD, "busy"));
+    running.client.emit({
+      type: "session.error",
+      properties: { sessionID: CHILD, error: { data: { message: "child failed" } } },
+    });
+    running.client.emit(idleEvent(CHILD));
+    await waitFor(() => upstream(running.session, "result").length === 1);
+    expect(running.session.workerStatus).toBe("idle");
+    expect(running.client.sessionStatusGets).toHaveLength(statusGets);
+
+    running.client.emit(statusEvent(MAIN, "retry"));
+    await waitFor(() => running.session.workerStatus === "running");
+    running.client.emit(statusEvent(MAIN, "idle"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(running.session.workerStatus).toBe("running");
+
+    running.client.sessionStatus = "busy";
+    running.client.emit(idleEvent());
+    await waitFor(() => running.client.sessionStatusGets.length === statusGets + 1);
+    expect(running.session.workerStatus).toBe("running");
+
+    running.client.sessionStatus = "idle";
+    running.client.emit(idleEvent());
+    await waitFor(() => running.client.sessionStatusGets.length === statusGets + 2);
+    expect(running.session.workerStatus).toBe("idle");
+    await stop(running.ac, running.run);
+  });
+
+  it("fences an invalid live main-session status", async () => {
+    const running = await launch();
+    running.client.emit({
+      type: "session.status",
+      properties: { sessionID: MAIN, status: { type: "unknown" } },
+    } as unknown as OpencodeEvent);
+
+    await expect(running.run).rejects.toThrow(/invalid native status/);
+  });
+
   it("closes admission for a new main user but not a duplicate update of an old user", async () => {
     const existingUserId = nativeMessageId(1);
     const duplicateClient = new FakeOpencodeClient();
@@ -1204,6 +1286,27 @@ describe("OpenCode M2 recovery and ownership", () => {
     gate.resolve();
     await waitFor(() => client.prompts.length === 1);
     expect(upstream(running.session, "assistant")).toHaveLength(1);
+    await stop(running.ac, running.run);
+  });
+
+  it("retains the last proved viewer status while reconnect keeps writes paused", async () => {
+    const client = new FakeOpencodeClient();
+    client.historySnapshots = [[], []];
+    const gate = deferred();
+    client.historyBarriers.set(2, gate.promise);
+    const running = await launch(client);
+    expect(running.session.workerStatus).toBe("idle");
+
+    client.drop(0);
+    await waitFor(() => client.historyCalls === 2, 3_000);
+    expect(running.session.workerStatus).toBe("idle");
+    running.session.pushUserInput("held behind status reproof");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(client.prompts).toEqual([]);
+
+    gate.resolve();
+    await waitFor(() => client.prompts.length === 1);
+    expect(client.sessionStatusGets.length).toBeGreaterThanOrEqual(2);
     await stop(running.ac, running.run);
   });
 

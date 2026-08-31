@@ -142,7 +142,7 @@ describe("stable Claude mutation surface", () => {
 describe("supported OpenCode mutation surface", () => {
   const caps = {
     structuredPermissions: false,
-    status: false,
+    status: true,
     controls: { interrupt: true, setModel: false, setMode: false, end: false },
     attachments: false,
   };
@@ -151,7 +151,7 @@ describe("supported OpenCode mutation surface", () => {
   it("recognizes only the exact native text-plus-interrupt tuple", () => {
     expect(isOpenCodeNativeTextSurface(harness, caps)).toBe(true);
     expect(isSupportedOpenCodeSurface(harness, caps)).toBe(true);
-    expect(reportsWorkerStatus(caps)).toBe(false);
+    expect(reportsWorkerStatus(caps)).toBe(true);
     expect(isSupportedOpenCodeSurface({ agent: "claude-code", mode: "rc" }, caps)).toBe(false);
     expect(isSupportedOpenCodeSurface(harness, { ...caps, structuredPermissions: true })).toBe(
       false,
@@ -159,7 +159,9 @@ describe("supported OpenCode mutation surface", () => {
     expect(isOpenCodeNativeTextSurface(harness, { ...caps, structuredPermissions: true })).toBe(
       true,
     );
-    expect(isSupportedOpenCodeSurface(harness, { ...caps, status: true })).toBe(false);
+    // A deployed M2 host may still advertise status:false. Status fidelity is orthogonal to the exact
+    // native text mutation tuple, so both old and graduated hosts retain the fail-closed composer rules.
+    expect(isSupportedOpenCodeSurface(harness, { ...caps, status: false })).toBe(true);
     expect(isSupportedOpenCodeSurface(harness, { ...caps, attachments: true })).toBe(false);
     for (const control of ["setModel", "setMode", "end"] as const) {
       expect(

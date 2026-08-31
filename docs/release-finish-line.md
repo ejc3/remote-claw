@@ -13,7 +13,9 @@ browsers, and disconnected without breaking the remaining surfaces. M1 is comple
 The pinned OpenCode M2 text/interrupt adapter is also complete. Its 2026-08-30 acceptance used the
 real OpenCode TUI and two browsers, exercised native-ordered IDs, browser A/B turns, immutable reload,
 interrupt plus continuation, and a companion-only fresh-projection restart against the same exact
-native session. Codex M3a is complete for exact 0.151.0/Linux arm64: one real local TUI and two browsers
+native session. Its separate read-only MAIN-session status follow-on and real-TUI/two-browser
+acceptance are also complete. Codex M3a is complete for exact
+0.151.0/Linux arm64: one real local TUI and two browsers
 shared an exact app-server thread, exchanged uniquely labelled text once, and kept one native approval
 and one native question solely in the TUI. M3b is also complete for that exact tuple: on 2026-08-31,
 the companion joined the official ChatGPT Remote thread through Codex's managed Unix socket, one
@@ -122,7 +124,7 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 | Claude private relay | Real Claude behind a local RC façade; browser turns and native output cross the broker | It replaces Anthropic RC, so the official client cannot join |
 | Claude trace | Normal Anthropic RC and official-client control with protocol observation | It does not project to or accept commands from remote-claw browsers |
 | Claude native companion | M1 complete on Linux with exact Claude 2.1.237: exact launch/attach binding, provider-ordered text, host-only OAuth, local TUI, literal official web UI on the user's phone, two browsers, ambiguity fencing, fresh-projection restart, broker-loss isolation, packed install, and exact-SHA deployed-broker evidence | Later controls, platforms, and versions remain separate capability tranches, not M1 blockers |
-| OpenCode | M2 complete for Linux arm64, exact OpenCode 1.17.5, the pinned Bedrock Sonnet model, one explicit live session, non-empty non-slash text, interrupt, native/local permissions, and fresh-projection restart | Later versions, platforms, models, permission graduation, and richer controls are separate tranches |
+| OpenCode | M2 complete for Linux arm64, exact OpenCode 1.17.5, the pinned Bedrock Sonnet model, one explicit live session, non-empty non-slash text, interrupt, native/local permissions, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete | Later versions, platforms, models, permission graduation, and richer controls are separate tranches |
 | Codex | M3a and M3b complete for exact 0.151.0/Linux arm64: explicit UUIDv7, local TUI plus two browsers, native-ordered text/status, TUI-only approvals/questions, explicit-loopback and literal managed-`unix://` attachment, same-thread ChatGPT Remote text coexistence, clean companion-stop isolation, and provider-transport isolation | Companion restart/backfill, Codex broker-loss acceptance, stable projection identity, per-device Remote unsubscribe, richer controls/content, and other versions/platforms remain separate results |
 | tmux | Private pane, transcript capture, conservative input injection, optional permission mirroring, and one bounded Claude/Anthropic/two-browser coexistence run | Productize only its honest fallback contract; verify the official app separately and never claim native peer fidelity it cannot supply |
 | Bedrock/accountless | Experimental inference translation and isolated no-Anthropic-account launch path | Credentialed compatibility matrix and coexistence gates for each agent adapter that advertises it |
@@ -145,7 +147,7 @@ Cartesian-product marathon, and the viewer-parity lane may continue without reop
 | M3a — complete | Codex TUI plus remote-claw browsers | Exact 0.151.0/Linux arm64 text/status companion and bounded real-user acceptance are green |
 | M3b — complete | Codex Remote same-thread coexistence | The official Remote thread, local TUI, companion, and two browsers exchanged text; a browser turn still completed after provider-transport disconnect |
 | UI-1 — complete | Compact activity rollup and detail sheet | Exact transcript event counts and chronological details reduce routine noise without inventing task status |
-| Next — bounded | Viewer-visible OpenCode running/idle status | Graduate the existing pinned-adapter mapping with startup/live/reconnect/child isolation and one real two-browser running-to-idle acceptance |
+| OpenCode status — complete | Viewer-visible read-only MAIN running/idle status | Startup/live/reconnect/child/error behavior has focused ownership, and the separate real-TUI/two-browser running-to-idle acceptance passed |
 | M4 — independent after M1 | Maintained, honest tmux fallback | Nearer to graduation, but deliberately outside the structured critical path |
 | M5 — incremental | Advertised inference/account tuples | Qualifies claims as they ship; the final pass only closes the published matrix |
 
@@ -263,8 +265,9 @@ explicit temporary SigV4 credential environment values in the OpenCode server pr
 named live <code>ses_*</code>, a loopback HTTP server, and a fresh random remote-claw projection on every
 companion start. The release path is attach-only. It does not select the root native session by
 discovery or create one; child sessions announced from that root may be followed. Its only mutable
-capabilities are non-empty non-slash text and interrupt; permissions, questions, status, model/mode
-changes, attachments, and end remain native/local and are advertised unsupported.
+capabilities at the M2 cutoff were non-empty non-slash text and interrupt; permissions, questions,
+status, model/mode changes, attachments, and end remained native/local and were advertised
+unsupported.
 
 The bounded implementation owners were:
 
@@ -347,6 +350,24 @@ The M2 cutoff remains closed: broker schemas, stable same-row binding, coordinat
 proof frameworks, default-path permission mutation or permission graduation, new control families,
 cross-platform/version matrices, and a new permanent browser harness. This adapter-only tranche does
 not rerun the Claude official-UI or exact-SHA deployment gates unless it changes those surfaces.
+
+### OpenCode status follow-on — complete
+
+The current pinned adapter advertises <code>status:true</code> as a read-only MAIN-session capability.
+Native <code>busy</code> and <code>retry</code> map to viewer running. Idle is published only after exact
+history/status reproof on the ordinary lifecycle path. Child lifecycle never drives MAIN. On SSE loss,
+write admission pauses while the viewer retains the last verified state; exact reconnect reproof
+converges it. A MAIN error instead re-reads exact status for the viewer without opening admission or
+clearing browser correlation.
+
+No mutation boundary changed: text and interrupt remain the only supported browser mutations, and
+permissions, questions, model/mode, attachments, end, and status mutation remain native/local or
+unsupported exactly as before. Focused startup/live/reconnect/child/error regressions own those causal
+boundaries. At 2026-08-31T05:09:54Z, the exact OpenCode 1.17.5/Linux arm64/pinned Bedrock Sonnet/
+<code>us-west-1</code> temporary-SigV4-environment tuple passed the separate status gate. An attached
+TUI drove the MAIN session from native busy to idle; two independent Chromium contexts both showed and
+cleared “working,” and each displayed one user and assistant copy. This acceptance is separate from,
+and does not retroactively change, the 2026-08-30 M2 evidence.
 
 ### Post-M2 viewer parity lane
 
@@ -502,8 +523,9 @@ versions and capabilities without guessing.
 
 Milestones may ship independently with truthful labels. M1 proves its Claude-native row, M2 proves its
 pinned OpenCode text/interrupt row, and M3a plus M3b prove only the pinned Codex app-server/ChatGPT
-Remote text/status coexistence row described above. Broader tuples and controls, Codex restart and
-broker-loss acceptance, maintained tmux graduation, the advertised Bedrock/account matrix, viewer
+Remote text/status coexistence row described above. OpenCode's read-only status follow-on is a current
+implemented and accepted capability; it does not rewrite M2. Broader tuples and controls, Codex restart
+and broker-loss acceptance, maintained tmux graduation, the advertised Bedrock/account matrix, viewer
 parity, and the full product remain separate outcomes.
 Line count, fixture count, and proof machinery are not success metrics. The metric is supported user
 surfaces working safely with the smallest maintainable implementation.

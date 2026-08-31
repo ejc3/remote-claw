@@ -8,7 +8,9 @@ account, not no AWS/provider or remote-claw credentials.
 
 **Current truth:** the private Claude replacement relay, the pinned OpenCode 1.17.5/Linux arm64/
 Bedrock global Sonnet 4.6/`us-west-1`/explicit temporary SigV4 environment credentials/explicit
-`ses_*`/loopback text-and-interrupt adapter, and the narrower tmux adapter work. The
+`ses_*`/loopback text-and-interrupt adapter with read-only MAIN-session running/idle status, and the
+narrower tmux adapter work. The OpenCode status implementation is complete and advertised; its
+separate real-TUI/two-browser status acceptance passed on 2026-08-31. The
 Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text to
 remote-claw while
 ordinary Anthropic Remote Control remains active. Its packed-install restart, broker-loss, and

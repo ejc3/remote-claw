@@ -15,8 +15,9 @@ Codex 0.151.0/Linux arm64 app-server text/status companion, including a local TU
 TUI-only approval/question handling. M3b then completed same-thread ChatGPT Remote text coexistence
 through the managed Unix socket, including provider-origin and browser-origin text plus continued
 browser turns after provider-transport disconnect. Viewer UI-1 then completed an exact-count activity
-rollup and chronological detail sheet without adding provider lifecycle claims. Current evidence and
-remaining gates live in
+rollup and chronological detail sheet without adding provider lifecycle claims. The OpenCode status
+follow-on has since implemented, advertised, and separately accepted read-only MAIN running/idle.
+Current evidence and remaining gates live in
 [native coexistence](native-rc-passthrough-scoping.md) and the
 [release roadmap](release-finish-line.md).
 
@@ -53,6 +54,14 @@ mutate native permission policy and advertises structured permissions as false; 
 only behind the explicit positive experimental opt-in. The viewer labels permission handling
 local/native, not “permissions off.” Other versions, models, platforms, permission graduation, and
 OpenCode-native collaboration surfaces need their own later gate; they do not reopen M2.
+
+The current follow-on advertises read-only MAIN status without adding a mutation family. Native
+`busy`/`retry` maps to running; ordinary idle requires exact history/status reproof; child activity
+never drives MAIN; SSE loss retains the last verified viewer state while admission pauses; reconnect
+reproof converges it; and a MAIN error instead re-reads exact status without opening admission.
+Permissions, questions, remaining controls, model/mode, attachments, and end are unchanged. Its implementation
+and separate 2026-08-31 real-TUI/two-browser running-to-idle acceptance are complete without changing
+the historical M2 proof.
 
 ### Codex
 

@@ -367,6 +367,8 @@ describe.runIf(RUN_LIVE)(
         );
         if (relaySession === null) throw new Error("driver did not create its relay session");
         const session = relaySession as Session;
+        expect(driver.capabilities.status).toBe(true);
+        expect(session.workerStatus).toBe("idle");
         client.activeProbe = () => observer?.currentStatus === "busy";
 
         const interruptLifecycleStart = observer.checkpoint();
@@ -391,6 +393,11 @@ describe.runIf(RUN_LIVE)(
           (event) => event.eventType === "session.status" && event.status === "busy",
           10_000,
           "an independent native busy event for the interrupt turn",
+        );
+        await waitForValue(
+          () => (session.workerStatus === "running" ? true : undefined),
+          10_000,
+          "the projected running status for the interrupt turn",
         );
         expect(
           observer.events
@@ -425,6 +432,11 @@ describe.runIf(RUN_LIVE)(
           10_000,
           "an independent native idle event after interrupt",
         );
+        await waitForValue(
+          () => (session.workerStatus === "idle" ? true : undefined),
+          10_000,
+          "the projected idle status after interrupt",
+        );
 
         const expectedResponse = `M2_CONTINUATION_ACK_${crypto.randomUUID().replaceAll("-", "")}`;
         const continuationText =
@@ -450,6 +462,11 @@ describe.runIf(RUN_LIVE)(
           10_000,
           "an independent native busy event for the continuation",
         );
+        await waitForValue(
+          () => (session.workerStatus === "running" ? true : undefined),
+          10_000,
+          "the projected running status for the continuation",
+        );
         const assistant = await waitForNativeAssistant(
           client,
           nativeSessionId,
@@ -462,6 +479,11 @@ describe.runIf(RUN_LIVE)(
           (event) => event.eventType === "session.status" && event.status === "idle",
           10_000,
           "an independent native idle event after the continuation",
+        );
+        await waitForValue(
+          () => (session.workerStatus === "idle" ? true : undefined),
+          10_000,
+          "the projected idle status after the continuation",
         );
         expect(assistant.info.parentID).toBe(continuationUser.info.id);
         expect(nativeText(assistant)).toBe(expectedResponse);

@@ -10,7 +10,7 @@ Five drivers exist:
 - `claude-native` — the Linux/exact-2.1.237 structured text companion for ordinary Anthropic Remote
   Control;
 - `tmux` — an experimental plain-Claude compatibility adapter;
-- `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt companion; and
+- `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
 - `codex` — the pinned Codex 0.151.0/Linux arm64 app-server text/status companion.
 
 The private MITM remains the supported Claude beta. The native companion has passed its structured
@@ -19,7 +19,9 @@ deployed-broker gates; M1 is complete.
 OpenCode M2 also passed its real-TUI, two-browser, interrupt, reload, and fresh-projection restart
 acceptance for the exact pinned tuple, whose proved OpenCode server environment was
 `AWS_REGION=us-west-1` plus explicit temporary SigV4 credential values. Other regions or credential
-modes require their own gate. Tmux retains narrower experimental guarantees. Codex M3a passed its
+modes require their own gate. A later follow-on now advertises read-only MAIN-session running/idle
+status; its implementation and separate real-TUI/two-browser status acceptance are complete. Tmux
+retains narrower experimental guarantees. Codex M3a passed its
 real-TUI, two-browser, text, status, and native-only approval/question acceptance. M3b then passed on
 an exact official Remote thread for Codex 0.151.0/Linux arm64 using the literal managed Unix socket and
 legacy full-turn hydration. One provider marker appeared once in two browsers; one browser prompt and
@@ -184,9 +186,11 @@ application.
 
 A driver updates `session.workerStatus` and calls `session.wake()` when it has a meaningful status
 change. It advertises `status:true` only when that projection is a supported viewer contract. Tmux
-retains only inferred status and advertises false. OpenCode strictly re-proves exact native status for
-write admission at startup, idle, and reconnect, but also advertises false because that internal latch
-is not a viewer status surface. Codex status notifications are a supported viewer surface and
+retains only inferred status and advertises false. OpenCode advertises true for read-only MAIN status:
+native `busy`/`retry` maps to running, while an ordinary idle lifecycle transition requires exact
+history/status reproof. Child events never drive MAIN. SSE loss pauses admission while retaining the
+last verified viewer state; reconnect reproof converges it, and a MAIN error instead re-reads exact
+status without reopening admission. Codex status notifications are also a supported viewer surface and
 advertise true.
 
 ## 4. Readiness and lifecycle
@@ -212,7 +216,7 @@ attached for the projection lifetime.
 
 ## 5. Current adapters
 
-| Property | Claude `mitm` | Claude `claude-native` | Experimental `tmux` | Pinned OpenCode M2 | Pinned Codex M3a/M3b |
+| Property | Claude `mitm` | Claude `claude-native` | Experimental `tmux` | Pinned OpenCode current | Pinned Codex M3a/M3b |
 | --- | --- | --- | --- | --- | --- |
 | Native connection | Claude RC HTTP/SSE through local MITM | transparent bridge observer or explicit-ID attach, plus Anthropic history/SSE client | private tmux pane + transcript files | OpenCode HTTP + server-wide SSE | explicit-port loopback app-server WebSocket, or literal `unix://` to Codex's same-user managed socket |
 | Native session choice | Claude creates a fresh `cse_*` in the local RC service | exact `cse_*` from the spawned child's successful bridge request or explicit `--rc-native-session` | fresh UUID unless user supplied resume/session flags | required exact existing root `ses_*`; never list, discover, or create that root; follow announced children | required exact existing UUIDv7; resume/join only, never discover, select, create, delete, or stop |
@@ -220,7 +224,7 @@ attached for the projection lifetime.
 | Remote text | Claude downstream SSE | serialized provider event POST | bracketed pane paste + Enter | `prompt_async` | serialized `turn/start`, correlated to completed native user item |
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
 | Permission behavior | stable surface disabled | native/local; never projected or answered | PreToolUse mirror by default | native/local by default; positive mirroring opt-in is experimental | approvals/questions solely owned by attached local TUI; companion cannot respond |
-| Status advertised | yes | no | no | no | yes |
+| Status advertised | yes | no | no | yes | yes |
 | Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection; restart acceptance is not yet claimed |
 
 The exact advertised viewer capabilities are:
@@ -230,8 +234,8 @@ The exact advertised viewer capabilities are:
 | Stable `mitm` | no | yes | no | no | no | no | no |
 | `claude-native` | no | no | no | no | no | no | no |
 | `tmux`, mirroring on | yes | no | yes | yes | no | no | yes |
-| Pinned `opencode`, default native/local permissions | no | no | yes | no | no | no | no |
-| `opencode`, experimental permission opt-in | yes | no | yes | no | no | no | no |
+| Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
+| `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | Pinned `codex` | no | yes | no | no | no | no | no |
 
 See [tmux-driver.md](tmux-driver.md) and [opencode-driver.md](opencode-driver.md) for adapter-specific
