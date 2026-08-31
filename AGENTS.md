@@ -9,8 +9,25 @@ account, not no AWS/provider or remote-claw credentials.
 **Current truth:** the private Claude replacement relay, the pinned OpenCode 1.17.5/Linux arm64/
 Bedrock global Sonnet 4.6/`us-west-1`/explicit temporary SigV4 environment credentials/explicit
 `ses_*`/loopback text-and-interrupt adapter with read-only MAIN-session running/idle status, and the
-narrower tmux adapter work. The OpenCode status implementation is complete and advertised; its
-separate real-TUI/two-browser status acceptance passed on 2026-08-31. The
+maintained lower-fidelity tmux fallback. M4 is complete for exact Claude 2.1.237/Linux arm64 with
+Bedrock Sonnet 4.6: packed install, a real local pane, two browsers, reload, native/local permission
+ownership after browser departure, broker-loss isolation, and later local work. Its browser surface is
+ordinary non-empty non-slash text plus attachments. A fixed helper and shared Linux `flock` serialize
+browser claim/paste/settle/Enter with synchronous `UserPromptSubmit` and `SessionEnd`; startup probes
+that lock boundary, and every prompt-hook helper failure blocks Claude with status 2. This protects an
+active model turn and the native permission/question modal reached within it. It does not serialize the
+idle local editor, partial drafts, slash/config UIs, or independent peers: those share one keystream and
+must not be manipulated locally while remote viewers may submit. There is no global Enter
+binding or TUI parser. Every raw control is false, and C0/C1 terminal controls other than TAB/LF are
+rejected at viewer, relay, and pane boundaries. `permissionPosture` is `local`, `bypassed`, or initially
+`unknown`: only a direct bypass, the current SessionStart mode when supplied, or timestamped
+matching-session evidence written after the
+current transcript attach resolves it. Every attached backfill is ignored, rotation clears the prior
+mode, and a fresh lazy transcript shows a confirmation disclosure without disabling browser text. Later
+timestamped native records update presence `mode`, including local changes. This is metadata
+observation, not a settings parser, permission hook, or request/decision bridge.
+Tmux makes no provider-native/official-client coexistence claim. The OpenCode status implementation is
+complete and advertised; its separate real-TUI/two-browser status acceptance passed on 2026-08-31. The
 Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text to
 remote-claw while
 ordinary Anthropic Remote Control remains active. Its packed-install restart, broker-loss, and
@@ -176,8 +193,8 @@ The four lenses, each verified and root-cause fixed (not papered over):
    "Editing the docs" above. Don't eyeball it.
 2. **Code-truth.** Every documented `--rc-*` flag matches `args.ts`/`run.ts`; every RC verb matches the
    relay/driver; every per-driver permission/capability claim matches that driver. Read the code, don't
-   trust the prose. (Example drift this caught: the tmux driver's docs said "auto-approve
-   (`--dangerously-skip-permissions`)" long after B2 made permission **mirroring** the default.)
+   trust the prose. (Example drift this caught: the tmux driver's docs still described remote permission
+   mirroring after the supported boundary returned permission ownership to Claude's local pane.)
 3. **Cross-doc sync.** No contradictions between `docs/v2-architecture.md`, `docs/protocol.md`, and the
    `*-driver.md` / `pluggable-harness.md` docs; a behavior change is folded into **every** doc that
    states it, not just the one you happened to open.
@@ -314,7 +331,28 @@ faithful sentinel.
   the intended durable backend, the browser can discover and drive a real session, reconnect preserves
   the transcript, and fail-stop cases remain truthful. Security-sensitive crypto, auth, ambiguous-send,
   durability, and permission boundaries keep deterministic regression tests.
-- The full multi-agent product is **not implemented yet**. M0 retained the lower-fidelity tmux route.
+- The full multi-agent product is **not implemented yet**. M0 selected the lower-fidelity tmux route;
+  M4 has now graduated its exact maintained local-pane/two-browser tuple without claiming provider-
+  native collaboration. Preserve its small safety boundary: Node first loads a private tmux buffer,
+  then a fixed helper holds one shared Linux `flock` across browser claim/paste/settle/Enter. The same
+  helper serializes synchronous `UserPromptSubmit` and `SessionEnd`; startup probes `flock`, and every
+  prompt-hook helper failure is normalized to Claude's blocking status 2. Exact 2.1.237's main
+  transcript `system/turn_duration` releases only a strictly older gate generation after the full
+  model loop and continuations finish. Exact latched-interrupt records use the same generation-safe
+  release. Exact current-launch hook-rejection warnings instead retire only the remote projection,
+  leaving the gate closed and pane usable, because concurrent hooks make their generation ambiguous;
+  old backfill and generic warnings do neither. Normal `SessionEnd` closes the gate under the shared
+  lock and then writes the retirement marker. If the helper fails, its fallback requires the marker
+  first and then attempts a best-effort gate close. Either path retires the projection while the pane
+  remains usable. `Stop`, `StopFailure`, and
+  asynchronous notifications must never release the gate because they can race a newer turn. This
+  guarantees exclusion only for an active model turn and its native permission/question modal. The
+  idle local editor, partial drafts, and slash/config UIs share the pane keystream and must not be
+  manipulated while remote viewers may submit; independent peer ordering and generic idle-modal
+  isolation are not claimed. Do not add a global Enter binding, TUI parser, `PreToolUse` permission
+  bridge, trust/policy mutation, slash injection, or raw interrupt/model/mode/end keys without a separate
+  demonstrated product requirement and acceptance. Keep C0/C1 terminal controls other than TAB/LF
+  rejected before relay admission and again at the irreversible pane boundary.
   The Linux/exact-2.1.237 `claude-native` companion now implements the structured text path: no presence
   or mutation before the launch form's exact child bridge binding, or the attach form's explicit exact
   native ID, and capture prerequisites are ready; provider history/SSE owns canonical order; OAuth

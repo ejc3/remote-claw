@@ -581,23 +581,61 @@ test.describe("capability gating (#149)", () => {
     await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
   });
 
-  test("a tmux host disables set_mode but keeps the model switcher and shows no permissions-off badge", async ({
+  test("an exact tmux host keeps permissions local and raw controls out of the pane", async ({
     page,
     seedHost,
   }) => {
-    const { pass } = await seedHost({ caps: "tmux" });
+    const { pass } = await seedHost({ harness: "tmux", caps: "tmux" });
     await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
     await page.getByRole("button", { name: "Connect" }).click();
     await page.locator("button.row", { hasText: "rc box" }).click();
 
-    // structuredPermissions:true → no bypassed badge (tmux mirrors permission gates).
+    // Only the explicit local posture is native/local ownership, not disabled enforcement.
     await expect(page.locator(".perms-bypassed")).toHaveCount(0);
-    // controls.setMode:false → mode button disabled …
+    await expect(
+      page.getByText("Permissions and questions stay in the local Claude tmux pane."),
+    ).toBeVisible();
+    // Every raw control is disabled: its keystroke could otherwise target a focused native modal.
     await expect(page.getByTestId("composer-mode")).toBeDisabled();
-    // … but controls.setModel:true → the model switcher rows are present.
+    const composer = page.getByRole("textbox", { name: "Message" });
+    await composer.fill(" /permissions");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
     await page.locator("button.chat-menu").click();
-    await expect(page.locator(".sheet .mode-row", { hasText: "Opus" })).toBeVisible();
+    await expect(page.locator(".sheet .mode-row", { hasText: "Opus" })).toHaveCount(0);
+    await expect(page.locator(".sheet .mode-row-danger")).toBeDisabled();
   });
+
+  test("a fresh tmux host labels unresolved permission posture without disabling browser text", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost({ harness: "tmux", caps: "tmux-unknown" });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+
+    await expect(page.locator(".perms-bypassed")).toHaveCount(0);
+    await expect(
+      page.getByText("Confirming permission mode in the local Claude tmux pane."),
+    ).toBeVisible();
+    await page.getByRole("textbox", { name: "Message" }).fill("confirm native mode");
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+  });
+
+  for (const caps of ["tmux-bypassed", "tmux-legacy-skip"] as const) {
+    test(`a ${caps} host is never mislabeled as locally gated`, async ({ page, seedHost }) => {
+      const { pass } = await seedHost({ harness: "tmux", caps });
+      await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+      await page.getByRole("button", { name: "Connect" }).click();
+      await page.locator("button.row", { hasText: "rc box" }).click();
+
+      await expect(
+        page.getByText("Permissions and questions stay in the local Claude tmux pane."),
+      ).toHaveCount(0);
+      await expect(page.locator(".perms-bypassed")).toBeVisible();
+      await expect(page.locator(".perms-bypassed")).toContainText("Permissions off");
+    });
+  }
 
   test("the default stable Claude host exposes text only and reports permissions as local", async ({
     page,

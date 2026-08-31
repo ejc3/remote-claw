@@ -9,7 +9,7 @@ Five drivers exist:
 - `mitm` — the default Claude Code Remote Control adapter;
 - `claude-native` — the Linux/exact-2.1.237 structured text companion for ordinary Anthropic Remote
   Control;
-- `tmux` — an experimental plain-Claude compatibility adapter;
+- `tmux` — the maintained lower-fidelity plain-Claude compatibility adapter;
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
 - `codex` — the pinned Codex 0.151.0/Linux arm64 app-server text/status companion.
 
@@ -20,8 +20,13 @@ OpenCode M2 also passed its real-TUI, two-browser, interrupt, reload, and fresh-
 acceptance for the exact pinned tuple, whose proved OpenCode server environment was
 `AWS_REGION=us-west-1` plus explicit temporary SigV4 credential values. Other regions or credential
 modes require their own gate. A later follow-on now advertises read-only MAIN-session running/idle
-status; its implementation and separate real-TUI/two-browser status acceptance are complete. Tmux
-retains narrower experimental guarantees. Codex M3a passed its
+status; its implementation and separate real-TUI/two-browser status acceptance are complete. Tmux M4
+is complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed install, local pane,
+two browsers, reload, browser input held behind an active model turn and its focused native permission
+modal, native/local permission ownership after browser departure, and broker-loss isolation. Its idle
+editor and slash/config UI remain a shared keystream that must not be manipulated concurrently with
+browser injection. It makes no independent-peer-ordering or provider-native/official-client coexistence
+claim. Codex M3a passed its
 real-TUI, two-browser, text, status, and native-only approval/question acceptance. M3b then passed on
 an exact official Remote thread for Codex 0.151.0/Linux arm64 using the literal managed Unix socket and
 legacy full-turn hydration. One provider marker appeared once in two browsers; one browser prompt and
@@ -90,6 +95,7 @@ The driver capability vector is deliberately per feature:
 
 ```text
 structuredPermissions
+permissionPosture? = local | bypassed | unknown
 status
 controls.interrupt
 controls.setModel
@@ -99,7 +105,10 @@ attachments
 ```
 
 The viewer disables unsupported controls, and `HostRcRelay` enforces the same vector again on inbound
-frames. A driver cannot gain a mutation surface merely because an older viewer sends it.
+frames. A driver cannot gain a mutation surface merely because an older viewer sends it. When
+structured browser permissions are false, the optional permission posture distinguishes known
+native/local ownership, explicit bypass, and an explicitly unresolved native mode. Absence is legacy
+and is never interpreted as local enforcement.
 
 The harness descriptor is separate from capabilities:
 
@@ -162,10 +171,24 @@ A driver claims a downstream stream generation and drains
 - `control_request` according to its advertised controls; and
 - `control_response` when it exposes structured permission gates.
 
-Only the newest stream claimant remains live. Tmux acknowledges after its transport action succeeds.
-OpenCode text acknowledges only after one native transport attempt and exact marker-plus-text capture;
-interrupt acknowledges only after native `/abort` returns literal `true`. These process-local
-acknowledgements suppress downstream replay but are not durable exactly-once claims.
+Only the newest stream claimant remains live. Tmux accepts ordinary non-empty, non-slash text and
+attachments. Node loads a private buffer, then a fixed helper holds a startup-probed Linux `flock`
+across gate claim, bracketed pane paste, bounded settle, and Enter; it acknowledges only an
+authoritative applied outcome. Claude's synchronous `UserPromptSubmit` hook drains its payload and uses
+the same helper, lock, and gate. Helper failures become blocking status `2`. Exact 2.1.237's
+main-transcript `system/turn_duration` conditionally releases only a strictly older gate generation
+after the full model loop and continuations finish. Exact latched-interrupt records use the same
+generation-safe release. Exact current-launch hook-rejection warnings instead retire only the
+projection, leaving the gate closed and pane usable, because concurrent-hook ordering is ambiguous; old
+backfill and generic warnings do neither. Normal `SessionEnd` uses the same lock, closes the gate, then
+writes the retirement marker and retires the projection while leaving the pane usable. Its fallback
+requires the retirement marker first, then best-effort closes the gate. `Stop`, `StopFailure`, and
+asynchronous notifications cannot release a newer turn's
+gate. No global Enter binding or TUI parser is installed. Every raw browser control is false; stale/direct
+controls and slash-leading text are acknowledged without pane keys. OpenCode text acknowledges only
+after one native transport attempt and exact marker-plus-text capture; interrupt acknowledges only
+after native `/abort` returns literal `true`. These process-local acknowledgements suppress downstream
+replay but are not durable exactly-once claims.
 
 The Claude-native companion sends non-empty, non-slash text through one serialized provider writer with
 a stable UUID. It waits for the canonical provider history/SSE event before publishing the ordered user
@@ -216,16 +239,16 @@ attached for the projection lifetime.
 
 ## 5. Current adapters
 
-| Property | Claude `mitm` | Claude `claude-native` | Experimental `tmux` | Pinned OpenCode current | Pinned Codex M3a/M3b |
+| Property | Claude `mitm` | Claude `claude-native` | Maintained lower-fidelity `tmux` | Pinned OpenCode current | Pinned Codex M3a/M3b |
 | --- | --- | --- | --- | --- | --- |
 | Native connection | Claude RC HTTP/SSE through local MITM | transparent bridge observer or explicit-ID attach, plus Anthropic history/SSE client | private tmux pane + transcript files | OpenCode HTTP + server-wide SSE | explicit-port loopback app-server WebSocket, or literal `unix://` to Codex's same-user managed socket |
 | Native session choice | Claude creates a fresh `cse_*` in the local RC service | exact `cse_*` from the spawned child's successful bridge request or explicit `--rc-native-session` | fresh UUID unless user supplied resume/session flags | required exact existing root `ses_*`; never list, discover, or create that root; follow announced children | required exact existing UUIDv7; resume/join only, never discover, select, create, delete, or stop |
 | Capture | authenticated RC event batches | subscribe-before-history provider reconciliation | tail main and sub-agent JSONL | history plus coalesced SSE parts | resume subscription, `historyMode`-selected bounded text history, then buffered/live notifications |
-| Remote text | Claude downstream SSE | serialized provider event POST | bracketed pane paste + Enter | `prompt_async` | serialized `turn/start`, correlated to completed native user item |
+| Remote text | Claude downstream SSE | serialized provider event POST | non-empty non-slash private-buffer text; helper/flock gates pane paste + Enter against active native turns | `prompt_async` | serialized `turn/start`, correlated to completed native user item |
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
-| Permission behavior | stable surface disabled | native/local; never projected or answered | PreToolUse mirror by default | native/local by default; positive mirroring opt-in is experimental | approvals/questions solely owned by attached local TUI; companion cannot respond |
+| Permission behavior | stable surface disabled | native/local; never projected or answered | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | approvals/questions solely owned by attached local TUI; companion cannot respond |
 | Status advertised | yes | no | no | yes | yes |
-| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection; restart acceptance is not yet claimed |
+| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection; restart acceptance is not yet claimed |
 
 The exact advertised viewer capabilities are:
 
@@ -233,7 +256,7 @@ The exact advertised viewer capabilities are:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable `mitm` | no | yes | no | no | no | no | no |
 | `claude-native` | no | no | no | no | no | no | no |
-| `tmux`, mirroring on | yes | no | yes | yes | no | no | yes |
+| `tmux` | no; posture says native/local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
 | `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | Pinned `codex` | no | yes | no | no | no | no | no |
@@ -271,8 +294,25 @@ Tmux options:
 
 ```text
 --rc-session-hook | --rc-no-session-hook
---rc-tmux-skip-permissions
 ```
+
+Tmux permissions and questions remain native/local unless the caller's resolved Claude policy
+explicitly bypasses them; the adapter has no remote permission switch. A direct actual-bypass argument
+wins. Otherwise only the current SessionStart mode when present or a timestamped matching-session record
+written after the current transcript attach supplies a known posture. Every attached backfill is ignored
+and rotation clears the current announce's mode and republishes without one, restoring `unknown`.
+Fresh Claude 2.1.237 can publish explicit
+`unknown` before its lazy transcript exists; ordinary browser text and attachments remain enabled while
+the viewer says the mode is being confirmed. The transcript pump then projects later timestamped
+permission-mode evidence through presence `mode`, so the viewer resolves to `local` or `bypassed` and
+follows later local mode changes. No settings parser, permission hook, request, or decision content is
+added. The fixed helper and synchronous hooks share a startup-probed Linux `flock`; prompt-hook failure
+is normalized to blocking status `2`, and SessionEnd retires only the projection. No global Enter
+binding or TUI parser is installed. This protects an active model turn and the native permission/question
+modal reached within it. It does not isolate the idle local editor or idle slash/config UI: do not
+manipulate those surfaces while remote viewers may submit, and do not infer independent peer
+ordering. Interrupt, model, mode, and end remain local-only. Pane-bound text and attachment captions
+reject C0/C1 terminal controls other than TAB/LF in the viewer and relay, with a final check before tmux.
 
 OpenCode options:
 
@@ -319,8 +359,9 @@ A driver change must preserve these current boundaries:
    ambiguous.
 3. Authenticate and deduplicate broker input in the shared relay; do not add a driver-specific wire
    backdoor.
-4. Serialize irreversible input. Never treat an ambiguous transport failure as proof that a native
-   action did not happen.
+4. Serialize irreversible input to the degree the native seam supports, and state any shared-input
+   limitation explicitly. Never treat an ambiguous transport failure as proof that a native action did
+   not happen.
 5. Advertise only controls the adapter can faithfully service, and make unsupported actions safe
    no-ops at the host boundary.
 6. Bound reconnect, in-memory dedup/buffering, and teardown work where the implementation can do so

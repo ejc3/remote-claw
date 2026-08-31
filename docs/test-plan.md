@@ -11,7 +11,9 @@ text/interrupt tuple and its real-TUI/two-browser acceptance are also green. Its
 follow-on and separate real-TUI/two-browser running-to-idle acceptance are also green. Codex M3a's exact
 0.151.0/Linux arm64 app-server text/status tuple and real-TUI/two-browser acceptance are green. M3b's
 exact official-Remote/TUI/two-browser coexistence and provider-transport-isolation outcome is also
-green for that tuple; maintained tmux support waits for M4. See
+green for that tuple. M4's packed exact-Claude/Linux/Bedrock tmux outcome is also green: local pane,
+two browsers, reload, a browser turn queued without touching a focused native permission modal, local
+approval after both browsers departed, queued-turn completion, broker loss, and later local work. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
 
 ## 1. Gate policy
@@ -88,7 +90,8 @@ pnpm --filter @remote-claw/web run test:run
 | Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, exact launch/attach binding, subscribe/history reconciliation, provider-coordinate dedup, fresh-projection restart, conservative writes, and native/projection isolation |
 | Pinned OpenCode adapter | <code>packages/cli/src/host/rc/opencode/*.test.ts</code>, focused relay/viewer tests | Exact-session capture, native coordinates and parents, marker correlation, FIFO idle admission, reconnect fencing, interrupt, restart projection, and honest text/interrupt plus read-only MAIN-status capabilities |
 | Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/viewer tests | Explicit-port loopback and literal same-user managed-socket URL boundaries, UUID/version/platform checks, `historyMode` API selection, supported-text filtering before bounds, `(turnId,itemId)` identity and changed-byte fencing, subscribe/history/readiness, native item correlation and deadline, response-less server requests, disconnect/archive/revert fencing, teardown, dispatch intent, and honest M3a/M3b capabilities |
-| Experimental adapters and inference | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, <code>bedrock/*.test.ts</code> | Current adapter-local contracts and honest capability limits; not full-product parity |
+| Maintained tmux fallback | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, focused relay/viewer tests, <code>tests/web/app-e2e/tmux-live.spec.ts</code> | Shared-helper/flock exclusion for active turns and their native permission/question modal, buffer-before-gate injection, Linux startup probe, blocking prompt-hook failures, SessionEnd projection retirement, Stop-family non-release, three-layer slash/control rejection, permission posture, readiness/recovery, browser departure, and broker-loss isolation for the accepted exact tuple; not idle-editor, generic idle-modal, peer-ordering, structured, or provider parity |
+| Experimental inference/account connectors | <code>packages/cli/src/host/rc/bedrock/*.test.ts</code>, focused MITM/launch tests | Current connector-local contracts and honest capability limits; not full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
 | HTTP routes | <code>apps/web/test/api/*.test.ts</code>, <code>auth.test.ts</code> | Bearer binding, route validation, error mapping, handoff semantics |
 | In-process spine | <code>apps/web/test/e2e/*.integration.test.ts</code> | Host, crypto, real broker routes, Workflow runtime, and viewer with only the model faked |
@@ -154,7 +157,46 @@ remains alive until teardown. It **does not** prove a browser or official-client
 Use it when private RC interception, launch, translation, or the real Claude compatibility boundary
 changes.
 
-### 5.2 Provider-specific checks
+### 5.2 Maintained tmux acceptance
+
+This dedicated gate is opt-in because it runs a packed-installed CLI, exact real Claude, private tmux
+pane, production-built browser app, two Chromium contexts, and real inference. Explicit prerequisites
+are required and a missing path fails rather than skips:
+
+~~~bash
+CLAUDE_CODE_USE_BEDROCK=1 \
+AWS_REGION=us-west-1 AWS_DEFAULT_REGION=us-west-1 \
+RC_TMUX_LIVE_MODEL=global.anthropic.claude-sonnet-4-6 \
+RC_TMUX_LIVE_CLI=/path/to/packed-installed/remote-claw \
+RC_TMUX_LIVE_CLAUDE=/path/to/claude-2.1.237 \
+RC_TMUX_LIVE_CWD=/path/to/a/pre-trusted/project \
+pnpm --dir tests/web test:tmux-live
+~~~
+
+Run it when tmux readiness, capture/injection, active-turn exclusion, capability truth, permission
+ownership, retained-pane failure isolation, or the viewer's tmux boundary changes. It is the smallest
+faithful sentinel for the real focused-modal, browser-departure, queued-turn, and broker-loss sequence.
+Unit and focused viewer/relay tests own fixed-helper composition, the shared Linux `flock` startup
+probe and ordering across remote claim/paste/settle/Enter and synchronous `UserPromptSubmit`/
+`SessionEnd`, buffer-before-gate sequencing, normalization of every prompt-hook helper failure to
+blocking status 2, exact duration/interruption generation-safe releases, exact current-launch
+hook-rejection projection fail-stop with old-backfill/generic-warning near-misses, same-millisecond completion ordering,
+SessionEnd gate-and-marker retirement plus its
+marker-first fallback while the pane survives,
+Stop/StopFailure/Notification non-release, the absence of a global Enter binding or TUI parser, and
+three-layer slash and raw-control rejection—including C0/C1 terminal controls other than TAB/LF in
+text/captions—current-
+launch posture resolution, rejection of stale resumed history, explicit `unknown` before a fresh lazy
+transcript exists, enabled text and attachments while that mode is being confirmed, presence-mode
+resolution and later local mode changes, `local|bypassed|unknown` rolling compatibility,
+argv/settings/artifact absence, fixed capabilities, and local teardown. They cannot replace the real
+Claude modal, tmux pane, browser contexts, and departed-browser queue that meet in this outcome. The
+guarantee is limited to an active model turn and the native permission/question modal reached within
+it. Idle local editor text, partial drafts, slash/config UIs, and generic idle modals share one
+keystream and must not be manipulated while remote viewers may submit; independent peer ordering
+is not claimed. The gate does not test or advertise provider-native/official-client coexistence.
+
+### 5.3 Provider-specific checks
 
 The direct Anthropic client remains covered deterministically by its CLI tests. Any change that claims
 provider-native behavior must additionally run against a disposable real native session with
@@ -186,7 +228,7 @@ Bedrock and accountless changes require an explicitly credentialed provider smok
 those surfaces. Accountless means no Anthropic account; the smoke must still prove the expected
 AWS/Bedrock and remote-claw credentials are present and safely confined.
 
-### 5.3 Turso and durable-storage checks
+### 5.4 Turso and durable-storage checks
 
 SQLite unit and integration tests are part of normal web CI. Run a real Turso check when changing the
 cloud locator, create/readiness policy, catalogue, channel-loss handling, or retention:
@@ -209,7 +251,7 @@ bounded readiness gate to absorb it. Missing credentials, provider/creation fail
 Phase 2 never opens the window exits 2 as inconclusive and must be rerun; a post-gate 404 or readiness
 timeout exits 1 as a regression.
 
-### 5.4 Stress
+### 5.5 Stress
 
 The bounded in-process transport stress suite drives the local and experimental Vercel backends in
 ordinary web Vitest. Deterministic SQLite tests own durable-store ordering and recovery; the deployed
@@ -225,7 +267,7 @@ pnpm --filter @remote-claw/web run test:stress:heavy
 Stress is not a per-edit gate. Use it for backend concurrency, stream ordering, retention, or large
 frame changes and as a scheduled regression signal.
 
-### 5.5 Deployed Preview
+### 5.6 Deployed Preview
 
 The deployment smoke is triggered from a trusted default-branch dispatch after Vercel reports a
 Preview deployment. It:
@@ -241,7 +283,7 @@ The browser run retains no credential-bearing trace, screenshot, or video. A mis
 wrong SHA, wrong storage profile, absent bypass, or incomplete browser turn is a failure, not a
 successful receipt with caveats.
 
-### 5.6 Handoff enablement — disclosure plus WAF
+### 5.7 Handoff enablement — disclosure plus WAF
 
 In-process route tests prove body limits, expiry, atomic single-use claim, and uniform misses; they
 cannot prove an edge provider's per-IP rule. Before setting
@@ -285,6 +327,27 @@ value was the architecture decision, not a permanent new proof harness.
 
 This run did not exercise the official Claude web/mobile UI and does not promote tmux to structured or
 exactly-once peer collaboration.
+
+### M4 maintained lower-fidelity acceptance — complete 2026-08-31
+
+The retained `tests/web/app-e2e/tmux-live.spec.ts` ran a packed-installed CLI, exact Claude 2.1.237 on
+Linux arm64, Bedrock `global.anthropic.claude-sonnet-4-6` in `us-west-1`, a real private tmux pane, a
+durable local SQLite broker, and two independent Chromium contexts. Browser-A and browser-B labels
+appeared once in both viewers; browser reload reconstructed both. The gate inspected the launch
+artifacts to require the content-free turn hooks and reject a remote-claw `PreToolUse` hook, permission
+decision files, and an automatic `--dangerously-skip-permissions` flag.
+
+A safe local Bash turn then raised Claude's native permission UI. While that modal was focused, browser
+B submitted another prompt; after a bounded wait the modal was still focused and the native turn had
+not completed, proving that remote paste and Enter stayed queued. Both browsers then closed. Local
+approval completed the Bash turn, and the accepted queued browser turn completed without either browser
+present. The gate then closed its broker proxy and every accepted socket and proved a new native/local
+turn completed in the retained pane. Closed transport is the causal broker-loss fact; a particular
+retry-log message is intentionally not part of the outcome. This sequence directly covers active-turn
+permission-modal crossover and departed-browser wedges. It does not cover concurrent manipulation of
+the idle editor, partial drafts, slash/config UIs, or generic idle modals, and does not claim independent
+peer ordering, exactly-once native application, provider-native Remote Control, or official-client
+coexistence.
 
 ### M1 structured Claude native acceptance — complete
 
@@ -398,7 +461,7 @@ The later milestones use the same shared security checks but keep product-specif
 | OpenCode status follow-on | Complete: one installed exact 1.17.5 session's MAIN running-to-idle transition was observed consistently by an attached TUI and two independent Chromium contexts; this does not reopen M2 |
 | OpenCode beyond M2 | Each added version, platform, model, permission/control family, or native collaboration surface needs its own exact tuple and bounded outcome; it does not reopen the completed text/interrupt tuple |
 | Codex beyond M3a/M3b | Later versions, platforms, controls, attachments, restart/backfill, broker-loss, and any per-device unsubscribe claim need their own bounded outcome without reopening the completed exact-tuple text/status/coexistence result |
-| tmux | Recoverable local pane plus two browsers, with conservative injection states and no claim of independent peer ordering or exactly-once native application; any advertised Claude Remote coexistence uses the official Claude client UI |
+| tmux | Complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: packed install, recoverable local pane, two browsers, reload, active-turn isolation at a focused native permission modal, queued browser completion after both browsers depart, and broker-loss isolation; idle-editor concurrency, independent peer ordering, and provider-native/official-client coexistence are explicitly not advertised |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 
 OpenCode creation is not part of the M2 release path. The client's retained create helper and its

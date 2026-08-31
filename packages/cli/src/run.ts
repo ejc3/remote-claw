@@ -33,7 +33,6 @@ import {
 } from "./host/rc/opencode/client.js";
 import { DEFAULT_OPENCODE_MODEL, runOpencodeDriver } from "./host/rc/opencode/driver.js";
 import { runTmuxDriver } from "./host/rc/tmux/driver.js";
-import { resolveMirrorPermissions } from "./host/rc/tmux/permhook.js";
 import { resolveInjectSessionHook } from "./host/rc/tmux/sessionhook.js";
 import { runRcTrace } from "./host/rc/trace-run.js";
 import { runIdentity } from "./identity.js";
@@ -55,8 +54,7 @@ function signalExitCode(signal: NodeJS.Signals): number {
  *  own "unknown --rc-driver" error, not a second misapplied-flag nag. A reserved VALUE flag counts as
  *  "passed" only when it carries a non-empty (trimmed) value — an empty/blank value is absent everywhere.
  *  Each group names the driver it DOES apply to:
- *    • tmux: --rc-session-hook / --rc-no-session-hook (ongoing transcript/rotation follow only) /
- *      --rc-tmux-skip-permissions
+ *    • tmux: --rc-session-hook / --rc-no-session-hook (ongoing transcript/rotation follow only)
  *    • opencode: --rc-oc-url / --rc-oc-model / --rc-oc-session / --rc-oc-mirror-permissions
  *    • codex: --rc-codex-url / --rc-codex-thread
  *    • mitm (inference): --rc-inference / --rc-bedrock-region / --rc-bedrock-model / --rc-accountless
@@ -83,7 +81,6 @@ export function misappliedDriverFlagWarnings(
       [
         ...(rc["rc-session-hook"] === true ? ["--rc-session-hook"] : []),
         ...(rc["rc-no-session-hook"] === true ? ["--rc-no-session-hook"] : []),
-        ...(rc["rc-tmux-skip-permissions"] === true ? ["--rc-tmux-skip-permissions"] : []),
       ],
       "tmux",
     );
@@ -385,7 +382,6 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
       n !== "rc-codex-thread" &&
       n !== "rc-session-hook" &&
       n !== "rc-no-session-hook" &&
-      n !== "rc-tmux-skip-permissions" &&
       n !== "rc-accountless",
   );
   if (stray.length > 0) {
@@ -892,6 +888,21 @@ async function runTmuxDriverPath(
   opts: RunOptions,
   warn: (line: string) => void,
 ): Promise<number> {
+  // The maintained gate/release proof is pinned to one observed Claude transcript grammar and release
+  // platform. Reject any other tuple before identity creation, broker construction, or pane startup so
+  // it cannot advertise capabilities whose safety contract has not been established.
+  const runtime = opts.runtime ?? { platform: process.platform, arch: process.arch };
+  if (runtime.platform !== "linux" || runtime.arch !== "arm64") {
+    warn("remote-claw: --rc-driver=tmux requires the supported Linux arm64 release tuple\n");
+    return 2;
+  }
+  try {
+    await (opts.claudeCompatibilityCheck ?? assertStableClaudeCompatibility)(bin);
+  } catch {
+    warn(`remote-claw: ${STABLE_CLAUDE_REQUIREMENT}\n`);
+    return 1;
+  }
+
   try {
     const ctx = await createDriverContext({
       brokerUrl,
@@ -908,10 +919,6 @@ async function runTmuxDriverPath(
       yesFlag: rc["rc-session-hook"] === true,
       env: process.env.RC_SESSION_HOOK,
     });
-    const mirrorPermissions = resolveMirrorPermissions({
-      skipFlag: rc["rc-tmux-skip-permissions"] === true,
-      env: process.env.RC_TMUX_SKIP_PERMISSIONS,
-    });
     // Couple Ctrl-C / SIGTERM to the driver's abort so teardown (flush + kill-session) runs. Record
     // which signal fired so we return the shell-standard 128+N code (codex review #9) instead of 0.
     const ac = new AbortController();
@@ -927,7 +934,6 @@ async function runTmuxDriverPath(
     try {
       const code = await (opts.runTmuxDriver ?? runTmuxDriver)(ctx, ac.signal, {
         injectSessionHook,
-        mirrorPermissions,
       });
       return firedSignal !== null ? signalExitCode(firedSignal) : code;
     } finally {

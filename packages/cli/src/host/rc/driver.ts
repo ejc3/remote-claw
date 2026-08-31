@@ -40,6 +40,10 @@ export interface DriverCapabilities {
    * the browser cannot answer: an experimental harness may bypass native gating, while stable Claude
    * keeps any such gate local to its TUI. */
   structuredPermissions: boolean;
+  /** Where native permission/question decisions happen when structuredPermissions is false. `unknown`
+   * is a fresh native session whose resolved mode has not reached the transcript yet. Optional for
+   * rolling compatibility: absence is never interpreted as local enforcement. */
+  permissionPosture?: "local" | "bypassed" | "unknown";
   /** Reports real workerStatus transitions (else presence is a best-effort heuristic). */
   status: boolean;
   /** Per-verb control support (interrupt / setModel / setMode / end). */
@@ -48,6 +52,20 @@ export interface DriverCapabilities {
    *  the `attachment` frame, only the resulting downstream `user` prompt. So this tracks `user`
    *  injection support; listed for documentation. */
   attachments: boolean;
+}
+
+/** Whether text is safe to stream through a terminal's bracketed-paste path. TAB and LF are the only
+ * controls the tmux composer deliberately supports; every other C0/C1 code point is rejected so an
+ * authenticated client cannot embed ESC + a bracketed-paste terminator (or another raw terminal
+ * control) inside an otherwise ordinary `user` message. Printable Unicode is preserved verbatim. */
+export function isTmuxPaneSafeText(text: string): boolean {
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if ((code <= 0x1f && code !== 0x09 && code !== 0x0a) || (code >= 0x7f && code <= 0x9f)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** The MITM driver's capabilities — the maximal *real* set: native claude RC honors interrupt, set_model
@@ -109,7 +127,7 @@ export const CLAUDE_NATIVE_HARNESS: HarnessDescriptor = {
   mode: "native-rc",
 };
 /** The tmux driver runs a plain `claude` in a private tmux server, proved ready by SessionStart and
- * bridged through pane injection, transcript capture, and (by default) a permission hook. */
+ * bridged through serialized pane injection plus transcript capture. Native permissions stay local. */
 export const TMUX_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "tmux" };
 /** The opencode driver peer-attaches to an `opencode serve`. */
 export const OPENCODE_HARNESS: HarnessDescriptor = { agent: "opencode", mode: "opencode" };

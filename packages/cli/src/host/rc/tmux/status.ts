@@ -46,16 +46,6 @@ export const IDLE_DEBOUNCE_MS = 1000;
  *  no-append leaf-tool duration (an active sub-agent keeps appending, so it never trips this). */
 export const HARD_IDLE_MS = 120_000;
 
-/** Stop reasons that mean the turn is OVER (claude won't continue on its own) — the signal real RC
- *  turns into a `result`. `tool_use` (a tool call is pending) and `pause_turn` (a server-tool pause that
- *  claude resumes) mean "more coming"; an absent/streaming stop_reason isn't a boundary either. */
-const TERMINAL_STOP_REASONS = new Set(["end_turn", "stop_sequence", "max_tokens", "refusal"]);
-
-/** True if an assistant message's `stop_reason` marks a real end of turn (see TERMINAL_STOP_REASONS). */
-export function isTerminalStopReason(stopReason: unknown): boolean {
-  return typeof stopReason === "string" && TERMINAL_STOP_REASONS.has(stopReason);
-}
-
 export interface StatusTrackerOptions {
   session: Session;
   /** Idle debounce window (default IDLE_DEBOUNCE_MS). */
@@ -66,18 +56,6 @@ export interface StatusTrackerOptions {
   timer?: Timer;
   /** Injectable clock for the hard-idle window (default Date.now). */
   now?: () => number;
-  /** Fired ONCE per real turn end. The driver uses this to emit a synthetic `result` end-of-turn frame —
-   *  interactive claude never sends one, so without it the viewer shows no turn separator between tmux
-   *  turns (the mitm driver, on real RC, does).
-   *
-   *  Driven by the assistant message's `stop_reason`, NOT the idle debounce: a TOP-LEVEL assistant line
-   *  whose stop_reason is terminal (`end_turn`/`stop_sequence`/`max_tokens`/`refusal`) IS the turn end —
-   *  exactly the signal real RC turns into a `result`. The debounce can't be that signal: it also fires
-   *  during the >1s inference gap between a tool_result and claude's next step (no open tool, turn not
-   *  done) and can straddle a fast follow-up prompt, both of which emit spurious mid-turn separators
-   *  (code-review + codex). `tool_use`/`pause_turn`/absent stop_reasons mean "more coming" → no fire; a
-   *  NESTED sub-agent line (parent_tool_use_id set) is its own turn end, not the parent's → no fire. */
-  onTurnEnd?: () => void;
 }
 
 /**
@@ -91,7 +69,6 @@ export class StatusTracker {
   readonly #hardIdleMs: number;
   readonly #timer: Timer;
   readonly #now: () => number;
-  readonly #onTurnEnd: (() => void) | undefined;
   /** tool_use ids that have been called but whose tool_result hasn't arrived — idle is suppressed
    *  while any remain open (claude is waiting on a tool, not finished). */
   readonly #openTools = new Set<string>();
@@ -104,7 +81,6 @@ export class StatusTracker {
     this.#hardIdleMs = opts.hardIdleMs ?? HARD_IDLE_MS;
     this.#timer = opts.timer ?? nodeTimer();
     this.#now = opts.now ?? Date.now;
-    this.#onTurnEnd = opts.onTurnEnd;
   }
 
   /** Observe one captured transcript payload (already reshaped). Updates the open-tool set, flips to
@@ -112,24 +88,13 @@ export class StatusTracker {
    *  (including `parent_tool_use_id` for a nested sub-agent line). */
   onLine(payload: {
     type?: string;
-    message?: { content?: unknown; stop_reason?: unknown };
+    message?: { content?: unknown };
     parent_tool_use_id?: string | null;
   }): void {
     this.#lastLineAt = this.#now();
     this.#trackTools(payload);
     this.#setStatus("running");
     this.#armIdle();
-    // The turn separator is driven by the ground-truth `stop_reason`, NOT the idle debounce (see
-    // onTurnEnd's doc). A TOP-LEVEL assistant line with a terminal stop_reason IS the turn end → fire
-    // once, AFTER #setStatus so presence and the marker are coherent. (The driver pushes the assistant
-    // frame before calling onLine, so the synthetic `result` lands after the answer it closes.)
-    if (
-      payload.type === "assistant" &&
-      payload.parent_tool_use_id == null &&
-      isTerminalStopReason(payload.message?.stop_reason)
-    ) {
-      this.#onTurnEnd?.();
-    }
   }
 
   /** Update the open-tool set from a payload's content blocks: an assistant `tool_use` opens an id; a

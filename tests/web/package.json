@@ -5,7 +5,8 @@
 	"scripts": {
 		"test": "playwright test",
 		"typecheck": "tsc --noEmit",
-		"test:app": "playwright test -c app-e2e.config.ts"
+		"test:app": "playwright test -c app-e2e.config.ts",
+		"test:tmux-live": "RC_TMUX_LIVE=1 playwright test -c app-e2e.tmux-live.config.ts"
 	},
 	"devDependencies": {
 		"@playwright/test": "^1.49.0",

@@ -389,12 +389,14 @@ describe("parseCapabilities", () => {
     expect(
       parseCapabilities({
         structuredPermissions: false,
+        permissionPosture: "local",
         status: true,
         controls: { interrupt: true, setModel: false, setMode: false, end: false },
         attachments: true,
       }),
     ).toEqual({
       structuredPermissions: false,
+      permissionPosture: "local",
       status: true,
       controls: { interrupt: true, setModel: false, setMode: false, end: false },
       attachments: true,
@@ -432,6 +434,17 @@ describe("parseCapabilities", () => {
       setMode: false,
       end: true,
     });
+  });
+
+  it("preserves only an exact permission posture enum", () => {
+    expect(parseCapabilities({ permissionPosture: "local" })?.permissionPosture).toBe("local");
+    expect(parseCapabilities({ permissionPosture: "bypassed" })?.permissionPosture).toBe(
+      "bypassed",
+    );
+    expect(parseCapabilities({ permissionPosture: "unknown" })?.permissionPosture).toBe("unknown");
+    expect(parseCapabilities({ permissionPosture: "remote" })?.permissionPosture).toBeUndefined();
+    expect(parseCapabilities({ permissionPosture: 1 })?.permissionPosture).toBeUndefined();
+    expect(parseCapabilities({})?.permissionPosture).toBeUndefined();
   });
 });
 

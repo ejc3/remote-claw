@@ -139,6 +139,7 @@ export type TmuxOperation =
   | "set-buffer"
   | "paste-buffer"
   | "send-keys"
+  | "run-shell"
   | "kill-session";
 
 /** Three-valued liveness result: transport/spawn failures must never masquerade as a missing session. */
@@ -259,9 +260,10 @@ export class TmuxCtl {
     return (await this.sessionState(name)) === "gone";
   }
 
-  /** Load `text` into a named tmux paste-buffer (`-b`) from stdin (`-`). Prompt text never becomes a
-   * process argument; backticks, `$()`, newlines, arbitrary Unicode, and leading dashes are streamed
-   * as inert data and stdin is closed after the complete string is written. */
+  /** Load already-validated `text` into a named tmux paste-buffer (`-b`) from stdin (`-`). Prompt text
+   * never becomes a process argument; backticks, `$()`, newlines, printable Unicode, and leading dashes
+   * are streamed as data and stdin is closed after the complete string is written. The inject boundary
+   * rejects pane-active C0/C1 controls before this method is reached. */
   async setBuffer(bufferName: string, text: string): Promise<void> {
     await this.#must("load-buffer", ["load-buffer", "-b", bufferName, "-"], { stdin: text });
   }
@@ -278,6 +280,12 @@ export class TmuxCtl {
    *  interprets named keys (Enter/Escape/C-c) and sends other tokens as literal characters. */
   async sendKeys(target: string, ...keys: string[]): Promise<void> {
     await this.#must("send-keys", ["send-keys", "-t", target, ...keys]);
+  }
+
+  /** Run a fixed helper command synchronously (no `-b`). As with bindings, failures expose only the
+   * stable `run-shell` operation name rather than the command, stdout, or stderr. */
+  async runShell(command: string): Promise<void> {
+    await this.#must("run-shell", ["run-shell", command]);
   }
 
   /** Kill a session by name. Only exit 0 or a proved missing-session/server diagnostic establishes safe

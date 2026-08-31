@@ -43,8 +43,9 @@ acceptance ledger; current evidence and remaining gates are maintained in
 [Product goal and release gates](release-finish-line.md). The pinned OpenCode M2 text/interrupt tuple
 and pinned Codex M3a app-server text/status tuple have since completed. M3b also completed same-thread
 ChatGPT Remote text coexistence and provider-transport isolation for that exact Codex tuple; broader
-Codex tuples/controls/recovery, tmux graduation, and inference milestones retain their own acceptance
-scenarios.
+Codex tuples/controls/recovery and inference milestones retain their own acceptance
+scenarios. M4 has since graduated only the bounded tmux fallback described in the current roadmap; this
+archive does not restate its active-turn versus shared-idle-TUI contract.
 
 ## Current reproduction
 

@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { STABLE_CLAUDE_REQUIREMENT } from "./host/rc/compatibility.js";
 import type { DriverContext } from "./host/rc/driver.js";
 import { misappliedDriverFlagWarnings, runWrapper } from "./run.js";
 
@@ -1252,7 +1253,7 @@ describe("runWrapper (functional)", () => {
     vi.stubGlobal("fetch", fetchSpy);
     let seenContext: DriverContext | undefined;
     let seenSignal: AbortSignal | undefined;
-    let seenDeps: { injectSessionHook?: boolean; mirrorPermissions?: boolean } | undefined;
+    let seenDeps: { injectSessionHook?: boolean } | undefined;
     try {
       const code = await runWrapper(
         [
@@ -1267,10 +1268,11 @@ describe("runWrapper (functional)", () => {
           "--rc-driver",
           "tmux",
           "--rc-no-session-hook",
-          "--rc-tmux-skip-permissions",
         ],
         {
           claudeBin: "/opt/claude",
+          runtime: { platform: "linux", arch: "arm64" },
+          claudeCompatibilityCheck: async () => {},
           runTmuxDriver: async (ctx, signal, deps) => {
             seenContext = ctx;
             seenSignal = signal;
@@ -1295,10 +1297,76 @@ describe("runWrapper (functional)", () => {
       expect(seenContext?.identity.identityId).toBeInstanceOf(Uint8Array);
       expect(seenContext?.identity.identityId).toHaveLength(16);
       expect(typeof seenContext?.newClient).toBe("function");
-      expect(seenDeps).toEqual({ injectSessionHook: false, mirrorPermissions: false });
+      expect(seenDeps).toEqual({ injectSessionHook: false });
       expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unproved tmux platform before compatibility, identity, or dispatch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-tmux-platform-"));
+    const secret = join(dir, "secret");
+    const lines: string[] = [];
+    let compatibilityChecks = 0;
+    let dispatches = 0;
+    try {
+      const code = await runWrapper(
+        ["--rc-file", secret, "--rc-app", "https://broker.example", "--rc-driver", "tmux"],
+        {
+          claudeBin: "/opt/claude",
+          runtime: { platform: "linux", arch: "x64" },
+          claudeCompatibilityCheck: async () => {
+            compatibilityChecks++;
+          },
+          runTmuxDriver: async () => {
+            dispatches++;
+            return 0;
+          },
+          stderr: (line) => lines.push(line),
+        },
+      );
+
+      expect(code).toBe(2);
+      expect(existsSync(secret)).toBe(false);
+      expect(compatibilityChecks).toBe(0);
+      expect(dispatches).toBe(0);
+      expect(lines).toContain(
+        "remote-claw: --rc-driver=tmux requires the supported Linux arm64 release tuple\n",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an unproved Claude version before tmux identity or dispatch", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-tmux-version-"));
+    const secret = join(dir, "secret");
+    const lines: string[] = [];
+    let dispatches = 0;
+    try {
+      const code = await runWrapper(
+        ["--rc-file", secret, "--rc-app", "https://broker.example", "--rc-driver", "tmux"],
+        {
+          claudeBin: "/opt/claude",
+          runtime: { platform: "linux", arch: "arm64" },
+          claudeCompatibilityCheck: async () => {
+            throw new Error("wrong version");
+          },
+          runTmuxDriver: async () => {
+            dispatches++;
+            return 0;
+          },
+          stderr: (line) => lines.push(line),
+        },
+      );
+
+      expect(code).toBe(1);
+      expect(existsSync(secret)).toBe(false);
+      expect(dispatches).toBe(0);
+      expect(lines).toContain(`remote-claw: ${STABLE_CLAUDE_REQUIREMENT}\n`);
+    } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1469,7 +1537,7 @@ describe("misappliedDriverFlagWarnings — cross-mode flag hygiene", () => {
         "rc-oc-session": "ses_1",
       }),
     ).toEqual([]);
-    expect(misappliedDriverFlagWarnings("tmux", { "rc-tmux-skip-permissions": true })).toEqual([]);
+    expect(misappliedDriverFlagWarnings("tmux", { "rc-session-hook": true })).toEqual([]);
     expect(
       misappliedDriverFlagWarnings("codex", {
         "rc-codex-url": "ws://127.0.0.1:4500",
@@ -1483,7 +1551,6 @@ describe("misappliedDriverFlagWarnings — cross-mode flag hygiene", () => {
       misappliedDriverFlagWarnings("bogus", {
         "rc-inference": "bedrock",
         "rc-oc-url": "http://x",
-        "rc-tmux-skip-permissions": true,
       }),
     ).toEqual([]);
   });

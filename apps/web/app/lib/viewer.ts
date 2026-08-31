@@ -270,6 +270,7 @@ export interface ControlCaps {
 /** Driver capabilities as carried on session_announce (mirrors the host's DriverCapabilities). */
 export interface Capabilities {
   structuredPermissions: boolean;
+  permissionPosture?: "local" | "bypassed" | "unknown";
   status: boolean;
   controls: ControlCaps;
   attachments: boolean;
@@ -291,8 +292,15 @@ export function parseCapabilities(raw: unknown): Capabilities | undefined {
       ? (c.controls as Record<string, unknown>)
       : {};
   const bool = (v: unknown, dflt: boolean): boolean => (typeof v === "boolean" ? v : dflt);
+  const permissionPosture =
+    c.permissionPosture === "local" ||
+    c.permissionPosture === "bypassed" ||
+    c.permissionPosture === "unknown"
+      ? c.permissionPosture
+      : undefined;
   return {
     structuredPermissions: bool(c.structuredPermissions, true),
+    ...(permissionPosture !== undefined ? { permissionPosture } : {}),
     status: bool(c.status, false),
     controls: {
       interrupt: bool(ctlRaw.interrupt, true),

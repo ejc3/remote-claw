@@ -196,6 +196,41 @@ export function isSupportedOpenCodeSurface(
   );
 }
 
+/** The maintained tmux browser surface: text/attachments are gated against active native turns and
+ * every raw control is disabled. Requiring an explicit posture keeps old false-capability hosts on the
+ * conservative legacy path during rolling deploys. */
+export function isTmuxGatedTextSurface(
+  harness: Harness | undefined,
+  capabilities: Capabilities | undefined,
+): boolean {
+  return (
+    harness?.agent === "claude-code" &&
+    harness.mode === "tmux" &&
+    capabilities?.structuredPermissions === false &&
+    (capabilities.permissionPosture === "local" ||
+      capabilities.permissionPosture === "bypassed" ||
+      capabilities.permissionPosture === "unknown") &&
+    capabilities.attachments === true &&
+    capabilities.controls.interrupt === false &&
+    capabilities.controls.setModel === false &&
+    capabilities.controls.setMode === false &&
+    capabilities.controls.end === false
+  );
+}
+
+/** Derive the live tmux permission posture from the current presence generation. The launch-time
+ * capability tuple only identifies the maintained surface; it must not survive a session rotation
+ * after the host deliberately clears its dynamic mode. */
+export function currentTmuxPermissionPosture(
+  harness: Harness | undefined,
+  capabilities: Capabilities | undefined,
+  announceMode: string | undefined,
+): "local" | "bypassed" | "unknown" | undefined {
+  if (!isTmuxGatedTextSurface(harness, capabilities)) return undefined;
+  if (announceMode === undefined) return "unknown";
+  return announceMode === "bypassPermissions" ? "bypassed" : "local";
+}
+
 /** Every remote mutation requires both fresh host presence and an advertised capability. */
 export function remoteMutationEnabled(connected: boolean, supported = true): boolean {
   return connected && supported;
@@ -213,10 +248,19 @@ export function reportsWorkerStatus(capabilities: Capabilities | undefined): boo
 export function stableTextBlockReason(
   text: string,
   nativeTextOnly: boolean,
-): "empty" | "slash" | null {
+  tmuxPaneText = false,
+): "control" | "empty" | "slash" | null {
   const trimmed = text.trim();
   if (trimmed === "") return "empty";
   if (nativeTextOnly && trimmed.startsWith("/")) return "slash";
+  if (tmuxPaneText) {
+    for (let index = 0; index < text.length; index++) {
+      const code = text.charCodeAt(index);
+      if ((code <= 0x1f && code !== 0x09 && code !== 0x0a) || (code >= 0x7f && code <= 0x9f)) {
+        return "control";
+      }
+    }
+  }
   return null;
 }
 
@@ -1226,18 +1270,28 @@ function Transcript(props: {
   const stableClaude = isStableClaudeSurface(announce?.harness, caps);
   const openCode = announce?.harness?.agent === "opencode" && announce.harness.mode === "opencode";
   const codex = announce?.harness?.agent === "codex" && announce.harness.mode === "app-server";
+  // Rolling deploys can still surface an older tmux host with either the historical permission mirror
+  // or explicit bypass. Only a new, exact local-posture tuple earns the local-ownership claim.
+  const tmuxText = isTmuxGatedTextSurface(announce?.harness, caps);
+  const tmuxPermissionPosture = currentTmuxPermissionPosture(announce?.harness, caps, announceMode);
+  const tmuxLocalPermissions = tmuxText && tmuxPermissionPosture === "local";
+  const tmuxPermissionsUnknown = tmuxText && tmuxPermissionPosture === "unknown";
   const nativeOpenCode = isOpenCodeNativeTextSurface(announce?.harness, caps);
   const supportedOpenCode = isSupportedOpenCodeSurface(announce?.harness, caps);
   // Codex has no compatibility control surface: once the validated harness pair says app-server,
   // fail closed to native text/local gates even if a future or malformed capability vector differs.
-  const nativeTextOnly = stableClaude || nativeOpenCode || codex;
+  const nativeTextOnly = stableClaude || nativeOpenCode || codex || tmuxText;
   const localInputDisclosure = codex
     ? "Approvals and questions stay in the local Codex TUI."
     : supportedOpenCode
       ? "Permission prompts stay in the OpenCode TUI."
-      : stableClaude && announce?.harness?.mode === "rc"
-        ? "Local terminal prompts may not appear here."
-        : null;
+      : tmuxLocalPermissions
+        ? "Permissions and questions stay in the local Claude tmux pane."
+        : tmuxPermissionsUnknown
+          ? "Confirming permission mode in the local Claude tmux pane."
+          : stableClaude && announce?.harness?.mode === "rc"
+            ? "Local terminal prompts may not appear here."
+            : null;
   const supportsSetMode = codex ? false : (caps?.controls.setMode ?? true);
   const supportsSetModel = codex ? false : (caps?.controls.setModel ?? true);
   const supportsInterrupt = codex ? false : (caps?.controls.interrupt ?? true);
@@ -1249,18 +1303,20 @@ function Transcript(props: {
   const canAttach = remoteMutationEnabled(connected, supportsAttachments);
   const canGrantPermissions = remoteMutationEnabled(connected, supportsRemotePermissions);
   // `structuredPermissions:false` means only that the BROWSER cannot answer. Stable Claude, the exact
-  // supported OpenCode tuple, and Codex app-server keep gates in their native/local UI; an explicit
-  // compatibility bypass posture is a different claim.
-  const permissionsLocal = stableClaude || supportedOpenCode || codex;
+  // supported OpenCode tuple, Codex app-server, and tmux keep gates in their native/local UI; an
+  // explicit compatibility bypass posture is a different claim.
+  const permissionsLocal = stableClaude || supportedOpenCode || codex || tmuxLocalPermissions;
   const workerLabel: "Claude" | "OpenCode" | "Codex" = openCode
     ? "OpenCode"
     : codex
       ? "Codex"
       : "Claude";
   const permissionAgent = workerLabel;
-  const permsBypassed = caps?.structuredPermissions === false && !permissionsLocal;
-  const textBlockReason = stableTextBlockReason(input, nativeTextOnly);
+  const permsBypassed =
+    caps?.structuredPermissions === false && !permissionsLocal && !tmuxPermissionsUnknown;
+  const textBlockReason = stableTextBlockReason(input, nativeTextOnly, tmuxText);
   const slashBlocked = textBlockReason === "slash";
+  const controlBlocked = textBlockReason === "control";
   const composerHasPayload =
     textBlockReason === null ||
     (textBlockReason === "empty" && supportsAttachments && staged.length > 0);
@@ -1505,8 +1561,13 @@ function Transcript(props: {
       clearStaged();
       return;
     }
-    const blockReason = stableTextBlockReason(text, nativeTextOnly);
-    if (blockReason === "slash" || (blockReason === "empty" && staged.length === 0)) return;
+    const blockReason = stableTextBlockReason(text, nativeTextOnly, tmuxText);
+    if (
+      blockReason === "slash" ||
+      blockReason === "control" ||
+      (blockReason === "empty" && staged.length === 0)
+    )
+      return;
     // Synchronous re-entry guard (#H): a double-tap Send / Enter-mash fires send() twice in the same tick,
     // before React commits setSending — so the async `sending` state can't block the second call, but this
     // ref can. Released in `finally`. Without it, both calls mint different clientMsgIds → two messages sent.
@@ -1545,6 +1606,7 @@ function Transcript(props: {
     supportsAttachments,
     nativeOpenCode,
     nativeTextOnly,
+    tmuxText,
   ]);
 
   // Auto-grow the composer textarea up to a cap; recompute whenever the text changes (incl. on clear).
@@ -1793,6 +1855,11 @@ function Transcript(props: {
           <p className="staged-notice" role="status">
             Slash commands aren’t available remotely. Use the local{" "}
             {openCode ? "OpenCode TUI" : codex ? "Codex TUI" : "Claude terminal"}.
+          </p>
+        )}
+        {controlBlocked && (
+          <p className="staged-notice" role="status">
+            Terminal control characters aren’t available remotely. Remove them and try again.
           </p>
         )}
         <div className="composer-shell">

@@ -1,19 +1,22 @@
 // Unit tests for the SessionStart-hook injection helpers: the settings DEEP-MERGE with any user
 // `--settings` (the load-bearing requirement), the argv extraction, and the sentinel NDJSON parser.
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { chmod, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   extractSettingsArg,
+  type HookFragment,
   insertSettingsArg,
   mergeSessionHookSettings,
   parseSentinel,
   parseUserSettings,
   resolveInjectSessionHook,
   sessionHookFragment,
+  turnGateHookFragment,
 } from "./sessionhook.js";
 
 const dirs: string[] = [];
@@ -26,6 +29,16 @@ const tmp = () => {
   return d;
 };
 
+function commandFor(fragment: HookFragment, event: "SessionEnd" | "UserPromptSubmit"): string {
+  const hooks = fragment.hooks as Record<
+    string,
+    Array<{ hooks: Array<{ type: string; command: string }> }>
+  >;
+  const command = hooks[event]?.[0]?.hooks[0]?.command;
+  if (command === undefined) throw new Error(`${event} command missing`);
+  return command;
+}
+
 describe("sessionHookFragment", () => {
   it("registers a SessionStart command hook that atomically appends NDJSON to the (quoted) sentinel", () => {
     const f = sessionHookFragment("/tmp/it's here.ndjson");
@@ -35,6 +48,71 @@ describe("sessionHookFragment", () => {
     expect(cmd).toBe(`printf '%s\\n' "$(cat)" >> '/tmp/it'\\''s here.ndjson'`);
     expect(cmd).not.toContain(";"); // single command, single append (no `cat >> p; printf >> p`)
   });
+});
+
+describe("turnGateHookFragment", () => {
+  it("routes prompt and end through the fixed helper with one shared lock", () => {
+    const hooks = turnGateHookFragment(
+      "/tmp/it's private/turn-active",
+      "/tmp/it's private/session-ended",
+      "/tmp/it's private/input-gate.sh",
+      "/tmp/it's private/input-gate.lock",
+    ).hooks as Record<string, Array<{ matcher?: string; hooks: Array<{ command: string }> }>>;
+    expect(Object.keys(hooks).sort()).toEqual(["SessionEnd", "UserPromptSubmit"]);
+    expect(hooks.UserPromptSubmit?.[0]?.hooks[0]?.command).toBe(
+      `umask 077; '/tmp/it'\\''s private/input-gate.sh' 'prompt' '/tmp/it'\\''s private/turn-active' '/tmp/it'\\''s private/input-gate.lock' || exit 2`,
+    );
+    expect(hooks.SessionEnd?.[0]?.hooks[0]?.command).toBe(
+      `umask 077; '/tmp/it'\\''s private/input-gate.sh' 'end' '/tmp/it'\\''s private/turn-active' '/tmp/it'\\''s private/input-gate.lock' '/tmp/it'\\''s private/session-ended' || { printf '%s' '' > '/tmp/it'\\''s private/session-ended' || exit 2; printf '%s' '' > '/tmp/it'\\''s private/turn-active' || true; exit 0; }`,
+    );
+    expect(hooks.Stop).toBeUndefined();
+    expect(hooks.StopFailure).toBeUndefined();
+    expect(hooks.Notification).toBeUndefined();
+    expect(hooks.PreToolUse).toBeUndefined();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "normalizes missing and arbitrary prompt-helper failures to Claude's blocking status 2",
+    async () => {
+      const dir = tmp();
+      const gate = join(dir, "turn-active");
+      const lock = join(dir, "input-gate.lock");
+      const failing = join(dir, "failing-helper.sh");
+      await writeFile(failing, "#!/bin/sh\nexit 7\n");
+      await chmod(failing, 0o700);
+
+      for (const helper of [join(dir, "missing-helper"), failing]) {
+        const command = commandFor(
+          turnGateHookFragment(gate, join(dir, "ended"), helper, lock),
+          "UserPromptSubmit",
+        );
+        const result = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8" });
+        expect(result.status).toBe(2);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "SessionEnd fallback attempts its marker even when independently closing the gate fails",
+    () => {
+      const dir = tmp();
+      const gate = join(dir, "missing-parent", "turn-active");
+      const ended = join(dir, "session-ended");
+      const command = commandFor(
+        turnGateHookFragment(
+          gate,
+          ended,
+          join(dir, "missing-helper"),
+          join(dir, "input-gate.lock"),
+        ),
+        "SessionEnd",
+      );
+      const result = spawnSync("/bin/sh", ["-c", command], { encoding: "utf8" });
+      expect(existsSync(gate)).toBe(false);
+      expect(existsSync(ended)).toBe(true);
+      expect(result.status).toBe(0);
+    },
+  );
 });
 
 describe("parseUserSettings", () => {
@@ -200,6 +278,17 @@ describe("parseSentinel", () => {
       cwd: "/c",
       source: "startup",
     });
+  });
+  it("preserves Claude's resolved permission mode when present", () => {
+    expect(
+      parseSentinel(
+        `${JSON.stringify({
+          session_id: "id1",
+          transcript_path: "/p/id1.jsonl",
+          permission_mode: "bypassPermissions",
+        })}\n`,
+      )?.permissionMode,
+    ).toBe("bypassPermissions");
   });
   it("returns the LAST event on rotation (a new line = a /clear or /branch)", () => {
     const text = `${ev("id1", "/p/id1.jsonl")}\n${ev("id2", "/p/id2.jsonl")}\n`;

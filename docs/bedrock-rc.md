@@ -36,12 +36,14 @@ Claude config and does not provide a usable Anthropic credential.
 | Agent adapter | Bedrock surface | Current claim |
 | --- | --- | --- |
 | Claude MITM | `bedrock-mantle` Messages API | Implemented inference translation, control-plane synthesis, and private viewer round-trip |
-| Claude tmux | Native Claude Bedrock configuration | Experimental transcript/pane fallback; no structured RC or official-client semantics |
+| Claude tmux | Native Claude Bedrock configuration | M4 supported only for exact Claude 2.1.237/Linux arm64 with `global.anthropic.claude-sonnet-4-6` in `us-west-1`; lower-fidelity transcript/pane semantics, native/local permissions, and no provider-native/official-client claim |
 | OpenCode | OpenCode `amazon-bedrock` provider | Supported only for the exact pinned M2 tuple; other models, regions, versions, platforms, and capabilities require separate gates. See [OpenCode driver](opencode-driver.md) |
 | Codex | None advertised | Requires a separately tested provider route before any support claim |
 
 The 2026-06-28 runs observed one real viewer prompt and model response for each of the first three
-rows. They are pinned observations, not a permanent provider/version/region support matrix.
+rows. The later 2026-08-31 M4 run graduated only the exact Claude-tmux tuple stated above, including
+two browsers, reload, native/local permission ownership, and broker-loss isolation. The other
+observations are not a permanent provider/version/region support matrix.
 
 ## CLI surface
 

@@ -14,6 +14,7 @@ import { readFile } from "node:fs/promises";
 export interface SessionHookEvent {
   sessionId: string;
   transcriptPath: string;
+  permissionMode?: string;
   cwd?: string;
   source?: string;
 }
@@ -36,6 +37,44 @@ export function sessionHookFragment(sentinelPath: string): {
   const p = shq(sentinelPath);
   const command = `printf '%s\\n' "$(cat)" >> ${p}`;
   return { hooks: { SessionStart: [{ hooks: [{ type: "command", command }] }] } };
+}
+
+/** Keep remote pane input out of an active Claude turn and its native permission/question UI. The fixed
+ * private helper makes
+ * UserPromptSubmit take the same kernel flock as remote claim/paste/Enter, then closes the gate before
+ * Claude begins the turn. If the local hook wins, remote input observes a busy gate before mutation; if
+ * remote input wins, Claude's synchronous hook cannot let either submitted prompt begin until that one
+ * pane mutation is complete. SessionEnd takes the same lock, closes the gate, and leaves a durable
+ * terminal marker. Hook payloads are drained without being recorded or transported. */
+export function turnGateHookFragment(
+  gatePath: string,
+  sessionEndedPath: string,
+  helperPath: string,
+  lockPath: string,
+): HookFragment {
+  // Claude 2.1.237 blocks UserPromptSubmit only for status 2. Normalize every helper failure (including
+  // missing/killed helper statuses) to that exact contract instead of accidentally failing open.
+  const prompt = `umask 077; ${[helperPath, "prompt", gatePath, lockPath]
+    .map(shq)
+    .join(" ")} || exit 2`;
+  // SessionEnd itself cannot be blocked. If its serialized helper fails, require an independently-created
+  // projection-retirement marker, then make a best-effort gate close. The private runtime directory is
+  // already 0700; the explicit umask also keeps fallback-created files 0600.
+  const endHelper = [helperPath, "end", gatePath, lockPath, sessionEndedPath].map(shq).join(" ");
+  const end = `umask 077; ${endHelper} || { printf '%s' '' > ${shq(
+    sessionEndedPath,
+  )} || exit 2; printf '%s' '' > ${shq(gatePath)} || true; exit 0; }`;
+  const command = (
+    value: string,
+  ): Array<{ hooks: Array<{ type: "command"; command: string }> }> => [
+    { hooks: [{ type: "command", command: value }] },
+  ];
+  return {
+    hooks: {
+      UserPromptSubmit: command(prompt),
+      SessionEnd: command(end),
+    },
+  };
 }
 
 /** Parse a `--settings` value the user passed: inline JSON object, else a file path to read+parse
@@ -185,7 +224,13 @@ export function parseSentinel(text: string): SessionHookEvent | null {
   for (const line of text.split("\n")) {
     const t = line.trim();
     if (t === "") continue;
-    let o: { session_id?: unknown; transcript_path?: unknown; cwd?: unknown; source?: unknown };
+    let o: {
+      session_id?: unknown;
+      transcript_path?: unknown;
+      permission_mode?: unknown;
+      cwd?: unknown;
+      source?: unknown;
+    };
     try {
       o = JSON.parse(t);
     } catch {
@@ -200,6 +245,7 @@ export function parseSentinel(text: string): SessionHookEvent | null {
       latest = {
         sessionId: o.session_id,
         transcriptPath: o.transcript_path,
+        ...(typeof o.permission_mode === "string" ? { permissionMode: o.permission_mode } : {}),
         ...(typeof o.cwd === "string" ? { cwd: o.cwd } : {}),
         ...(typeof o.source === "string" ? { source: o.source } : {}),
       };

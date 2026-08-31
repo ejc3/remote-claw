@@ -33,7 +33,7 @@ What exists today:
 | Direct Anthropic RC client | Implemented and wired into the Linux/exact-2.1.237 <code>claude-native</code> companion |
 | Claude native collaboration plus multiple remote-claw browsers | M1 complete on Linux/exact-2.1.237: structured provider-ordered text, local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and exact-SHA deployed-broker acceptance |
 | OpenCode server adapter | M2 complete for exact 1.17.5/Linux arm64, the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
-| tmux fallback | Experimental lower-fidelity implementation with documented limits |
+| tmux fallback | M4 complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: maintained lower-fidelity local-pane/two-browser fallback; browser input is held behind an active model turn and its permission/question modal, reload/departure/broker-loss passed, and the shared idle editor/slash/config UI must not be used concurrently; no independent peer ordering or provider-native/official-client claim |
 | Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation; per-device unsubscribe, richer controls, restart/backfill, and broker-loss are not claimed |
 | Bedrock and no-Anthropic-account launch | Experimental inference/account paths, separate from adapter fidelity |
 
@@ -459,14 +459,14 @@ app-server, TUI, or native thread.
 ## 11. Agent adapters and inference connectors
 
 The adapter seam maps a native harness into the same host session, broker, and viewer contracts.
-The MITM private-relay path, Claude native text companion, exact OpenCode M2 tuple, and exact Codex M3a/M3b
-tuple are supported at their stated boundaries. Other implementations have narrower, truthfully
-labeled guarantees.
+The MITM private-relay path, Claude native text companion, exact OpenCode M2 tuple, exact Codex M3a/M3b
+tuple, and exact M4 tmux fallback tuple are supported at their stated boundaries. Other implementations
+have narrower, truthfully labeled guarantees.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
 | Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart and literal official-client coexistence | Exact Linux/2.1.237 only; no remote controls, permissions, attachments, or status |
-| tmux | Experimental Claude compatibility driver | Transcript/pane correlation is weaker than native RC; permission mirroring uses hooks |
+| tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
 | Codex | Supported text/status app-server companion for exact 0.151.0/Linux arm64, including bounded same-thread official Remote coexistence | One explicit thread and attached local-TUI precondition; provider-transport isolation is proved, but per-device unsubscribe, browser controls, restart/backfill, and broker-loss are not |
 | Bedrock inference | Experimental MITM connector | Replaces Anthropic inference while preserving the private local RC facade |
@@ -474,6 +474,54 @@ labeled guarantees.
 
 Capability claims are per adapter, not inherited from the shared relay. A failure should end its
 remote projection without claiming that an unsupported or ambiguous native mutation succeeded.
+
+Tmux uses one content-free private turn sentinel, not a permission bridge. Node loads prompt bytes into
+a private tmux buffer over stdin; a fixed helper then holds a startup-probed Linux `flock` across gate
+claim, bracketed pane paste, bounded settle, and Enter. Claude's synchronous `UserPromptSubmit` hook
+drains its payload and takes the same helper/lock before closing the gate. Every prompt-helper failure is
+normalized to Claude's blocking status `2`. If the local hook wins, remote input sees a busy gate before
+pane mutation; if remote input wins, Claude cannot start that submitted turn until the remote helper
+leaves the lock.
+
+Exact 2.1.237's main-transcript `system/turn_duration` appears after the full model loop and
+continuations; the driver atomically reconciles it only with a strictly older gate-mtime generation, so
+delayed/backfilled turn A cannot release turn B. Exact latched-interrupt records use the same
+generation-safe release. Exact current-launch hook-rejection warnings instead retire only the
+projection, leaving the gate closed and pane usable, because concurrent-hook ordering is ambiguous; old
+backfill and generic warnings do neither. Normal `SessionEnd` takes the same lock, closes the gate, and
+then writes the retirement marker. If the helper fails, a private fallback requires the marker first
+and then best-effort closes the gate. The remote projection retires while the local pane remains usable.
+`Stop`, `StopFailure`, and asynchronous
+notification hooks do not release the gate because they can race newer work. No global Enter binding or
+TUI parser is installed.
+
+This keeps later browser paste/Enter out of an already active model turn and the native permission or
+question UI reached within it, without exposing requests or decisions, adding a `PreToolUse` hook, or
+changing trust/policy. It does not isolate an idle local editor, partial draft, slash command, or
+configuration UI: those share the pane keystream and must not be manipulated while remote viewers may
+submit. Tmux claims
+neither independent peer ordering nor generic idle-modal isolation. Interrupt,
+model, mode, end, and slash-leading browser text are rejected by the viewer and relay and become no-ops
+at the injection boundary, so stale/direct frames send no pane keys. Tmux text and attachment captions
+also reject every C0/C1 terminal control except TAB/LF at the viewer and relay; injection repeats the
+check for every downstream prompt before the private buffer load.
+
+Its capability vector carries `structuredPermissions:false` and optional
+`permissionPosture:"local"|"bypassed"|"unknown"`. A direct active-bypass argument wins; otherwise a
+resolved current SessionStart mode or a timestamped matching-session record written after the current
+transcript attach provides a known posture. Every attached backfill is ignored; rotation clears the
+current announce's prior mode and republishes without one, immediately restoring `unknown`. Fresh
+Claude 2.1.237 creates the transcript lazily, so absent current evidence
+publishes explicit `unknown` instead of guessing. The maintained viewer says the permission mode is being
+confirmed for that value while keeping ordinary text and attachments enabled.
+
+The transcript pump projects later timestamped permission-mode evidence for the current native
+session through existing presence `mode`; the viewer becomes `local` or `bypassed` and follows later
+local changes. A flag that merely makes bypass selectable is not an active bypass. This observation is
+not a settings parser or permission hook and carries no request or decision content. Explicit bypass
+and legacy absent posture show **Permissions off**, while an older viewer treats the new local or
+unknown tuple pessimistically. These fields preserve rolling-deploy truth without creating a browser
+permission surface.
 
 ## 12. Fail-stop and secret-handling rules
 
@@ -603,8 +651,8 @@ provider history/SSE; a separate direct provider-history recount was unavailable
 credential and is not claimed. After the official client disconnected, another browser turn and reply
 appeared once in both views and the native TUI remained live.
 
-M1 is complete. M1 alone does not complete Codex, broader OpenCode tuples, tmux,
-Bedrock/accountless, or the full-product matrix.
+M1 is complete. It did not by itself complete Codex, broader OpenCode tuples, tmux, Bedrock/accountless,
+or the full-product matrix; M2, M3, and the exact M4 tmux tuple closed only their separately stated rows.
 
 ## 15. M2 complete: pinned OpenCode text/interrupt companion
 
