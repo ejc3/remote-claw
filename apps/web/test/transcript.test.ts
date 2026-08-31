@@ -4,14 +4,95 @@ import {
   diffOf,
   dirname,
   editStat,
+  groupTranscriptActivity,
   isSlashCommand,
   parseQuestions,
   parseTask,
   parseToolResult,
   parseToolUse,
   sanitizeInput,
+  summarizeActivity,
   toolHint,
 } from "../app/lib/transcript.js";
+import type { Message } from "../app/lib/viewer.js";
+
+const message = (kind: string, msgId: string, seq: number, text = ""): Message => ({
+  kind,
+  msgId,
+  seq,
+  text,
+});
+
+describe("groupTranscriptActivity", () => {
+  it("rolls up maximal routine runs while preserving exact order and hard boundaries", () => {
+    const messages = [
+      message("assistant", "a", 1),
+      message("tool_use", "t1", 2),
+      message("tool_result", "r1", 3, JSON.stringify({ output: "ok" })),
+      message("tool_use", "t2", 4),
+      message("task", "k1", 5),
+      message("assistant_sub", "a2", 6),
+      message("tool_use", "t3", 7),
+      message("tool_result", "r2", 8, JSON.stringify({ output: "nested" })),
+      message("tool_result", "err", 9, JSON.stringify({ output: "boom", is_error: true })),
+      message("result", "done", 10),
+    ];
+
+    const items = groupTranscriptActivity(messages);
+    expect(items.map((item) => item.kind)).toEqual([
+      "message",
+      "activity_group",
+      "message",
+      "activity_group",
+      "message",
+      "message",
+    ]);
+    expect(items[1]?.kind === "activity_group" && items[1].messages.map((m) => m.msgId)).toEqual([
+      "t1",
+      "r1",
+      "t2",
+      "k1",
+    ]);
+    expect(items[3]?.kind === "activity_group" && items[3].messages.map((m) => m.msgId)).toEqual([
+      "t3",
+      "r2",
+    ]);
+    // An explicit error remains a first-class transcript row, never hidden in routine activity.
+    expect(items[4]?.kind === "message" && items[4].message.msgId).toBe("err");
+  });
+
+  it("rolls up from the first event and treats an empty result as a boundary", () => {
+    const items = groupTranscriptActivity([
+      message("tool_use", "only", 1),
+      message("tool_result", "empty", 2, JSON.stringify({ output: "" })),
+      message("task", "later", 3),
+    ]);
+    expect(items.map((item) => item.kind)).toEqual(["activity_group", "message", "activity_group"]);
+  });
+
+  it("keeps a stable id as a live singleton grows into a multi-event run", () => {
+    const first = message("tool_use", "first", 7);
+    const second = message("task", "second", 8);
+    const before = groupTranscriptActivity([first])[0];
+    const after = groupTranscriptActivity([first, second])[0];
+    expect(before?.kind).toBe("activity_group");
+    expect(after?.kind).toBe("activity_group");
+    if (before?.kind === "activity_group" && after?.kind === "activity_group") {
+      expect(after.id).toBe(before.id);
+    }
+  });
+
+  it("summarizes exact frame counts with correct singular and plural labels", () => {
+    expect(
+      summarizeActivity([
+        message("tool_use", "t1", 1),
+        message("tool_use", "t2", 2),
+        message("tool_result", "r", 3, JSON.stringify({ output: "ok" })),
+        message("task", "k", 4),
+      ]),
+    ).toBe("2 tool calls · 1 tool result · 1 task event");
+  });
+});
 
 // parseQuestions reads an AskUserQuestion tool input (#42) — the exact shape captured live via
 // --rc-trace: {questions:[{question, header, options:[{label,description}], multiSelect}]}.

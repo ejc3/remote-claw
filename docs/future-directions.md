@@ -14,8 +14,9 @@ OpenCode 1.17.5 text/interrupt adapter and its real-TUI, two-browser acceptance.
 Codex 0.151.0/Linux arm64 app-server text/status companion, including a local TUI, two browsers, and
 TUI-only approval/question handling. M3b then completed same-thread ChatGPT Remote text coexistence
 through the managed Unix socket, including provider-origin and browser-origin text plus continued
-browser turns after provider-transport disconnect. To avoid duplicating volatile pass/fail lists here,
-current evidence and remaining gates live in
+browser turns after provider-transport disconnect. Viewer UI-1 then completed an exact-count activity
+rollup and chronological detail sheet without adding provider lifecycle claims. Current evidence and
+remaining gates live in
 [native coexistence](native-rc-passthrough-scoping.md) and the
 [release roadmap](release-finish-line.md).
 
@@ -87,10 +88,9 @@ credentials explicitly instead of using “accountless” as “no accounts or c
 
 ## Shared follow-ups
 
-- Post-M2 viewer parity, starting with an activity rollup and background-task sheet over event families
-  remote-claw already represents. Richer Claude-native commands, task phases, media, and composer states
-  graduate only after trace evidence defines their real semantics; visual resemblance alone is not a
-  capability claim and does not reopen M1.
+- Viewer UI-1 activity rollup is complete. Richer Claude-native commands, task phases, media, and
+  composer states graduate only after trace evidence defines their real semantics; visual resemblance
+  alone is not a capability claim and does not reopen M1.
 - Per-viewer roles and revocation, after a concrete authority policy exists.
 - Stable same-row native restart adoption, after the current adapter-local fresh-projection contracts,
   with exact binding and a duplicate-mutation crash test.

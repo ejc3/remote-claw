@@ -19,8 +19,9 @@ and one native question solely in the TUI. M3b is also complete for that exact t
 the companion joined the official ChatGPT Remote thread through Codex's managed Unix socket, one
 provider-origin message appeared once in both remote-claw browsers, browser-origin text completed on
 the same native thread, and another browser turn completed after the provider transport disconnected.
-A small viewer-parity lane may proceed in parallel without reopening completed milestones or claiming
-capabilities the adapters do not expose.
+Viewer UI-1 is also complete: routine contiguous tool/task events now collapse into an exact-count
+activity row with a responsive detail sheet, while errors and other already-visible non-routine rows
+remain first-class. This does not claim background-task lifecycle semantics the adapters do not expose.
 
 ## Decision policy
 
@@ -143,6 +144,8 @@ Cartesian-product marathon, and the viewer-parity lane may continue without reop
 | M2 — complete | Supported OpenCode text/interrupt adapter | The second structured adapter and its bounded real-user acceptance are green |
 | M3a — complete | Codex TUI plus remote-claw browsers | Exact 0.151.0/Linux arm64 text/status companion and bounded real-user acceptance are green |
 | M3b — complete | Codex Remote same-thread coexistence | The official Remote thread, local TUI, companion, and two browsers exchanged text; a browser turn still completed after provider-transport disconnect |
+| UI-1 — complete | Compact activity rollup and detail sheet | Exact transcript event counts and chronological details reduce routine noise without inventing task status |
+| Next — bounded | Viewer-visible OpenCode running/idle status | Graduate the existing pinned-adapter mapping with startup/live/reconnect/child isolation and one real two-browser running-to-idle acceptance |
 | M4 — independent after M1 | Maintained, honest tmux fallback | Nearer to graduation, but deliberately outside the structured critical path |
 | M5 — incremental | Advertised inference/account tuples | Qualifies claims as they ship; the final pass only closes the published matrix |
 
@@ -347,11 +350,21 @@ not rerun the Claude official-UI or exact-SHA deployment gates unless it changes
 
 ### Post-M2 viewer parity lane
 
-This is a small product lane, not a reason to reopen M1 or broaden M2. First render a compact activity
-rollup and background-task sheet from task/tool/activity families remote-claw already represents.
-Later add richer Claude-native commands, task phases, media, and composer states one observed family at
-a time from redacted trace evidence. A visual match without equivalent event semantics, lifecycle,
-and capability gating is inspiration, not parity.
+**UI-1 is complete.** The viewer projects each maximal contiguous run of routine, visible
+<code>tool_use</code>, non-error/non-empty <code>tool_result</code>, and <code>task</code> frames into a
+compact Activity row. Its label contains exact frame counts only. Every frame remains in original order
+inside the existing responsive sheet. The row exists from the first routine event so its identity and
+focus remain stable as a live run grows; any other retained transcript message breaks the run. Explicit
+errors remain first-class in the transcript. The projection does not rewrite durable history, pair
+results to calls, or infer running/completed state, duration, tokens, phases, workflow, or provider.
+
+The focused real-spine tests cover both rollups, chronological detail, output expansion, salient error,
+keyboard traversal through native <code>&lt;summary&gt;</code> controls, Escape/close focus restoration,
+short-viewport popover scrolling, and 44 px targets. The visual gate is 40 executions across
+phone/desktop and light/dark, producing 68 reviewed artifacts including collapsed, sheet, and
+expanded-output states. Later parity work must still graduate one observed event family at a time from
+redacted trace evidence. Visual resemblance without equivalent semantics and capability gating is
+inspiration, not parity.
 
 ### M3 — Codex and provider-native remote coexistence
 
