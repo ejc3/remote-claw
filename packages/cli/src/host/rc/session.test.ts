@@ -111,6 +111,7 @@ describe("Session producers", () => {
     const ev = s.pushUserInput("hello");
     expect(ev.eventType).toBe("user");
     expect((ev.payload.message as { content: string }).content).toBe("hello");
+    expect(ev.payload.client_platform).toBe("web_claude_ai");
     expect(ev.source).toBe("client");
     expect(ev.eventId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,

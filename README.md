@@ -63,6 +63,15 @@ Changing the model backend must not silently change the collaboration, identity,
 Bedrock/accountless run still needs AWS or Bedrock credentials, a remote-claw machine identity/viewer
 pass, and any deployment credential required to reach a protected broker.
 
+The maintained M5 accountless claim is deliberately exact: Linux arm64, Claude Code 2.1.237,
+`bedrock-mantle` in `us-east-1`, `anthropic.claude-opus-4-8`, and temporary IMDSv2 SigV4. Its real
+tools-disabled private-viewer text round-trip passed on 2026-08-31; other capabilities or
+Bedrock/account/version tuples need separate qualification.
+For that path, Claude's config, secure-storage, and Anthropic-profile roots all point at one owned
+temporary directory; known inherited auth/settings overrides are removed, and fixed CCR-host token
+files or Linux system-managed settings make launch fail closed rather than silently reusing an
+Anthropic account or bypassing administrator policy.
+
 ## What works today
 
 The implemented native modes are:
@@ -94,8 +103,8 @@ Existing foundations:
   client. Vercel Workflows remains an experimental backend.
 - **`packages/cli`** — identity/pass custody, broker transport, Claude private RC façade and trace
   inspector, the native Anthropic companion/client, the pinned OpenCode text/interrupt/status adapter,
-  the pinned Codex app-server companion, the maintained lower-fidelity tmux fallback, and experimental
-  Bedrock inference/accountless connectors.
+  the pinned Codex app-server companion, the maintained lower-fidelity tmux fallback, the exact
+  maintained accountless Bedrock connector, and remaining experimental inference connectors.
 - **Provider evidence** — bounded Claude/OpenCode/Codex fixtures and documented Bedrock live runs.
   They establish specific compatibility facts, not whole-product completion.
 
@@ -154,7 +163,8 @@ Other supported and experimental paths have narrower current claims:
   local changes.
   Explicit bypass or a legacy missing posture shows permissions off; no settings parser, permission
   hook, request, or decision bridge is added.
-- Bedrock redirects inference while collaboration remains a separate adapter concern.
+- Bedrock redirects inference while collaboration remains a separate adapter concern. The exact M5
+  tuple above is maintained; broader tuples are not implied.
 - Accountless Bedrock seeds isolated Claude state so no Anthropic account is needed; it still requires
   AWS/Bedrock and remote-claw credentials.
 

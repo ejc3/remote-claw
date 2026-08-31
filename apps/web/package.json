@@ -10,6 +10,7 @@
     "clean:wdk": "rm -rf .workflow-data .workflow-vitest",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:bedrock-accountless": "RC_SMOKE_BEDROCK_ACCOUNTLESS=1 vitest run test/smoke/real-claude.smoke.test.ts",
     "test:real-claude": "RC_SMOKE_REAL_CLAUDE=1 vitest run test/smoke/real-claude.smoke.test.ts",
     "test:stress": "vitest run test/broker/stress.integration.test.ts",
     "test:stress:heavy": "STRESS_HEAVY=1 vitest run test/broker/stress-local.heavy.test.ts",

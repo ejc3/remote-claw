@@ -35,7 +35,7 @@ What exists today:
 | OpenCode server adapter | M2 complete for exact 1.17.5/Linux arm64, the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux fallback | M4 complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: maintained lower-fidelity local-pane/two-browser fallback; browser input is held behind an active model turn and its permission/question modal, reload/departure/broker-loss passed, and the shared idle editor/slash/config UI must not be used concurrently; no independent peer ordering or provider-native/official-client claim |
 | Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation; per-device unsubscribe, richer controls, restart/backfill, and broker-loss are not claimed |
-| Bedrock and no-Anthropic-account launch | Experimental inference/account paths, separate from adapter fidelity |
+| Bedrock and no-Anthropic-account launch | M5 complete for one tools-disabled text round-trip on exact Linux arm64 / Claude 2.1.237 / `us-east-1` / `anthropic.claude-opus-4-8` / temporary IMDSv2 SigV4; separate from adapter fidelity |
 
 The current private relay is useful product infrastructure, but no single adapter is the whole
 product.
@@ -469,8 +469,8 @@ have narrower, truthfully labeled guarantees.
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
 | Codex | Supported text/status app-server companion for exact 0.151.0/Linux arm64, including bounded same-thread official Remote coexistence | One explicit thread and attached local-TUI precondition; provider-transport isolation is proved, but per-device unsubscribe, browser controls, restart/backfill, and broker-loss are not |
-| Bedrock inference | Experimental MITM connector | Replaces Anthropic inference while preserving the private local RC facade |
-| Accountless mode | Experimental Bedrock companion | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
+| Bedrock inference | Maintained exact-tuple MITM connector | Replaces Anthropic inference while preserving the private local RC facade; other tuples remain unqualified |
+| Accountless mode | Maintained for the exact M5 Bedrock tuple | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
 
 Capability claims are per adapter, not inherited from the shared relay. A failure should end its
 remote projection without claiming that an unsupported or ambiguous native mutation succeeded.
@@ -652,7 +652,8 @@ credential and is not claimed. After the official client disconnected, another b
 appeared once in both views and the native TUI remained live.
 
 M1 is complete. It did not by itself complete Codex, broader OpenCode tuples, tmux, Bedrock/accountless,
-or the full-product matrix; M2, M3, and the exact M4 tmux tuple closed only their separately stated rows.
+or the full-product matrix; M2, M3, exact M4 tmux, and the exact current M5 Bedrock/accountless tuple
+closed only their separately stated rows.
 
 ## 15. M2 complete: pinned OpenCode text/interrupt companion
 

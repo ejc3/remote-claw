@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { connect as tlsConnect } from "node:tls";
 import { afterAll, describe, expect, it } from "vitest";
 import { ensureCerts, MITM_HOST } from "./certs.js";
-import { MitmProxy, RC_INTERCEPT_BODY_CAP } from "./mitm.js";
+import { MitmProxy, RC_INTERCEPT_BODY_CAP, type UpstreamRequest } from "./mitm.js";
 import { RelayCore, type Session } from "./session.js";
 
 function haveOpenssl(): boolean {
@@ -223,6 +223,79 @@ async function waitFor(pred: () => boolean, ms = 8000): Promise<void> {
 }
 
 describe.skipIf(!RUN)("MITM proxy (fake worker over real TLS interception)", () => {
+  it("keeps the Bedrock profile entirely off the Anthropic upstream transport", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-mitm-bedrock-routing-"));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    const certs = ensureCerts(dir);
+    const ca = readFileSync(certs.caPem);
+    const bedrockCalls: Array<{ url: string; init: RequestInit }> = [];
+    let anthropicCalls = 0;
+    const upstreamRequest = (() => {
+      anthropicCalls += 1;
+      throw new Error("Bedrock profile attempted an Anthropic upstream request");
+    }) as UpstreamRequest;
+    const bedrockFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      bedrockCalls.push({ url: String(input), init: init ?? {} });
+      return new Response(
+        JSON.stringify({
+          id: "msg_bedrock_route",
+          type: "message",
+          role: "assistant",
+          content: [{ type: "text", text: "routed" }],
+          model: "anthropic.claude-opus-4-8",
+          stop_reason: "end_turn",
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+    const proxy = new MitmProxy({
+      port: 0,
+      leafCert: certs.leafPem,
+      leafKey: certs.leafKey,
+      core: new RelayCore(),
+      inference: "bedrock",
+      upstreamRequest,
+      bedrock: {
+        region: "us-east-1",
+        modelOverride: "anthropic.claude-opus-4-8",
+        fetchFn: bedrockFetch,
+        resolveAuth: async () => ({ kind: "bearer", token: "test-bedrock-token" }),
+      },
+    });
+    await proxy.listen();
+    cleanup.push(() => void proxy.close());
+    const agent = proxyAgent(proxy.port, ca);
+
+    const inference = await rpcResponse(agent, "POST", "/v1/messages", {
+      model: "claude-opus-4-8",
+      max_tokens: 8,
+      messages: [{ role: "user", content: "hello" }],
+    });
+    const bootstrap = await rpcResponse(agent, "GET", "/api/claude_cli/bootstrap?entrypoint=cli");
+    const registration = await rpcResponse(agent, "POST", "/v1/code/sessions", {
+      title: "local rc",
+    });
+
+    expect(inference.status).toBe(200);
+    expect(inference.body.content).toEqual([{ type: "text", text: "routed" }]);
+    expect(bootstrap.status).toBe(200);
+    expect(bootstrap.body.oauth_account).toMatchObject({
+      account_email: "bedrock-user@example.com",
+    });
+    expect(registration.status).toBe(200);
+    expect((registration.body.session as { id?: unknown }).id).toMatch(/^cse_/);
+    expect(anthropicCalls).toBe(0);
+    expect(bedrockCalls).toHaveLength(1);
+    expect(bedrockCalls[0]?.url).toBe(
+      "https://bedrock-mantle.us-east-1.api.aws/anthropic/v1/messages",
+    );
+    expect(JSON.parse(String(bedrockCalls[0]?.init.body))).toMatchObject({
+      model: "anthropic.claude-opus-4-8",
+    });
+  }, 30_000);
+
   it("close is idempotent and owns RelayCore.closeAll", async () => {
     const dir = mkdtempSync(join(tmpdir(), "rc-mitm-close-"));
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
