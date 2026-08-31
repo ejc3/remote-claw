@@ -248,6 +248,11 @@ export class Session {
   pushUserInput(content: string, options: { clientMsgId?: string } = {}): RcEvent {
     const payload: Record<string, unknown> = {
       type: "user",
+      // Claude 2.1.237 demotes an unclassified client event to peer/cross-session origin, whose kill
+      // switch then drops it before the REPL. The private RC facade has already authenticated this
+      // human viewer action through the sealed relay, so map it to Claude's web-human wire class.
+      // This is a native ingress discriminator, not a claim that Anthropic hosts the session.
+      client_platform: "web_claude_ai",
       message: { role: "user", content },
       session_id: this.id,
       timestamp: nowIso(this.#clock),

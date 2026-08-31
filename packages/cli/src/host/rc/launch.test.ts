@@ -4,7 +4,7 @@
 // contract the child relies on. Skips cleanly if openssl is unavailable.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { Agent, request as httpsRequest, type RequestOptions } from "node:https";
 import { connect as netConnect } from "node:net";
@@ -25,7 +25,11 @@ import { MockBroker } from "../../broker/mockbroker.js";
 import { assertNoSecretLeak } from "../../secretleak.js";
 import { securityProvider } from "../../security/provider.js";
 import { MITM_HOST } from "./certs.js";
-import { type RcLaunchOptions, runRcLaunch as runRcLaunchBoundary } from "./launch.js";
+import {
+  assertNoAccountlessAmbientAuthSources,
+  type RcLaunchOptions,
+  runRcLaunch as runRcLaunchBoundary,
+} from "./launch.js";
 
 const runRcLaunch = (opts: RcLaunchOptions): Promise<number> =>
   runRcLaunchBoundary({
@@ -412,22 +416,58 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     expect(env.HTTPS_PROXY).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
   }, 20_000);
 
-  it("bedrock mode: swaps any real Anthropic creds for a pretend key and walls the child off from AWS/IMDS", async () => {
+  it("bedrock mode: removes Anthropic and inherited AWS credential routes from the child", async () => {
     // In zero-Anthropic (bedrock) mode the child must hold NO usable Anthropic credential (a hostile MCP
-    // that dodged the proxy could otherwise call api.anthropic.com directly) and NO path to the host's
-    // AWS creds (not even IMDS). Verify the launch env reflects all of that.
+    // that dodged the proxy could otherwise call api.anthropic.com directly) and no inherited AWS
+    // credential channel. Conforming child SDK metadata lookup is disabled; raw IMDS is not sandboxed.
     const id = await deriveIdentity(new Uint8Array(32).fill(74));
     const certsDir = tmp();
     const prev = {
       key: process.env.ANTHROPIC_API_KEY,
       authTok: process.env.ANTHROPIC_AUTH_TOKEN,
+      identityTok: process.env.ANTHROPIC_IDENTITY_TOKEN,
+      oauthTok: process.env.CLAUDE_CODE_OAUTH_TOKEN,
+      oauthRefresh: process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN,
+      sessionAccess: process.env.CLAUDE_CODE_SESSION_ACCESS_TOKEN,
+      authFd: process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR,
+      codeBaseUrl: process.env.CLAUDE_CODE_API_BASE_URL,
+      claudeApiKey: process.env.CLAUDE_API_KEY,
+      bridgeToken: process.env.CLAUDE_BRIDGE_OAUTH_TOKEN,
+      bridgeBaseUrl: process.env.CLAUDE_BRIDGE_BASE_URL,
+      bgTokens: process.env.CLAUDE_BG_SOCKET_TOKENS_PATH,
+      ingressTokenFile: process.env.CLAUDE_SESSION_INGRESS_TOKEN_FILE,
+      useFoundry: process.env.CLAUDE_CODE_USE_FOUNDRY,
+      maxOutputTokens: process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS,
+      customHeaders: process.env.ANTHROPIC_CUSTOM_HEADERS,
       baseUrl: process.env.ANTHROPIC_BASE_URL,
+      ccrTokenFile: process.env.CCR_OAUTH_TOKEN_FILE,
+      managedSettings: process.env.CLAUDE_CODE_MANAGED_SETTINGS_PATH,
+      mockRemoteSettings: process.env.CLAUDE_CODE_MOCK_REMOTE_SETTINGS,
+      remoteSettings: process.env.CLAUDE_CODE_REMOTE_SETTINGS_PATH,
       akid: process.env.AWS_ACCESS_KEY_ID,
       meta: process.env.AWS_EC2_METADATA_DISABLED,
     };
     process.env.ANTHROPIC_API_KEY = "sk-ant-REAL-user-key-should-not-reach-child";
     process.env.ANTHROPIC_AUTH_TOKEN = "real-oauth-token-should-not-reach-child";
+    process.env.ANTHROPIC_IDENTITY_TOKEN = "identity-token-should-not-reach-child";
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "setup-token-should-not-reach-child";
+    process.env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN = "refresh-token-should-not-reach-child";
+    process.env.CLAUDE_CODE_SESSION_ACCESS_TOKEN = "session-token-should-not-reach-child";
+    process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR = "9";
+    process.env.CLAUDE_CODE_API_BASE_URL = "https://alternate.example/should-not-reach-child";
+    process.env.CLAUDE_API_KEY = "alternate-key-should-not-reach-child";
+    process.env.CLAUDE_BRIDGE_OAUTH_TOKEN = "bridge-token-should-not-reach-child";
+    process.env.CLAUDE_BRIDGE_BASE_URL = "https://bridge.example/should-not-reach-child";
+    process.env.CLAUDE_BG_SOCKET_TOKENS_PATH = "/tmp/background-tokens-should-not-reach-child";
+    process.env.CLAUDE_SESSION_INGRESS_TOKEN_FILE = "/tmp/should-not-reach-child";
+    process.env.CLAUDE_CODE_USE_FOUNDRY = "1";
+    process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = "8192";
+    process.env.ANTHROPIC_CUSTOM_HEADERS = "Authorization: Bearer should-not-reach-child";
     process.env.ANTHROPIC_BASE_URL = "https://other-host.example/should-not-reach-child";
+    process.env.CCR_OAUTH_TOKEN_FILE = "/tmp/ccr-oauth-should-not-reach-child";
+    process.env.CLAUDE_CODE_MANAGED_SETTINGS_PATH = "/tmp/managed-should-not-reach-child.json";
+    process.env.CLAUDE_CODE_MOCK_REMOTE_SETTINGS = '{"env":{"ANTHROPIC_AUTH_TOKEN":"poison"}}';
+    process.env.CLAUDE_CODE_REMOTE_SETTINGS_PATH = "/tmp/remote-should-not-reach-child.json";
     process.env.AWS_ACCESS_KEY_ID = "AKIAHOSTONLYSHOULDNOTLEAK";
     delete process.env.AWS_EC2_METADATA_DISABLED; // prove we SET it (not merely inherit a prior value)
     let seenEnv: NodeJS.ProcessEnv | null = null;
@@ -448,7 +488,25 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       for (const [k, v] of [
         ["ANTHROPIC_API_KEY", prev.key],
         ["ANTHROPIC_AUTH_TOKEN", prev.authTok],
+        ["ANTHROPIC_IDENTITY_TOKEN", prev.identityTok],
+        ["CLAUDE_CODE_OAUTH_TOKEN", prev.oauthTok],
+        ["CLAUDE_CODE_OAUTH_REFRESH_TOKEN", prev.oauthRefresh],
+        ["CLAUDE_CODE_SESSION_ACCESS_TOKEN", prev.sessionAccess],
+        ["CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", prev.authFd],
+        ["CLAUDE_CODE_API_BASE_URL", prev.codeBaseUrl],
+        ["CLAUDE_API_KEY", prev.claudeApiKey],
+        ["CLAUDE_BRIDGE_OAUTH_TOKEN", prev.bridgeToken],
+        ["CLAUDE_BRIDGE_BASE_URL", prev.bridgeBaseUrl],
+        ["CLAUDE_BG_SOCKET_TOKENS_PATH", prev.bgTokens],
+        ["CLAUDE_SESSION_INGRESS_TOKEN_FILE", prev.ingressTokenFile],
+        ["CLAUDE_CODE_USE_FOUNDRY", prev.useFoundry],
+        ["CLAUDE_CODE_MAX_OUTPUT_TOKENS", prev.maxOutputTokens],
+        ["ANTHROPIC_CUSTOM_HEADERS", prev.customHeaders],
         ["ANTHROPIC_BASE_URL", prev.baseUrl],
+        ["CCR_OAUTH_TOKEN_FILE", prev.ccrTokenFile],
+        ["CLAUDE_CODE_MANAGED_SETTINGS_PATH", prev.managedSettings],
+        ["CLAUDE_CODE_MOCK_REMOTE_SETTINGS", prev.mockRemoteSettings],
+        ["CLAUDE_CODE_REMOTE_SETTINGS_PATH", prev.remoteSettings],
         ["AWS_ACCESS_KEY_ID", prev.akid],
         ["AWS_EC2_METADATA_DISABLED", prev.meta],
       ] as const) {
@@ -460,7 +518,25 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     // The real Anthropic key/token/base-url never reach the child — only the pretend key.
     expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-remote-claw-bedrock-no-account-needed");
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+    expect(env.ANTHROPIC_IDENTITY_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_REFRESH_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CODE_SESSION_ACCESS_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR).toBeUndefined();
+    expect(env.CLAUDE_CODE_API_BASE_URL).toBeUndefined();
+    expect(env.CLAUDE_API_KEY).toBeUndefined();
+    expect(env.CLAUDE_BRIDGE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.CLAUDE_BRIDGE_BASE_URL).toBeUndefined();
+    expect(env.CLAUDE_BG_SOCKET_TOKENS_PATH).toBeUndefined();
+    expect(env.CLAUDE_SESSION_INGRESS_TOKEN_FILE).toBeUndefined();
+    expect(env.CLAUDE_CODE_USE_FOUNDRY).toBeUndefined();
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).toBeUndefined();
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined(); // can't redirect the child off our MITM
+    expect(env.CCR_OAUTH_TOKEN_FILE).toBeUndefined();
+    expect(env.CLAUDE_CODE_MANAGED_SETTINGS_PATH).toBeUndefined();
+    expect(env.CLAUDE_CODE_MOCK_REMOTE_SETTINGS).toBeUndefined();
+    expect(env.CLAUDE_CODE_REMOTE_SETTINGS_PATH).toBeUndefined();
+    expect(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS).toBe("8192"); // unrelated tuning survives
     // Host AWS creds are scrubbed AND IMDS is explicitly disabled for the child.
     expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
     expect(env.AWS_EC2_METADATA_DISABLED).toBe("true");
@@ -479,25 +555,38 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     let seenEnv: NodeJS.ProcessEnv | null = null;
     let seededDir = "";
     let cfgDuringSpawn: Record<string, unknown> | null = null;
-    await runRcLaunch({
-      claudeArgs: [],
-      identity: id,
-      brokerUrl: "https://broker.example",
-      certsDir,
-      inference: "bedrock",
-      bedrock: {},
-      accountless: true,
-      spawnClaude: async (_bin, _args, env) => {
-        seenEnv = env;
-        seededDir = env.CLAUDE_CONFIG_DIR ?? "";
-        // The seeded config exists DURING the child's life and carries the RC gates.
-        cfgDuringSpawn = JSON.parse(readFileSync(join(seededDir, ".claude.json"), "utf8"));
-        return 0;
-      },
-    });
+    const prevSecureStorage = process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+    const prevProfileConfig = process.env.ANTHROPIC_CONFIG_DIR;
+    process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = "/tmp/real-login-should-not-reach-child";
+    process.env.ANTHROPIC_CONFIG_DIR = "/tmp/real-profile-should-not-reach-child";
+    try {
+      await runRcLaunch({
+        claudeArgs: [],
+        identity: id,
+        brokerUrl: "https://broker.example",
+        certsDir,
+        inference: "bedrock",
+        bedrock: {},
+        accountless: true,
+        spawnClaude: async (_bin, _args, env) => {
+          seenEnv = env;
+          seededDir = env.CLAUDE_CONFIG_DIR ?? "";
+          // The seeded config exists DURING the child's life and carries the RC gates.
+          cfgDuringSpawn = JSON.parse(readFileSync(join(seededDir, ".claude.json"), "utf8"));
+          return 0;
+        },
+      });
+    } finally {
+      if (prevSecureStorage === undefined) delete process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR;
+      else process.env.CLAUDE_SECURESTORAGE_CONFIG_DIR = prevSecureStorage;
+      if (prevProfileConfig === undefined) delete process.env.ANTHROPIC_CONFIG_DIR;
+      else process.env.ANTHROPIC_CONFIG_DIR = prevProfileConfig;
+    }
     const env = seenEnv as unknown as NodeJS.ProcessEnv;
     expect(env.CLAUDE_CONFIG_DIR).toBeTruthy();
     expect(seededDir).toContain("rc-accountless-");
+    expect(env.CLAUDE_SECURESTORAGE_CONFIG_DIR).toBe(seededDir);
+    expect(env.ANTHROPIC_CONFIG_DIR).toBe(seededDir);
     const cfg = cfgDuringSpawn as unknown as { cachedGrowthBookFeatures: Record<string, unknown> };
     expect(cfg.cachedGrowthBookFeatures.tengu_ccr_bridge).toBe(true);
     // The pretend key still gets injected (bedrock), and the seeded config rejects it → claude.ai-login mode.
@@ -505,6 +594,18 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     // Ephemeral: the dir is gone after teardown.
     expect(existsSync(seededDir)).toBe(false);
   }, 20_000);
+
+  it("accountless mode fails closed on fixed CCR-host auth and Linux managed settings", () => {
+    const authFile = join(tmp(), ".oauth_token");
+    writeFileSync(authFile, "poison-not-a-real-token", { mode: 0o600 });
+    expect(() => assertNoAccountlessAmbientAuthSources([authFile])).toThrow(
+      /accountless mode refuses the ambient Claude auth\/settings source/,
+    );
+    expect(() => assertNoAccountlessAmbientAuthSources([tmp()])).toThrow(
+      /accountless mode refuses the ambient Claude auth\/settings source/,
+    );
+    expect(() => assertNoAccountlessAmbientAuthSources([join(tmp(), "absent")])).not.toThrow();
+  });
 
   it("accountless without bedrock is rejected at the library boundary (not just the CLI arg layer)", async () => {
     // runRcLaunch is exported; a programmatic caller must not be able to seed a fabricated login while

@@ -91,7 +91,7 @@ pnpm --filter @remote-claw/web run test:run
 | Pinned OpenCode adapter | <code>packages/cli/src/host/rc/opencode/*.test.ts</code>, focused relay/viewer tests | Exact-session capture, native coordinates and parents, marker correlation, FIFO idle admission, reconnect fencing, interrupt, restart projection, and honest text/interrupt plus read-only MAIN-status capabilities |
 | Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/viewer tests | Explicit-port loopback and literal same-user managed-socket URL boundaries, UUID/version/platform checks, `historyMode` API selection, supported-text filtering before bounds, `(turnId,itemId)` identity and changed-byte fencing, subscribe/history/readiness, native item correlation and deadline, response-less server requests, disconnect/archive/revert fencing, teardown, dispatch intent, and honest M3a/M3b capabilities |
 | Maintained tmux fallback | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, focused relay/viewer tests, <code>tests/web/app-e2e/tmux-live.spec.ts</code> | Shared-helper/flock exclusion for active turns and their native permission/question modal, buffer-before-gate injection, Linux startup probe, blocking prompt-hook failures, SessionEnd projection retirement, Stop-family non-release, three-layer slash/control rejection, permission posture, readiness/recovery, browser departure, and broker-loss isolation for the accepted exact tuple; not idle-editor, generic idle-modal, peer-ordering, structured, or provider parity |
-| Experimental inference/account connectors | <code>packages/cli/src/host/rc/bedrock/*.test.ts</code>, focused MITM/launch tests | Current connector-local contracts and honest capability limits; not full-product parity |
+| Maintained exact Bedrock/accountless connector; broader tuples experimental | <code>packages/cli/src/host/rc/bedrock/*.test.ts</code>, focused MITM/launch tests, exact live gate below | Exact M5 text-only tuple, credential-route isolation, and connector-local contracts; not broader tuple or full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
 | HTTP routes | <code>apps/web/test/api/*.test.ts</code>, <code>auth.test.ts</code> | Bearer binding, route validation, error mapping, handoff semantics |
 | In-process spine | <code>apps/web/test/e2e/*.integration.test.ts</code> | Host, crypto, real broker routes, Workflow runtime, and viewer with only the model faked |
@@ -157,7 +157,37 @@ remains alive until teardown. It **does not** prove a browser or official-client
 Use it when private RC interception, launch, translation, or the real Claude compatibility boundary
 changes.
 
-### 5.2 Maintained tmux acceptance
+### 5.2 Maintained accountless Bedrock acceptance
+
+The maintained accountless Bedrock variant is:
+
+~~~bash
+RC_CLAUDE_BIN=/absolute/path/to/claude-2.1.237 \
+  pnpm --filter @remote-claw/web run test:bedrock-accountless
+~~~
+
+That command is deliberately one exact gate. It rejects non-Linux-arm64 hosts, any Claude report other
+than `2.1.237 (Claude Code)`, non-IMDS host credential sources, and temporary SigV4 credentials without
+a session token or useful expiry. The route is pinned in code to `us-east-1` and
+`anthropic.claude-opus-4-8`. It creates a fresh empty mode-0700 working directory so an unrelated
+repository's `CLAUDE.md` or trust prompt cannot intercept the run; `runRcLaunch` owns the isolated
+accountless config and the user's real config is untouched. Tools are disabled. The gate then proves
+one viewer-injected turn, one real Bedrock answer, and continued Claude liveness. The final
+isolation-boundary rerun passed at 2026-08-31T15:38:02Z. The child inherits no Anthropic auth route,
+alternate API base, or AWS credential
+variable; its config, secure-storage, and Anthropic-profile roots all resolve to the owned temporary
+directory; inherited managed/remote settings overrides are absent; fixed CCR-host token files fail
+closed; Linux system-managed settings also fail closed rather than being bypassed; and conforming SDK
+metadata discovery is disabled. Raw IMDS access is not network-sandboxed and is not part of this gate's
+claim.
+
+The real gate stays at this layer because Claude 2.1.237 applies a native ingress-origin classifier
+after acknowledging the RC frame: an event without the pinned human `client_platform` can be delivered
+and acknowledged, then dropped by Claude's cross-session safety switch before inference. The cheap
+regression asserts the exact field, while only the real binary can prove the downstream classifier and
+Bedrock round-trip together.
+
+### 5.3 Maintained tmux acceptance
 
 This dedicated gate is opt-in because it runs a packed-installed CLI, exact real Claude, private tmux
 pane, production-built browser app, two Chromium contexts, and real inference. Explicit prerequisites
@@ -196,7 +226,7 @@ it. Idle local editor text, partial drafts, slash/config UIs, and generic idle m
 keystream and must not be manipulated while remote viewers may submit; independent peer ordering
 is not claimed. The gate does not test or advertise provider-native/official-client coexistence.
 
-### 5.3 Provider-specific checks
+### 5.4 Provider-specific checks
 
 The direct Anthropic client remains covered deterministically by its CLI tests. Any change that claims
 provider-native behavior must additionally run against a disposable real native session with
@@ -224,9 +254,12 @@ driver/native-seam regression with model-bearing turns; it now compares projecte
 independent native event reader. It does not replace either the completed real-TUI/two-browser M2
 text/interrupt acceptance or the completed separate real two-browser status acceptance.
 
-Bedrock and accountless changes require an explicitly credentialed provider smoke before release of
-those surfaces. Accountless means no Anthropic account; the smoke must still prove the expected
-AWS/Bedrock and remote-claw credentials are present and safely confined.
+The exact accountless tuple above is maintained. Any Bedrock/accountless change or newly advertised
+tuple still requires an explicitly credentialed provider smoke before release. Accountless means no
+Anthropic account; the smoke must still prove the expected AWS/Bedrock and remote-claw credentials are
+present and kept out of argv, logs, broker data, and the child environment. Network isolation from raw
+host-metadata access requires a separate deployment sandbox and is not implied by the environment
+checks.
 
 ### 5.4 Turso and durable-storage checks
 
@@ -401,8 +434,8 @@ forwarded Claude arguments. Neither may use the default <code>--rc-driver=mitm</
 <code>runRcLaunch</code> replacement path: it cannot satisfy official-client coexistence by design, and
 trace mode cannot connect remote-claw browsers.
 
-M1 and the bounded Codex M3b live gate are complete. CI green alone still does not establish broader
-Codex/OpenCode tuples, tmux, Bedrock/accountless, or the full product matrix.
+M1, the bounded Codex M3b gate, and the exact accountless Bedrock gate are complete. CI green alone
+still does not establish broader Codex/OpenCode/Bedrock tuples, tmux, or the full product matrix.
 
 ## 8. OpenCode M2/status, Codex M3a/M3b, and remaining adapter acceptance
 

@@ -25,6 +25,9 @@ the same native thread, and another browser turn completed after the provider tr
 Viewer UI-1 is also complete: routine contiguous tool/task events now collapse into an exact-count
 activity row with a responsive detail sheet, while errors and other already-visible non-routine rows
 remain first-class. This does not claim background-task lifecycle semantics the adapters do not expose.
+M5 is complete for the currently published inference ledger: the existing exact OpenCode M2 Bedrock
+tuple and the exact Claude private-relay accountless tuple qualified below. New tuples remain separate
+incremental work.
 
 M4 is complete for the maintained lower-fidelity tmux fallback. On 2026-08-31, a packed-installed CLI,
 exact Claude 2.1.237/Linux arm64, Bedrock Sonnet 4.6, a real local pane, and two browsers passed labelled
@@ -144,7 +147,7 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 | OpenCode | M2 complete for Linux arm64, exact OpenCode 1.17.5, the pinned Bedrock Sonnet model, one explicit live session, non-empty non-slash text, interrupt, native/local permissions, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete | Later versions, platforms, models, permission graduation, and richer controls are separate tranches |
 | Codex | M3a and M3b complete for exact 0.151.0/Linux arm64: explicit UUIDv7, local TUI plus two browsers, native-ordered text/status, TUI-only approvals/questions, explicit-loopback and literal managed-`unix://` attachment, same-thread ChatGPT Remote text coexistence, clean companion-stop isolation, and provider-transport isolation | Companion restart/backfill, Codex broker-loss acceptance, stable projection identity, per-device Remote unsubscribe, richer controls/content, and other versions/platforms remain separate results |
 | tmux | M4 complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed install, private pane, two browsers, reload, non-empty non-slash text plus attachments held behind an active turn and its native modal, queued completion after browser departure, and broker-loss isolation | Idle editor/slash/config UI concurrency is unsupported; other versions/platforms/providers, native peer ordering, exactly-once native application, raw browser controls, slash commands, and provider-native/official-client coexistence remain unclaimed |
-| Bedrock/accountless | Experimental inference translation and isolated no-Anthropic-account launch path | Credentialed compatibility matrix and coexistence gates for each agent adapter that advertises it |
+| Bedrock/accountless | M5 complete for one tools-disabled text round-trip on exact Linux arm64 / Claude 2.1.237 / `us-east-1` / `anthropic.claude-opus-4-8` / temporary IMDSv2 SigV4, plus the already-qualified OpenCode M2 tuple | Each newly advertised capability, version, platform, model, region, credential source, or adapter tuple needs its own bounded gate |
 
 The provider fixtures establish bounded facts about pinned versions. They are valuable adapter
 evidence, not a separate proof/receipt program and not a substitute for the user outcome.
@@ -165,7 +168,7 @@ Cartesian-product marathon, and the viewer-parity lane may continue without reop
 | UI-1 — complete | Compact activity rollup and detail sheet | Exact transcript event counts and chronological details reduce routine noise without inventing task status |
 | OpenCode status — complete | Viewer-visible read-only MAIN running/idle status | Startup/live/reconnect/child/error behavior has focused ownership, and the separate real-TUI/two-browser running-to-idle acceptance passed |
 | M4 — complete | Maintained, honest tmux fallback | Exact accepted tuple is green without widening the structured critical path or claiming provider-native coexistence |
-| M5 — incremental | Advertised inference/account tuples | Qualifies claims as they ship; the final pass only closes the published matrix |
+| M5 — complete for current ledger | Advertised inference/account tuples | Exact current claims are qualified; later tuples extend the ledger incrementally |
 
 ### Execution contract
 
@@ -506,7 +509,7 @@ cross an active model turn or the native permission/question modal reached withi
 editor, partial drafts, slash commands, and configuration UI share one terminal stream and must not be
 manipulated while remote viewers may submit; they may otherwise merge or reorder.
 
-### M5 — inference and account matrix
+### M5 — complete for the current inference and account matrix
 
 For each exact advertised tuple—agent, provider, model, region where applicable, account mode, and
 capability set—run a credentialed smoke and document the support level. Model routing remains outside
@@ -517,10 +520,25 @@ Add each tuple's credentialed smoke when the adapter first advertises that tuple
 exact published ledger; it does not test every theoretical agent, model, region, and credential
 combination or invent a cross-adapter E2E without an advertised outcome.
 
-More actions—permissions, questions, interrupts, modes, and tool controls—graduate per adapter only
-after their native contract and failure states are captured. M4 already supports attachments as
-ordinary user input under its active-turn gate and shared-idle-TUI limitation; that does not enable any
-raw control.
+The current ledger closed on 2026-08-31. The existing OpenCode M2 acceptance already owns its exact
+Linux-arm64/1.17.5/Bedrock-Sonnet/`us-west-1` tuple. The added Claude private-relay gate used Linux
+arm64, exact Claude 2.1.237, accountless isolated state, `bedrock-mantle` in `us-east-1`,
+`anthropic.claude-opus-4-8`, and temporary IMDSv2 SigV4 credentials. One viewer-client prompt reached
+the real Claude worker, produced a real Bedrock answer, returned through the sealed viewer transcript,
+and left Claude alive until teardown. This gate exercises the same viewer protocol as the browser, but
+it is not a literal browser or official-client test. The tools-disabled child environment held no
+usable Anthropic auth variable, alternate API base, custom authorization header, or AWS credential
+variable; its config, secure-storage, and Anthropic-profile roots were isolated, inherited settings
+overrides were removed, fixed CCR-host token files and Linux managed settings were covered by
+fail-closed guards, and conforming SDK metadata discovery was disabled. This does not claim a network
+sandbox against raw IMDS access. A
+deterministic companion test makes any Anthropic upstream request fail while exercising Bedrock
+inference, synthesized control-plane traffic, and local RC registration.
+
+More actions—permissions, questions, interrupts, modes, attachments, and tool controls—graduate per
+adapter only after their native contract and failure states are captured. M4 already supports
+attachments as ordinary user input under its active-turn gate and shared-idle-TUI limitation; that
+does not enable raw control.
 
 ## 5. Shared safety invariants
 

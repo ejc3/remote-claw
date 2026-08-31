@@ -29,6 +29,9 @@ held a native permission modal, both browsers departed, local approval completed
 queued browser turn completed, and broker loss remained isolated. The idle editor and idle slash/config
 UI remain one shared keystream and must not be manipulated while remote viewers may submit. This
 path claims neither independent peer ordering nor provider-native/official-client coexistence.
+The private Claude facade's exact Linux-arm64/2.1.237/accountless Bedrock tuple also passed its
+maintained M5 tools-disabled viewer text round-trip; this does not make it an official-client
+coexistence path.
 
 ## 1. Topology
 
@@ -314,6 +317,10 @@ text instead publish only a seq-less pending admission before delivery; native h
 the canonical coordinate and user row. OpenCode waits for exact marker-plus-text correlation before
 acknowledging the downstream event; Codex waits for the exact completed native user item carrying the
 host's client ID and immutable text. A failed required publication prevents the native side effect.
+The private facade maps its already-authenticated viewer input to Claude 2.1.237's
+`client_platform:"web_claude_ai"` human ingress class. Without that discriminator Claude acknowledges
+the wire frame, demotes it to peer origin, and drops it at the cross-session kill switch; the label is a
+local protocol compatibility value, not evidence that Anthropic hosts the session.
 Permission resolution uses the private-facade ordering: publish `permission_resolved`, then deliver the
 worker response. Both pumps share the queue so a later native action cannot overtake an earlier frame
 whose publication fails.
@@ -564,9 +571,10 @@ and invalid-success parse details are discarded before errors reach normal relay
 publish and recovery-cursor bodies are shape-checked. The exact `410 + channel_storage_lost` pair
 remains the only typed permanent channel-loss response.
 
-These are product limits, not invitations to rebuild a second protocol stack. M1, pinned M2, M3a, and
-the bounded exact-tuple M3b coexistence/provider-transport-isolation gate are complete. Add protocol
-machinery only for a concrete later capability failure.
+These are product limits, not invitations to rebuild a second protocol stack. M1, pinned M2, M3a,
+the bounded exact-tuple M3b coexistence/provider-transport-isolation gate, and the exact M5
+accountless Bedrock tuple are complete. Add protocol machinery only for a concrete later capability
+failure.
 
 ## 13. Code and test map
 

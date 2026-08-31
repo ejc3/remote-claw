@@ -72,8 +72,10 @@ Claude native companion (--rc-driver=claude-native):
 
 Inference (mitm driver; the supported default is anthropic):
   --rc-inference <t> anthropic | bedrock (or set RC_INFERENCE; default anthropic = pass through).
-                     bedrock is an experimental/internal connector outside the primary coexistence
-                     path; it routes /v1/messages to Bedrock and synthesizes the rest.
+                     bedrock routes /v1/messages to Bedrock and synthesizes the rest. The maintained
+                     accountless text-smoke tuple (tools disabled) is Linux arm64 / Claude 2.1.237 /
+                     us-east-1 / anthropic.claude-opus-4-8 / temporary IMDSv2 SigV4; other tuples are
+                     unqualified.
   --rc-bedrock-region <r>  AWS region for Bedrock (bedrock only; default: AWS_REGION / AWS_DEFAULT_REGION,
                      else us-east-1).
   --rc-bedrock-model <m>   override the Bedrock model id (bedrock only; default: map claude's own model).

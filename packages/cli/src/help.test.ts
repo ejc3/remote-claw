@@ -113,7 +113,10 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toMatch(/do not manipulate them while\s+remote viewers may submit/);
     expect(RC_HELP).toContain("Pinned OpenCode driver (--rc-driver=opencode)");
     expect(RC_HELP).toMatch(/pinned supported text\/interrupt\/status tuple/);
-    expect(RC_HELP).toMatch(/outside the primary coexistence\s+path/);
+    expect(RC_HELP).toMatch(
+      /maintained\s+accountless text-smoke tuple \(tools disabled\) is Linux arm64 \/ Claude 2\.1\.237/,
+    );
+    expect(RC_HELP).toContain("anthropic.claude-opus-4-8 / temporary IMDSv2 SigV4");
   });
 
   it("documents the frozen attach-only OpenCode tuple and no-mutation default", () => {

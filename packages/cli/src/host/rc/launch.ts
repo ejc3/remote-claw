@@ -7,7 +7,7 @@
 // Anthropic control plane, so no request reaches Anthropic. A session that never enables RC sends
 // nothing to the broker (lazy registration). One RelayCore owns every RC session the child opens.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { lstatSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Identity } from "@remote-claw/clawsec";
@@ -33,6 +33,36 @@ import { RelayCore, type Session } from "./session.js";
 // tracked and awaited separately: JS timers are minimum delays, so no wall-clock cutoff may overtake its
 // remaining retries after an OS suspend or event-loop stall.
 const RELAY_TEARDOWN_WAIT_MS = 2_000;
+const ACCOUNTLESS_AMBIENT_AUTH_SOURCES = [
+  "/home/claude/.claude/remote/.oauth_token",
+  "/home/claude/.claude/remote/.api_key",
+  "/home/claude/.claude/remote/.session_ingress_token",
+  "/etc/claude-code/managed-settings.json",
+  "/etc/claude-code/managed-settings.d",
+] as const;
+
+/** Exact Claude 2.1.237 probes fixed CCR-host credentials outside its normal config and keeps Linux
+ * managed settings in safe mode; either source can restore real auth after the spawn-env scrub.
+ * Accountless mode cannot safely mask administrator policy, so refuse the launch if any source exists
+ * (including a symlink) or its absence cannot be established. `paths` is injectable only so the
+ * boundary can be tested without touching the machine-wide locations. */
+export function assertNoAccountlessAmbientAuthSources(
+  paths: readonly string[] = ACCOUNTLESS_AMBIENT_AUTH_SOURCES,
+): void {
+  for (const path of paths) {
+    try {
+      lstatSync(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new Error(
+        `runRcLaunch: cannot verify that Claude's accountless ambient auth source is absent (${path}): ${String(error)}`,
+      );
+    }
+    throw new Error(
+      `runRcLaunch: accountless mode refuses the ambient Claude auth/settings source at ${path}`,
+    );
+  }
+}
 /** How the child claude is launched with the proxy env (injectable for tests). */
 export type SpawnClaudeEnv = (
   bin: string,
@@ -113,6 +143,7 @@ async function runRcLaunchWithExecutable(
       "runRcLaunch: accountless requires inference:'bedrock' (a fabricated login can't reach real Anthropic)",
     );
   }
+  if (opts.accountless) assertNoAccountlessAmbientAuthSources();
   const provider = securityProvider("sealed", opts.identity);
   const certs = ensureCerts(opts.certsDir);
   const core = new RelayCore();
@@ -241,32 +272,46 @@ async function runRcLaunchWithExecutable(
     // CLAUDE_CODE_USE_BEDROCK would put it in Bedrock-transport mode, which DISABLES RC. We never set it.
     // The MITM validates nothing and serves ALL inference from Bedrock, so the child needs no real
     // Anthropic credential — and in zero-Anthropic mode it must not HOLD one: a hostile MCP that dodged
-    // the proxy could otherwise make a direct, authenticated api.anthropic.com call. So unconditionally
-    // replace any real key with a pretend one and drop the bearer token form. (A login in ~/.claude is
-    // moot — the MITM synthesizes the OAuth/refresh endpoints, so it can't reach the real upstream.)
+    // the proxy could otherwise make a direct, authenticated api.anthropic.com call. Claude 2.1.237
+    // accepts more than ANTHROPIC_AUTH_TOKEN / CLAUDE_CODE_OAUTH_TOKEN: refresh/session/identity
+    // tokens, auth file descriptors/helpers, alternate provider keys, and API-base overrides are all
+    // live routes. Drop the whole Anthropic namespace plus auth/base/provider-selection-shaped Claude
+    // variables, then install only our rejected pretend key. Benign Claude tuning variables survive.
+    for (const k of Object.keys(env)) {
+      const claudeAuthRoute =
+        (k.startsWith("CLAUDE_") || k.startsWith("_CLAUDE_")) &&
+        (/(?:^|_)(?:AUTH|AUTHENTICATE|OAUTH|TOKEN|KEY|CREDENTIALS?|CREDS)(?:_|$)/.test(k) ||
+          /BASE_URL|AUTHORIZE_URL|SOCKET_TOKENS_PATH|USE_(?:BEDROCK|VERTEX|FOUNDRY|MANTLE|ANTHROPIC)/.test(
+            k,
+          ));
+      if (
+        k.startsWith("ANTHROPIC_") ||
+        claudeAuthRoute ||
+        k.startsWith("CLAUDE_BG_") ||
+        k === "CCR_OAUTH_TOKEN_FILE" ||
+        k === "CLAUDE_CODE_MANAGED_SETTINGS_PATH" ||
+        k === "CLAUDE_CODE_MOCK_REMOTE_SETTINGS" ||
+        k === "CLAUDE_CODE_REMOTE_SETTINGS_PATH" ||
+        k === "USE_LOCAL_OAUTH" ||
+        k === "USE_STAGING_OAUTH"
+      ) {
+        delete env[k];
+      }
+    }
     // Same constant the accountless seed lists under customApiKeyResponses.rejected — keep them in sync
     // (a mismatch would leave claude in API-key mode, disabling RC), so import it rather than re-type it.
     env.ANTHROPIC_API_KEY = PRETEND_API_KEY;
-    delete env.ANTHROPIC_AUTH_TOKEN;
-    // Drop ANTHROPIC_BASE_URL so the child resolves to api.anthropic.com (the host OUR MITM intercepts).
-    // Left set (from the launching env), it would point claude's first-party calls at some OTHER host —
-    // which the MITM doesn't intercept, so they'd blind-tunnel straight past Bedrock AND past the
-    // zero-Anthropic guarantee. The MITM is the only endpoint the child should ever reach.
-    delete env.ANTHROPIC_BASE_URL;
-    // Scrub EVERY AWS_* var so the child can't reach ANY host credential source — not just static keys
-    // (AWS_ACCESS_KEY_ID/…), but the container + web-identity channels the AWS SDK chain also honors
-    // (AWS_CONTAINER_CREDENTIALS_*, AWS_WEB_IDENTITY_TOKEN_FILE, AWS_ROLE_ARN, AWS_PROFILE, …). On
-    // ECS/EKS those ARE the host's live role-creds path, so deleting only static keys would be a no-op
-    // and let a hostile MCP mint the host's role. The wrapper signs Bedrock itself; the child needs none.
+    // Scrub EVERY AWS_* var so the child does not inherit a standard host credential source — not just
+    // static keys (AWS_ACCESS_KEY_ID/…), but the container + web-identity channels the AWS SDK chain
+    // also honors (AWS_CONTAINER_CREDENTIALS_*, AWS_WEB_IDENTITY_TOKEN_FILE, AWS_ROLE_ARN,
+    // AWS_PROFILE, …). The wrapper signs Bedrock itself; the child needs none.
     for (const k of Object.keys(env)) {
       if (k.startsWith("AWS_")) delete env[k];
     }
-    // The scrub above also DELETED any inherited AWS_EC2_METADATA_DISABLED, which would re-open IMDS to
-    // the child. Set it back so a child AWS SDK can't fetch the host's EC2 instance role from
-    // 169.254.169.254 (the static-key/container scrub alone wouldn't stop the IMDS channel).
+    // The scrub above also deleted any inherited AWS_EC2_METADATA_DISABLED. Set it back so conforming
+    // child AWS SDKs do not discover the host's EC2 instance role. This environment flag is
+    // defense-in-depth, not a network sandbox: same-network code can still address IMDS directly.
     env.AWS_EC2_METADATA_DISABLED = "true";
-    delete env.CLAUDE_CODE_USE_BEDROCK;
-    delete env.CLAUDE_CODE_USE_VERTEX;
   }
 
   // Accountless temp dir, declared here so the finally always cleans it. mkdir + seed happen INSIDE the
@@ -281,6 +326,11 @@ async function runRcLaunchWithExecutable(
       accountlessDir = mkdtempSync(join(tmpdir(), "rc-accountless-"));
       seedAccountlessConfigDir(accountlessDir, Date.now(), cwd);
       env.CLAUDE_CONFIG_DIR = accountlessDir;
+      // Exact 2.1.237 has two credential resolvers outside CLAUDE_CONFIG_DIR: secure storage can honor
+      // its own directory, and Anthropic profiles otherwise fall back through XDG_CONFIG_HOME/HOME.
+      // Bind both to the same owned synthetic root so neither can recover an ambient real account.
+      env.CLAUDE_SECURESTORAGE_CONFIG_DIR = accountlessDir;
+      env.ANTHROPIC_CONFIG_DIR = accountlessDir;
     }
     return await opts.spawnClaude(claudeBin, opts.claudeArgs, env);
   } finally {

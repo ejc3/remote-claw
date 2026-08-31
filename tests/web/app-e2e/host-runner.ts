@@ -84,6 +84,8 @@ const askqMode = process.env.RC_E2E_ASKQ; // "1" (single-select) | "multi" (mult
 const withAskq = askqMode === "1" || askqMode === "multi";
 const askqMulti = askqMode === "multi";
 const smoke = process.env.RC_E2E_PROFILE === "smoke";
+const capsPreset = process.env.RC_E2E_CAPS;
+const harnessPreset = process.env.RC_E2E_HARNESS;
 
 // A fresh random identity per host so each test gets isolated bus/session channels.
 const secret = new Uint8Array(32);
@@ -94,7 +96,16 @@ const rand = new Uint8Array(8);
 crypto.getRandomValues(rand);
 const sessionId = `e2e-${Array.from(rand, (b) => b.toString(16).padStart(2, "0")).join("")}`;
 
-const session = new Session(sessionId, "rc box", {});
+// Production tmux publishes its freshly observed runtime mode on Session before bridge.start(). Mirror
+// that invariant here: capabilities describe the launch surface, while current presence remains the
+// authority and must stay absent for the explicit unknown/rotation cases.
+const sessionConfig =
+  harnessPreset === "tmux" && capsPreset === "tmux"
+    ? { permissionMode: "default" }
+    : harnessPreset === "tmux" && capsPreset === "tmux-bypassed"
+      ? { permissionMode: "bypassPermissions" }
+      : {};
+const session = new Session(sessionId, "rc box", sessionConfig);
 const clientOpts: ConstructorParameters<typeof BrokerClient>[0] = {
   baseUrl: base,
   provider: securityProvider("sealed", id),
@@ -102,8 +113,8 @@ const clientOpts: ConstructorParameters<typeof BrokerClient>[0] = {
 if (backend) clientOpts.backend = backend;
 if (bypass) clientOpts.protectionBypass = bypass;
 const client = new BrokerClient(clientOpts);
-const caps = presetCaps(process.env.RC_E2E_CAPS); // unset ⇒ exact stable Claude tuple
-const harness = presetHarness(process.env.RC_E2E_HARNESS); // agent+mode badge (#164); unset ⇒ MITM
+const caps = presetCaps(capsPreset); // unset ⇒ exact stable Claude tuple
+const harness = presetHarness(harnessPreset); // agent+mode badge (#164); unset ⇒ MITM
 const relay = new HostRcRelay({
   client,
   identityId: id.identityId,
