@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { deriveIdentity } from "@remote-claw/clawsec";
 import { classifyArgs } from "./args.js";
 import { BrokerClient } from "./broker/client.js";
+import { normalizeBrokerOrigin, protectionBypassForBrokerOrigin } from "./broker/origin.js";
 import { RC_HELP } from "./help.js";
 import { runClaudeNativeDriver } from "./host/rc/anthropic/driver.js";
 import { parseStripKeys } from "./host/rc/bedrock/translate.js";
@@ -228,6 +229,7 @@ function resolveBrokerBackend(rc: Record<string, unknown>): string | undefined {
 
 interface DriverContextOptions {
   brokerUrl: string;
+  protectionBypass?: string;
   rc: Record<string, unknown>;
   harnessArgs: string[];
   tracerTarget: string;
@@ -244,12 +246,13 @@ async function createDriverContext(options: DriverContextOptions): Promise<Drive
   return withClearedRootSecret(secretPath, async (secret) => {
     const identity = await deriveIdentity(secret);
     const provider = securityProvider("sealed", identity);
-    const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
     const newClient = () =>
       new BrokerClient({
         baseUrl: options.brokerUrl,
         provider,
-        ...(bypass ? { protectionBypass: bypass } : {}),
+        ...(options.protectionBypass !== undefined
+          ? { protectionBypass: options.protectionBypass }
+          : {}),
         ...(backend !== undefined ? { backend } : {}),
       });
     const cwd = process.cwd();
@@ -269,6 +272,15 @@ async function createDriverContext(options: DriverContextOptions): Promise<Drive
   });
 }
 
+function plainClaudeEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env = { ...source };
+  // Plain passthrough is still an untrusted child boundary. These values belong to the wrapper host,
+  // just as they do on every RC driver path; Claude and its MCPs never need either one.
+  delete env.REMOTE_CLAW_SECRET_FILE;
+  delete env.VERCEL_AUTOMATION_BYPASS_SECRET;
+  return env;
+}
+
 const realSpawn: SpawnFn = (bin, args) =>
   new Promise((resolve) => {
     // Report why the spawn failed (e.g. ENOENT) before resolving 127 — a bare exit code
@@ -281,7 +293,7 @@ const realSpawn: SpawnFn = (bin, args) =>
     try {
       // No shell: args are passed as an argv array, so there is no shell-injection surface
       // even though they're forwarded verbatim from the user.
-      const child = nodeSpawn(bin, args, { stdio: "inherit" });
+      const child = nodeSpawn(bin, args, { stdio: "inherit", env: plainClaudeEnv() });
       child.on("error", fail); // command not found / not executable
       child.on("close", (code, signal) => resolve(signal ? signalExitCode(signal) : (code ?? 0)));
     } catch (err) {
@@ -427,6 +439,15 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     return 2;
   }
   if (rcApp !== "" && (!helpWanted || driver === "opencode" || driver === "codex")) {
+    let brokerUrl: string;
+    let protectionBypass: string | undefined;
+    try {
+      brokerUrl = normalizeBrokerOrigin(rcApp);
+      protectionBypass = protectionBypassForBrokerOrigin(brokerUrl, process.env);
+    } catch (e) {
+      warn(`remote-claw: ${(e as Error)?.message ?? e}\n`);
+      return 2;
+    }
     // Which capture/inject driver runs the harness: --rc-driver / RC_DRIVER, default "mitm" (the real
     // claude behind our MITM). tmux runs a PLAIN claude in a tmux pane and bridges via the transcript
     // (provider-agnostic, Bedrock-capable — no MITM); opencode peer-attaches to an opencode server. All
@@ -444,19 +465,27 @@ export async function runWrapper(argv: string[], opts: RunOptions = {}): Promise
     // becomes visible. Pure + allowlist-gated (an unknown driver gets only its own error below).
     for (const line of misappliedDriverFlagWarnings(driver, rc)) warn(line);
     if (driver === "mitm") {
-      return runRcLaunchPath(rcApp, rc, claudeArgs, bin, opts, warn);
+      return runRcLaunchPath(brokerUrl, protectionBypass, rc, claudeArgs, bin, opts, warn);
     }
     if (driver === "claude-native") {
-      return runClaudeNativeDriverPath(rcApp, rc, claudeArgs, bin, opts, warn);
+      return runClaudeNativeDriverPath(
+        brokerUrl,
+        protectionBypass,
+        rc,
+        claudeArgs,
+        bin,
+        opts,
+        warn,
+      );
     }
     if (driver === "opencode") {
-      return runOpencodeDriverPath(rcApp, rc, claudeArgs, opts, warn);
+      return runOpencodeDriverPath(brokerUrl, protectionBypass, rc, claudeArgs, opts, warn);
     }
     if (driver === "codex") {
-      return runCodexDriverPath(rcApp, rc, claudeArgs, opts, warn);
+      return runCodexDriverPath(brokerUrl, protectionBypass, rc, claudeArgs, opts, warn);
     }
     if (driver === "tmux") {
-      return runTmuxDriverPath(rcApp, rc, claudeArgs, bin, opts, warn);
+      return runTmuxDriverPath(brokerUrl, protectionBypass, rc, claudeArgs, bin, opts, warn);
     }
     warn(
       `remote-claw: unknown --rc-driver=${driver} (expected mitm | claude-native | tmux | opencode | codex)\n`,
@@ -501,6 +530,7 @@ async function runRcTracePath(
 /** Resolve the identity (auto-created on first run) and launch claude behind the MITM (§3.1/§14). */
 async function runRcLaunchPath(
   brokerUrl: string,
+  protectionBypass: string | undefined,
   rc: Record<string, unknown>,
   claudeArgs: string[],
   bin: string,
@@ -568,6 +598,7 @@ async function runRcLaunchPath(
       // The CLI boundary checked the version already. Direct runRcLaunch callers are checked there.
       claudeCompatibilityCheck: async () => {},
       spawnClaude: opts.spawnRcEnv ?? realSpawnEnv,
+      ...(protectionBypass !== undefined ? { protectionBypass } : {}),
       ...(backend !== undefined ? { backend } : {}),
       inference,
       ...(bedrock !== undefined ? { bedrock } : {}),
@@ -586,6 +617,7 @@ async function runRcLaunchPath(
  */
 async function runClaudeNativeDriverPath(
   brokerUrl: string,
+  protectionBypass: string | undefined,
   rc: Record<string, unknown>,
   claudeArgs: string[],
   bin: string,
@@ -637,6 +669,7 @@ async function runClaudeNativeDriverPath(
   try {
     const ctx = await createDriverContext({
       brokerUrl,
+      ...(protectionBypass !== undefined ? { protectionBypass } : {}),
       rc,
       harnessArgs: claudeArgs,
       harnessBin: bin,
@@ -671,6 +704,7 @@ async function runClaudeNativeDriverPath(
  */
 async function runOpencodeDriverPath(
   brokerUrl: string,
+  protectionBypass: string | undefined,
   rc: Record<string, unknown>,
   claudeArgs: string[],
   opts: RunOptions,
@@ -735,6 +769,7 @@ async function runOpencodeDriverPath(
   try {
     const ctx = await createDriverContext({
       brokerUrl,
+      ...(protectionBypass !== undefined ? { protectionBypass } : {}),
       rc,
       harnessArgs: claudeArgs,
       tracerTarget: "rc.opencode",
@@ -771,6 +806,7 @@ async function runOpencodeDriverPath(
  */
 async function runCodexDriverPath(
   brokerUrl: string,
+  protectionBypass: string | undefined,
   rc: Record<string, unknown>,
   claudeArgs: string[],
   opts: RunOptions,
@@ -814,6 +850,7 @@ async function runCodexDriverPath(
   try {
     const ctx = await createDriverContext({
       brokerUrl,
+      ...(protectionBypass !== undefined ? { protectionBypass } : {}),
       rc,
       harnessArgs: [],
       tracerTarget: "rc.codex",
@@ -848,6 +885,7 @@ async function runCodexDriverPath(
  */
 async function runTmuxDriverPath(
   brokerUrl: string,
+  protectionBypass: string | undefined,
   rc: Record<string, unknown>,
   claudeArgs: string[],
   bin: string,
@@ -857,6 +895,7 @@ async function runTmuxDriverPath(
   try {
     const ctx = await createDriverContext({
       brokerUrl,
+      ...(protectionBypass !== undefined ? { protectionBypass } : {}),
       rc,
       harnessArgs: claudeArgs,
       harnessBin: bin,

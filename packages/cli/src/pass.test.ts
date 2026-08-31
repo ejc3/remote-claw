@@ -62,7 +62,11 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
     expect(out.text()).toBe(`${pass}\n`); // ONLY the pass on stdout
     expect(e.text()).toMatch(/viewer pass/);
     expect(e.text()).toContain(`identity_id: ${id}`);
-    expect(e.text()).toMatch(/READ and STEER/);
+    expect(e.text()).toMatch(/indefinite, machine-wide bearer credential/);
+    expect(e.text()).toMatch(/READ,\n {2}CONTROL, and FORGE records/);
+    expect(e.text()).toMatch(/equally trusted/);
+    expect(e.text()).toMatch(/individual revocation is not available/);
+    expect(e.text()).toMatch(/copied passes still work on retained old routes/);
     // the pass derives the SAME identity (self-verifies against the broker like the secret)
     expect(toHex((await parsePass(pass)).identityId)).toBe(id);
     assertNoSecretLeak(out.text() + e.text(), { token, secret });
@@ -129,6 +133,98 @@ describe("runPass — issue a viewer pass (§4.2a)", () => {
     expect(out.text().trim()).toMatch(PASS_RE); // stdout is STILL exactly the pass (pipe-safe)
     expect(e.text()).toMatch(/[▀▄█]/u);
     expect(e.text()).toMatch(/one-time pairing link/);
+  });
+
+  it("sends an ambient deployment bypass only to the exact RC_APP pin", async () => {
+    await seed();
+    const out = capture();
+    const calls: RequestInit[] = [];
+    const fetchFn = (async (_input: string | URL | Request, init?: RequestInit) => {
+      calls.push(init ?? {});
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const code = await runPass(
+      rc({ "rc-json": true, "rc-qr": true, "rc-app": "https://app.example.com/" }),
+      [],
+      {
+        stdout: out.write,
+        stderr: () => {},
+        fetchFn,
+        env: {
+          env: {
+            NEXT_PUBLIC_RC_HANDOFF_ENABLED: "1",
+            RC_APP: "https://APP.example.com:443",
+            VERCEL_AUTOMATION_BYPASS_SECRET: "scoped-bypass",
+          },
+          homedir: () => dir,
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(new Headers(calls[0]?.headers).get("x-vercel-protection-bypass")).toBe("scoped-bypass");
+    expect(calls[0]?.redirect).toBe("error");
+  });
+
+  it("fails closed before upload when an ambient bypass has no matching RC_APP pin", async () => {
+    await seed();
+    const out = capture();
+    const e = capture();
+    let calls = 0;
+    const fetchFn = (async () => {
+      calls += 1;
+      return Response.json({ ok: true });
+    }) as unknown as typeof fetch;
+    const code = await runPass(
+      rc({ "rc-json": true, "rc-qr": true, "rc-app": "https://untrusted.invalid" }),
+      [],
+      {
+        stdout: out.write,
+        stderr: e.write,
+        fetchFn,
+        env: {
+          env: {
+            NEXT_PUBLIC_RC_HANDOFF_ENABLED: "1",
+            RC_APP: "https://app.example.com",
+            VERCEL_AUTOMATION_BYPASS_SECRET: "never-send",
+          },
+          homedir: () => dir,
+        },
+      },
+    );
+    expect(code).toBe(0); // the manual pass remains available
+    expect(calls).toBe(0);
+    expect(JSON.parse(out.text()).qr).toBeUndefined();
+    expect(e.text()).toMatch(/does not match.*not rendering a QR/);
+    expect(e.text()).not.toContain("untrusted.invalid");
+    expect(e.text()).not.toContain("never-send");
+  });
+
+  it("omits an ambient bypass for loopback handoff", async () => {
+    await seed();
+    let headers = new Headers();
+    const fetchFn = (async (_input: string | URL | Request, init?: RequestInit) => {
+      headers = new Headers(init?.headers);
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const code = await runPass(
+      rc({ "rc-json": true, "rc-qr": true, "rc-app": "http://127.0.0.1:3100" }),
+      [],
+      {
+        stdout: () => {},
+        stderr: () => {},
+        fetchFn,
+        env: {
+          env: {
+            NEXT_PUBLIC_RC_HANDOFF_ENABLED: "1",
+            VERCEL_AUTOMATION_BYPASS_SECRET: "never-send",
+          },
+          homedir: () => dir,
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(headers.has("x-vercel-protection-bypass")).toBe(false);
   });
 
   it("--rc-qr --rc-app FAILS CLOSED on upload error — no QR, no forever-pass deep link", async () => {

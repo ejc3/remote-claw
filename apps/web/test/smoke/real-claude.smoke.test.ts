@@ -62,7 +62,7 @@ describe.skipIf(!RUN)("real Claude replacement-mode smoke", () => {
 
     const viewer = await Viewer.fromPass(
       await formatPass(identity),
-      "http://broker",
+      "https://broker",
       brokerFetch,
       "sqlite",
     );
@@ -86,7 +86,7 @@ describe.skipIf(!RUN)("real Claude replacement-mode smoke", () => {
     const launch = runRcLaunch({
       claudeArgs: ["--safe-mode", "--tools", "", "--remote-control", "remote-claw-smoke"],
       identity,
-      brokerUrl: "http://broker",
+      brokerUrl: "https://broker",
       backend: "sqlite",
       certsDir: join(scratch, "certs"),
       cwd,

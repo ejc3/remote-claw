@@ -75,7 +75,7 @@ describe("BrokerClient transport", () => {
     id = await deriveIdentity(new Uint8Array(32).fill(7));
     broker = new MockBroker();
     client = new BrokerClient({
-      baseUrl: "http://broker.test/",
+      baseUrl: "https://broker.test/",
       provider: securityProvider("sealed", id),
       fetchFn: broker.fetch,
     });
@@ -101,7 +101,7 @@ describe("BrokerClient transport", () => {
 
   it("maps only the exact content-free channel-loss disposition to the permanent-loss type", async () => {
     const lost = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: (() =>
         Promise.resolve(
@@ -125,7 +125,7 @@ describe("BrokerClient transport", () => {
 
     const canary = "broker-error-credential-canary";
     const ordinaryGone = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: (() =>
         Promise.resolve(Response.json({ error: canary }, { status: 410 }))) as typeof fetch,
@@ -182,7 +182,7 @@ describe("BrokerClient transport", () => {
       });
     }) as typeof fetch;
     const abortable = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: abortingFetch,
     });
@@ -209,7 +209,7 @@ describe("BrokerClient transport", () => {
           });
         }) as typeof fetch;
         const bounded = new BrokerClient({
-          baseUrl: "http://broker.test",
+          baseUrl: "https://broker.test",
           provider: securityProvider("sealed", id),
           fetchFn: hostileFetch,
           cursorTimeoutMs: 10,
@@ -239,7 +239,7 @@ describe("BrokerClient transport", () => {
       return new Promise<Response>(() => {});
     }) as typeof fetch;
     const bounded = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: hostileFetch,
       streamConnectTimeoutMs: 10,
@@ -256,7 +256,7 @@ describe("BrokerClient transport", () => {
 
   it("rejects a bodyless successful stream instead of reporting a clean absent channel", async () => {
     const bodyless = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: (() =>
         Promise.resolve(
@@ -277,7 +277,7 @@ describe("BrokerClient transport", () => {
   it("does not retain malformed broker frame data in its error", async () => {
     const canary = "credential-canary";
     const malformed = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: (() =>
         Promise.resolve(
@@ -304,7 +304,7 @@ describe("BrokerClient transport", () => {
   ] as const)("does not retain invalid successful %s response data in its error", async (route) => {
     const canary = `successful-${route}-credential-canary`;
     const malformed = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: (() =>
         Promise.resolve(
@@ -333,7 +333,7 @@ describe("BrokerClient transport", () => {
     ["frame-count", { frameCount: -1, durable: true }],
   ] as const)("fails closed on an invalid successful %s cursor shape", async (route, body) => {
     const malformed = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: (() => Promise.resolve(Response.json(body))) as typeof fetch,
     });
@@ -412,6 +412,44 @@ describe("BrokerClient transport", () => {
     await expect(take(client.streamFrames({}), 1)).resolves.toHaveLength(1);
   });
 
+  it("enforces the canonical TLS-or-loopback origin at the low-level client boundary", () => {
+    const provider = securityProvider("sealed", id);
+    expect(() => new BrokerClient({ baseUrl: "", provider, fetchFn: broker.fetch })).not.toThrow();
+    expect(
+      () =>
+        new BrokerClient({
+          baseUrl: "",
+          provider,
+          fetchFn: broker.fetch,
+          protectionBypass: "never-send",
+        }),
+    ).toThrow(/requires a remote HTTPS broker origin/);
+    for (const baseUrl of [
+      "http://broker.test",
+      "https://broker.test/api",
+      "https://user@broker.test",
+    ]) {
+      expect(() => new BrokerClient({ baseUrl, provider, fetchFn: broker.fetch })).toThrow();
+    }
+    for (const baseUrl of [
+      "http://127.0.0.1:3100",
+      "https://localhost:3100",
+      "https://localhost.:3100",
+      "https://foo.localhost:3100",
+      "https://127.0.1.2:3100",
+    ]) {
+      expect(
+        () =>
+          new BrokerClient({
+            baseUrl,
+            provider,
+            fetchFn: broker.fetch,
+            protectionBypass: "never-send",
+          }),
+      ).toThrow(/requires a remote HTTPS broker origin/);
+    }
+  });
+
   it("sends x-vercel-protection-bypass on every call when configured, and omits it otherwise", async () => {
     const capture = (sink: Array<Record<string, string>>): typeof fetch =>
       ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
@@ -421,7 +459,7 @@ describe("BrokerClient transport", () => {
 
     const withSeen: Array<Record<string, string>> = [];
     const withBypass = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: capture(withSeen),
       protectionBypass: "byp-secret-123",
@@ -433,7 +471,7 @@ describe("BrokerClient transport", () => {
 
     const noSeen: Array<Record<string, string>> = [];
     const noBypass = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: capture(noSeen),
     });
@@ -451,7 +489,7 @@ describe("BrokerClient transport", () => {
       return broker.fetch(input, init);
     }) as typeof fetch;
     const guarded = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: capture,
       protectionBypass: "never-follow-me",
@@ -481,7 +519,7 @@ describe("BrokerClient transport", () => {
       return broker.fetch(input, init);
     }) as typeof fetch;
     const sqliteClient = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: capture,
       backend: "sqlite",
@@ -526,7 +564,7 @@ describe("BrokerClient transport", () => {
     broker.requireAuth(id.authToken); // only `id`'s bearer is accepted
     const strangerId = await deriveIdentity(new Uint8Array(32).fill(9));
     const stranger = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", strangerId),
       fetchFn: broker.fetch,
     });
@@ -538,7 +576,7 @@ describe("BrokerClient transport", () => {
   it("discovers durable=true from the server, including a durable default with no backend header", async () => {
     const mk = (backend?: string): BrokerClient =>
       new BrokerClient({
-        baseUrl: "http://broker.test",
+        baseUrl: "https://broker.test",
         provider: securityProvider("sealed", id),
         fetchFn: broker.fetch,
         ...(backend !== undefined ? { backend } : {}),

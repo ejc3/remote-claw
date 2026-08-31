@@ -1212,7 +1212,7 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
       return Promise.reject(new Error(`unexpected broker route ${pathname}`));
     }) as typeof fetch;
     const client = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", identity),
       fetchFn,
     });
@@ -2897,7 +2897,7 @@ describe("HostRcRelay bounded transport liveness", () => {
       return new Promise<Response>(() => {}); // deliberately ignores AbortSignal forever
     }) as typeof fetch;
     const client = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", identity),
       fetchFn: hostileFetch,
       cursorTimeoutMs: 10,
@@ -2941,7 +2941,7 @@ describe("HostRcRelay bounded transport liveness", () => {
       return Promise.reject(new Error(`unexpected broker route ${pathname}`));
     }) as typeof fetch;
     const client = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", identity),
       fetchFn,
       streamConnectTimeoutMs: 10,
@@ -3013,7 +3013,7 @@ describe("HostRcRelay bounded transport liveness", () => {
       return Promise.reject(new Error(`unexpected broker route ${pathname}`));
     }) as typeof fetch;
     const client = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", identity),
       fetchFn,
       streamIdleTimeoutMs: 10,
@@ -3066,7 +3066,7 @@ describe("HostRcRelay bounded transport liveness", () => {
       return Promise.reject(new Error(`unexpected broker route ${pathname}`));
     }) as typeof fetch;
     const client = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", identity),
       fetchFn,
     });
@@ -3126,7 +3126,7 @@ describe("HostRcRelay bounded transport liveness", () => {
       return Promise.reject(new Error(`unexpected broker route ${pathname}`));
     }) as typeof fetch;
     const client = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", identity),
       fetchFn,
     });
@@ -3175,7 +3175,7 @@ describe("HostRcRelay bounded transport liveness", () => {
       return Promise.reject(new Error(`unexpected broker route ${pathname}`));
     }) as typeof fetch;
     const client = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", identity),
       fetchFn,
     });
@@ -3237,7 +3237,7 @@ describe("HostRcRelay bounded transport liveness", () => {
       return Promise.reject(new Error(`unexpected broker route ${pathname}`));
     }) as typeof fetch;
     const client = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", identity),
       fetchFn,
     });

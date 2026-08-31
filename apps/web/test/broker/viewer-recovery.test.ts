@@ -13,7 +13,7 @@ afterAll(async () => {
 
 function fakeHost(id: Identity): BrokerClient {
   return new BrokerClient({
-    baseUrl: "http://broker",
+    baseUrl: "https://broker",
     provider: securityProvider("sealed", id),
     fetchFn: brokerFetch,
   });
@@ -115,7 +115,7 @@ describe("Viewer transcript restart and gap recovery", () => {
   it("resets a live transcript across a non-durable host seq reset after a new incarnation announce", async () => {
     const id = await uniqueIdentity();
     const host = fakeHost(id);
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const sid = "viewer-restart-orderer";
     const ac = new AbortController();
     const seenIncarnations: string[] = [];
@@ -167,7 +167,7 @@ describe("Viewer transcript restart and gap recovery", () => {
     const host = fakeHost(id);
     const viewer = await Viewer.fromPass(
       await formatPass(id),
-      "http://broker",
+      "https://broker",
       durableSeqFailsOnceFetch(),
     );
     const sid = "viewer-durable-restart-flaky-seq";
@@ -206,7 +206,7 @@ describe("Viewer transcript restart and gap recovery", () => {
   it("surfaces a permanent low-seq gap and the page helper marks it recoverable after the bounded stall", async () => {
     const id = await uniqueIdentity();
     const host = fakeHost(id);
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const sid = "viewer-gap-surfacing";
     const ac = new AbortController();
 
@@ -246,11 +246,11 @@ describe("Viewer transcript restart and gap recovery", () => {
     const sid = "viewer-partial-chunk-gap";
     const msgId = "partial-big";
     const host = new BrokerClient({
-      baseUrl: "http://broker",
+      baseUrl: "https://broker",
       provider: securityProvider("sealed", id),
       fetchFn: failChunkFetch(msgId, 1),
     });
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const ac = new AbortController();
 
     try {
@@ -296,7 +296,7 @@ describe("Viewer transcript restart and gap recovery", () => {
       if (!reachable && url.pathname === "/api/stream") throw new TypeError("Failed to fetch");
       return brokerFetch(input, init);
     }) as typeof fetch;
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", fetchFn);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", fetchFn);
     const sid = "bus-outage-recover";
     const ac = new AbortController();
     const events: unknown[] = []; // each onError arg in order: Error on a failed round, null on recovery
@@ -345,7 +345,7 @@ describe("Viewer transcript restart and gap recovery", () => {
       }
       return brokerFetch(input, init);
     }) as typeof fetch;
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", fetchFn);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", fetchFn);
     const ac = new AbortController();
     const events: unknown[] = [];
 
@@ -367,7 +367,7 @@ describe("Viewer transcript restart and gap recovery", () => {
   it("delivers seq-null permission_resolved while a content gap is open", async () => {
     const id = await uniqueIdentity();
     const host = fakeHost(id);
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const sid = "viewer-permission-resolved-gap";
     const ac = new AbortController();
 

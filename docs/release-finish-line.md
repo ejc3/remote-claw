@@ -84,6 +84,11 @@ These decisions close scope without weakening the security boundary:
   external per-IP rate limit is verified. Before an enabled handoff claims its destructive one-time link,
   the pairing UI must state that “one-time” applies only to delivery and that the recovered pass grants
   the same indefinite machine-wide authority.
+
+  The supported manual Connect gate and normal `--rc-pass` output now state the indefinite
+  machine-wide read/control/record-forging authority, mutual trust, lack of individual revocation, and
+  retained-old-route consequence. Machine-readable and quiet pass output remain stable. Handoff is
+  still default-off and retains its separate pre-claim disclosure gate.
 - **Text before controls:** each structured adapter graduates observation and non-empty, non-slash text
   before permissions, questions, modes, attachments, or broad tool control. Unsupported controls stay
   disabled rather than simulated.

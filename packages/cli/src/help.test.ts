@@ -60,6 +60,7 @@ describe("RC_HELP banner", () => {
     for (const e of [
       "RC_CLAUDE_BIN",
       "RC_BEDROCK_STRIP_KEYS",
+      "VERCEL_AUTOMATION_BYPASS_SECRET",
       "OPENCODE_SERVER_USERNAME",
       "OPENCODE_SERVER_PASSWORD",
       "RC_OC_MIRROR_PERMISSIONS",
@@ -75,6 +76,14 @@ describe("RC_HELP banner", () => {
   it("points at claude's --remote-control and explains the passthrough", () => {
     expect(RC_HELP).toContain("--remote-control");
     expect(RC_HELP).toMatch(/forwarded verbatim/);
+  });
+
+  it("states the pass authority and deployment-bypass origin pin", () => {
+    expect(RC_HELP).toMatch(/indefinite, machine-wide bearer credential/);
+    expect(RC_HELP).toMatch(/forge trusted records/);
+    expect(RC_HELP).toMatch(/individual revocation is unavailable/);
+    expect(RC_HELP).toMatch(/RC_APP must independently pin the exact same HTTPS origin/);
+    expect(RC_HELP).toMatch(/bypass is never sent to loopback/);
   });
 
   it("states the stable Claude durable-backend precondition", () => {

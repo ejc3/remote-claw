@@ -162,7 +162,9 @@ per-IP WAF rule described below has been verified and the pre-claim authority di
   environment, `runPass` mints OTK, seals the **bare pass** (no separate
   fingerprint field — the pass *determines* the host's `identity_id`, recomputed from its `authToken` on
   parse, which **is** the binding value; see the web client below), `PUT`s `{id, proof_hash, ct}`, and the QR
-  carries `<origin>/#otk1_<OTK>`.
+  carries `<origin>/#otk1_<OTK>`. The app value must be an exact root origin; remote origins require
+  HTTPS, the PUT refuses redirects, and an ambient Vercel bypass is attached only when `RC_APP`
+  independently pins that same origin. Loopback never receives the bypass.
   On a `409` it **re-mints and retries**. **Raw-pass output becomes an explicit legacy/export mode:** the
   forever `#rcp1_` **deep-link** QR is dropped (fail closed — a failed handoff upload renders *no* QR, never an
   `#rcp1_` fallback), though `--rc-qr` **without** `--rc-app` still renders the **bare pass** as a QR for

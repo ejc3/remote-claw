@@ -34,6 +34,8 @@ const OPENCODE_ENV_KEYS = [
   "OPENCODE_SERVER_PASSWORD",
   "RC_CODEX_URL",
   "RC_CODEX_THREAD",
+  "RC_APP",
+  "VERCEL_AUTOMATION_BYPASS_SECRET",
 ] as const;
 
 function clearOpencodeEnv(): () => void {
@@ -81,6 +83,26 @@ describe("runWrapper (functional)", () => {
     expect(await runWrapper(["x"], { spawnFn: fn })).toBe(7);
   });
 
+  it("scrubs host-only secrets from a real plain-passthrough child", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-plain-env-"));
+    const probeFile = join(dir, "child-env.json");
+    const previousSecretFile = process.env.REMOTE_CLAW_SECRET_FILE;
+    const previousBypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    process.env.REMOTE_CLAW_SECRET_FILE = "/private/remote-claw-secret";
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET = "bypass-must-not-reach-plain-child";
+    const probe = `require("node:fs").writeFileSync(${JSON.stringify(probeFile)}, JSON.stringify({secretFile:process.env.REMOTE_CLAW_SECRET_FILE,bypass:process.env.VERCEL_AUTOMATION_BYPASS_SECRET}))`;
+    try {
+      expect(await runWrapper(["-e", probe], { claudeBin: process.execPath })).toBe(0);
+      expect(JSON.parse(readFileSync(probeFile, "utf8"))).toEqual({});
+    } finally {
+      if (previousSecretFile === undefined) delete process.env.REMOTE_CLAW_SECRET_FILE;
+      else process.env.REMOTE_CLAW_SECRET_FILE = previousSecretFile;
+      if (previousBypass === undefined) delete process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+      else process.env.VERCEL_AUTOMATION_BYPASS_SECRET = previousBypass;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("forwards everything after -- verbatim", async () => {
     const { fn, calls } = recordingSpawn();
     await runWrapper(["a", "--", "--rc-identity", "-x"], { spawnFn: fn });
@@ -94,6 +116,99 @@ describe("runWrapper (functional)", () => {
     expect(code).toBe(2);
     expect(calls).toHaveLength(0);
     expect(lines.join("")).toMatch(/unknown flag --rc-bogus/);
+  });
+
+  it("rejects a non-origin or remote HTTP --rc-app before identity creation", async () => {
+    for (const target of [
+      "http://broker.example",
+      "https://broker.example/path",
+      "https://user@broker.example",
+    ]) {
+      const dir = mkdtempSync(join(tmpdir(), "rc-run-origin-"));
+      const secret = join(dir, "secret");
+      const lines: string[] = [];
+      let compatibilityChecks = 0;
+      try {
+        const code = await runWrapper(["--rc-file", secret, "--rc-app", target], {
+          claudeCompatibilityCheck: async () => {
+            compatibilityChecks += 1;
+          },
+          spawnRcEnv: async () => 0,
+          stderr: (line) => lines.push(line),
+        });
+        expect(code).toBe(2);
+        expect(existsSync(secret)).toBe(false);
+        expect(compatibilityChecks).toBe(0);
+        expect(lines.join("")).not.toContain(target);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("rejects an ambient deployment bypass without an exact RC_APP pin before identity or network", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-bypass-pin-"));
+    const secret = join(dir, "secret");
+    const lines: string[] = [];
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET = "never-send";
+    process.env.RC_APP = "https://trusted.example";
+    try {
+      const code = await runWrapper(
+        ["--rc-file", secret, "--rc-app", "https://untrusted.invalid"],
+        {
+          claudeCompatibilityCheck: async () => {
+            throw new Error("must not reach compatibility");
+          },
+          spawnRcEnv: async () => 0,
+          stderr: (line) => lines.push(line),
+        },
+      );
+      expect(code).toBe(2);
+      expect(existsSync(secret)).toBe(false);
+      expect(lines.join("")).toMatch(/does not match the RC_APP origin/);
+      expect(lines.join("")).not.toContain("untrusted.invalid");
+      expect(lines.join("")).not.toContain("never-send");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes a deployment bypass only after the exact RC_APP pin matches", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "rc-run-bypass-match-"));
+    const secret = join(dir, "secret");
+    let seenHeaders = new Headers();
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET = "scoped-bypass";
+    process.env.RC_APP = "https://BROKER.example:443/";
+    vi.stubGlobal("fetch", (async (_input: string | URL | Request, init?: RequestInit) => {
+      seenHeaders = new Headers(init?.headers);
+      return Response.json({ maxSeq: null, durable: true });
+    }) as typeof fetch);
+    try {
+      const code = await runWrapper(
+        [
+          "--rc-file",
+          secret,
+          "--rc-app",
+          "https://broker.example",
+          "--rc-driver",
+          "opencode",
+          "--rc-oc-session",
+          "ses_exact",
+        ],
+        {
+          runtime: { platform: "linux", arch: "arm64" },
+          runOpencodeDriver: async (ctx) => {
+            await ctx.newClient().seqCursor("ses_exact");
+            return 0;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(seenHeaders.get("x-vercel-protection-bypass")).toBe("scoped-bypass");
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("exits 2 on a recognized-but-unimplemented rc flag without spawning", async () => {
@@ -358,7 +473,7 @@ describe("runWrapper (functional)", () => {
     let spawned = 0;
     try {
       const code = await runWrapper(
-        ["chat", "--rc-file", secret, "--rc-app", "http://broker.example"],
+        ["chat", "--rc-file", secret, "--rc-app", "https://broker.example"],
         {
           claudeBin: "/private/claude",
           claudeCompatibilityCheck: async (bin) => {
@@ -435,7 +550,7 @@ describe("runWrapper (functional)", () => {
       const compatibilityBins: string[] = [];
       try {
         const code = await runWrapper(
-          ["chat", "--model", "opus", "--rc-file", secret, "--rc-app", "http://broker.example"],
+          ["chat", "--model", "opus", "--rc-file", secret, "--rc-app", "https://broker.example"],
           {
             claudeCompatibilityCheck: async (bin) => {
               compatibilityBins.push(bin);
@@ -1191,7 +1306,7 @@ describe("runWrapper (functional)", () => {
   it("exits 2 on an unknown --rc-driver (with the valid list) without spawning claude", async () => {
     const { fn, calls } = recordingSpawn();
     const lines: string[] = [];
-    const code = await runWrapper(["--rc-app", "http://b", "--rc-driver", "bogus"], {
+    const code = await runWrapper(["--rc-app", "https://b", "--rc-driver", "bogus"], {
       spawnFn: fn,
       stderr: (l) => lines.push(l),
     });
@@ -1221,7 +1336,7 @@ describe("runWrapper (functional)", () => {
       const lines: string[] = [];
       try {
         const code = await runWrapper(
-          ["chat", "--rc-file", secret, "--rc-app", "http://broker.example", "--rc-session-hook"],
+          ["chat", "--rc-file", secret, "--rc-app", "https://broker.example", "--rc-session-hook"],
           {
             claudeCompatibilityCheck: async () => {},
             spawnRcEnv: async () => 0,
@@ -1252,7 +1367,7 @@ describe("runWrapper (functional)", () => {
             "--rc-file",
             secret,
             "--rc-app",
-            "http://broker.example",
+            "https://broker.example",
             "--rc-oc-mirror-permissions",
           ],
           {
@@ -1277,7 +1392,7 @@ describe("runWrapper (functional)", () => {
     // Allowlist-gated warning: the OpenCode permission nag must NOT fire for an unknown driver — that
     // path already errors on its own. Otherwise the user sees two messages for one mistake.
     const code = await runWrapper(
-      ["--rc-app", "http://b", "--rc-driver", "bogus", "--rc-oc-mirror-permissions"],
+      ["--rc-app", "https://b", "--rc-driver", "bogus", "--rc-oc-mirror-permissions"],
       { spawnFn: fn, stderr: (l) => lines.push(l) },
     );
     expect(code).toBe(2);

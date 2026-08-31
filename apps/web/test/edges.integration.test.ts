@@ -20,7 +20,7 @@ const td = new TextDecoder();
 
 function clientFor(id: Identity): BrokerClient {
   return new BrokerClient({
-    baseUrl: "http://broker",
+    baseUrl: "https://broker",
     provider: securityProvider("sealed", id),
     fetchFn: brokerFetch,
   });

@@ -14,6 +14,7 @@
 
 import { deriveIdentity, formatPass, toHex } from "@remote-claw/clawsec";
 import { type RcValue, rcActionArgError, strFlag } from "./args.js";
+import { protectionBypassForBrokerOrigin } from "./broker/origin.js";
 import { uploadHandoff } from "./handoff-upload.js";
 import { renderQr } from "./qr.js";
 import { loadSecret, resolveSecretPath, type StoreEnv, StoreError } from "./store.js";
@@ -86,13 +87,10 @@ export async function runPass(
   let qrPayload: string | undefined;
   if (wantQr && !quiet) {
     if (appOrigin) {
-      // Only forward the Vercel SSO bypass to an https origin — it is meaningless elsewhere and must not
-      // leak to a non-https/unintended target.
-      const rawBypass =
-        opts.env?.env?.VERCEL_AUTOMATION_BYPASS_SECRET ??
-        process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
-      const bypass = rawBypass && /^https:\/\//i.test(appOrigin) ? rawBypass : undefined;
       try {
+        // Resolve the ambient deployment bypass against the separately pinned RC_APP before the
+        // optional network call. A command-line URL can never redirect that host credential.
+        const bypass = protectionBypassForBrokerOrigin(appOrigin, opts.env?.env ?? process.env);
         qrPayload = await uploadHandoff(appOrigin, pass, {
           ...(bypass ? { bypass } : {}),
           ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
@@ -102,7 +100,7 @@ export async function runPass(
         // FAIL CLOSED: never fall back to a forever-pass QR (the whole point of the handoff). The pass is
         // still on stdout to paste manually; just don't render a QR.
         err(
-          `remote-claw: one-time handoff upload to ${appOrigin} failed (${e instanceof Error ? e.message : String(e)}); not rendering a QR — paste the pass above, or re-run when the broker is reachable.\n`,
+          `remote-claw: one-time handoff upload failed (${e instanceof Error ? e.message : String(e)}); not rendering a QR — paste the pass above, or re-run when the broker is reachable.\n`,
         );
       }
     } else {
@@ -127,11 +125,15 @@ export async function runPass(
 
   err("remote-claw: viewer pass for this machine\n");
   err(`  identity_id: ${idHex}\n`);
-  err("  This pass lets a viewer READ and STEER this machine's sessions. It is NOT the master\n");
+  err("  This is an indefinite, machine-wide bearer credential. Anyone holding it can READ,\n");
   err(
-    "  secret — it cannot reveal the secret or reset the machine — but it IS a live credential:\n",
+    "  CONTROL, and FORGE records remote-claw accepts as authentic for every retained session.\n",
   );
-  err("  anyone who gets it can drive retained old routes even after you reset this machine.\n");
+  err("  All pass holders are equally trusted; individual revocation is not available.\n");
+  err(
+    "  It is not the master secret and cannot reveal or replace it. Replacing the identity moves\n",
+  );
+  err("  future service only; copied passes still work on retained old routes.\n");
   err("  Paste it into the web app, or show it as a QR.\n");
   out(`${pass}\n`); // the pass on one stdout line (stable for piping, even with --rc-qr)
   if (qrPayload !== undefined) {

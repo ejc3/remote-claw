@@ -74,8 +74,8 @@ describe("Pairing screen (decluttered)", () => {
   });
 });
 
-describe("Connect screen (decluttered)", () => {
-  it("keeps the essentials but drops the verbose reassurance paragraphs", () => {
+describe("Connect screen", () => {
+  it("keeps the entry gate concise while disclosing the pass's full authority", () => {
     const html = renderToStaticMarkup(
       createElement(Connect, {
         pass: "",
@@ -87,7 +87,9 @@ describe("Connect screen (decluttered)", () => {
     );
     expect(html).toContain("end-to-end encrypted");
     expect(html).toContain("--rc-pass");
+    expect(html).toContain('aria-describedby="machine-pass-authority"');
+    expect(html).toContain('id="machine-pass-authority"');
+    expect(html).toContain("Indefinite, machine-wide access");
     expect(html).not.toContain("The broker never sees"); // trimmed for a less crowded entry screen
-    expect(html).not.toContain("not the master secret"); // trimmed
   });
 });

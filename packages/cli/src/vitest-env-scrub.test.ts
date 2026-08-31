@@ -31,6 +31,7 @@ describe("shouldScrubEnvKey", () => {
     expect(shouldScrubEnvKey("RC_BACKEND")).toBe(true);
     expect(shouldScrubEnvKey("RC_LOG")).toBe(true);
     expect(shouldScrubEnvKey("RC_DRIVER")).toBe(true);
+    expect(shouldScrubEnvKey("VERCEL_AUTOMATION_BYPASS_SECRET")).toBe(true);
   });
 
   it("preserves only the live-e2e controls that the suite reads", () => {

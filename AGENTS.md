@@ -111,8 +111,11 @@ spawning it — e.g. this harness), the launcher's session identity leaks into t
 Unrelated to claude/Anthropic. Our broker is on Vercel with **Deployment Protection (SSO)**; the host
 sends `x-vercel-protection-bypass: <secret>` so its automated broker calls get past Vercel's edge
 without a browser login. Only used in **`--rc-app`** mode (reaching our broker); not needed in trace
-mode; scrubbed from the child claude's env. The full RC control-verb surface claude's REPL bridge
-accepts is documented in `docs/protocol.md §11`.
+mode; scrubbed from the child claude's env. For a remote broker, `RC_APP` must independently pin the
+exact same canonical HTTPS root origin as `--rc-app`; missing/invalid/mismatched pins fail before
+identity creation or network access, and loopback never receives the bypass. Lower driver layers receive
+the already scoped value and must not reread the ambient secret. The full RC control-verb surface
+claude's REPL bridge accepts is documented in `docs/protocol.md §11`.
 
 ## Editing the docs (`docs/*.md`)
 

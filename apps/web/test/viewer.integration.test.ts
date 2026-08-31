@@ -25,7 +25,7 @@ async function takeGen<T>(gen: AsyncGenerator<T>, n: number): Promise<T[]> {
 /** A minimal fake host driven by the same transport, for the viewer to talk to. */
 function fakeHost(id: Identity): BrokerClient {
   return new BrokerClient({
-    baseUrl: "http://broker",
+    baseUrl: "https://broker",
     provider: securityProvider("sealed", id),
     fetchFn: brokerFetch,
   });
@@ -34,7 +34,7 @@ function fakeHost(id: Identity): BrokerClient {
 describe("web client Viewer (browser-safe, against the real broker)", () => {
   it("caps a future host clock at local receipt so a crashed host cannot stay fresh indefinitely", async () => {
     const id = await uniqueIdentity();
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const host = fakeHost(id);
     const sid = "future-host-clock";
     const beforeReceipt = Date.now();
@@ -55,7 +55,7 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
   it("loads a pass, discovers a session on the bus, sends a prompt, and renders the reply", async () => {
     const id = await uniqueIdentity();
     const pass = await formatPass(id);
-    const viewer = await Viewer.fromPass(pass, "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(pass, "https://broker", brokerFetch);
     const host = fakeHost(id);
     const sid = "sess-web";
 
@@ -107,7 +107,7 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
   it("reassembles a LARGE assistant message (split into chunks) through the viewer's reorder path", async () => {
     const id = await uniqueIdentity();
     const pass = await formatPass(id);
-    const viewer = await Viewer.fromPass(pass, "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(pass, "https://broker", brokerFetch);
     const host = fakeHost(id);
     const sid = "big-view";
     // ~18 KB assistant reply, posted as chunks (8 KB) sharing one seq — the host's real path.
@@ -145,7 +145,7 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
       .join("");
     const fetchFn: typeof fetch = async () =>
       new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://faulty-broker", fetchFn);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://faulty-broker", fetchFn);
 
     const messages = await takeGen(viewer.transcript(sid, never), 2);
 
@@ -187,7 +187,7 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
       .join("");
     const fetchFn: typeof fetch = async () =>
       new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://faulty-broker", fetchFn);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://faulty-broker", fetchFn);
 
     const [message] = await takeGen(viewer.transcript(selected, never), 1);
 
@@ -196,7 +196,7 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
 
   it("absorbs an exact terminal marker, removes it once, and rejects every later session mutation", async () => {
     const id = await uniqueIdentity();
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const host = fakeHost(id);
     const sid = "sess-terminal";
     const barrier = "sess-terminal-barrier";
@@ -294,7 +294,7 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
       .join("");
     const fetchFn: typeof fetch = async () =>
       new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://faulty-broker", fetchFn);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://faulty-broker", fetchFn);
     const terminals: string[] = [];
 
     const announces = await takeGen(
@@ -313,7 +313,7 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
 
   it("does not tombstone a session for a non-exact terminal payload", async () => {
     const id = await uniqueIdentity();
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const host = fakeHost(id);
     const sid = "sess-malformed-terminal";
     const barrier = "sess-malformed-barrier";
@@ -343,6 +343,6 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
   });
 
   it("rejects a malformed pass with a clear error", async () => {
-    await expect(Viewer.fromPass("not-a-pass", "http://broker", brokerFetch)).rejects.toThrow();
+    await expect(Viewer.fromPass("not-a-pass", "https://broker", brokerFetch)).rejects.toThrow();
   });
 });

@@ -23,7 +23,9 @@ anywhere. A run still requires:
 
 - AWS credentials or a Bedrock API key with model access;
 - a remote-claw machine identity and viewer pass; and
-- any Vercel automation bypass needed by a protected remote-claw deployment.
+- any Vercel automation bypass needed by a protected remote-claw deployment. When that bypass is set,
+  `RC_APP` must pin the exact same HTTPS broker origin; it is never sent to loopback or inherited by
+  Claude.
 
 The flag is valid only with `--rc-inference=bedrock`. It creates isolated, login-shaped Claude state
 with the RC feature gates needed by the intercepted private façade. It never modifies the user's real

@@ -15,7 +15,7 @@ const td = new TextDecoder();
 function pair(id: Identity): { host: BrokerClient; viewer: BrokerClient } {
   const make = () =>
     new BrokerClient({
-      baseUrl: "http://broker",
+      baseUrl: "https://broker",
       provider: securityProvider("sealed", id),
       fetchFn: brokerFetch,
     });

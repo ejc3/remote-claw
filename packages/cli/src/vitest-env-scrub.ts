@@ -8,6 +8,7 @@
 // namespace would retain stale or accidental knobs.
 export function shouldScrubEnvKey(key: string): boolean {
   return (
-    key.startsWith("RC_") && key !== "RC_OPENCODE_E2E_RUN" && key !== "RC_OPENCODE_E2E_SESSION"
+    key === "VERCEL_AUTOMATION_BYPASS_SECRET" ||
+    (key.startsWith("RC_") && key !== "RC_OPENCODE_E2E_RUN" && key !== "RC_OPENCODE_E2E_SESSION")
   );
 }

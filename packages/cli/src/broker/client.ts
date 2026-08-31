@@ -15,6 +15,7 @@ import {
   toHex,
 } from "@remote-claw/clawsec";
 import type { SecurityProvider } from "../security/provider.js";
+import { BrokerOriginError, isLoopbackBrokerOrigin, normalizeBrokerOrigin } from "./origin.js";
 import { planeForKind } from "./protocol.js";
 
 // Default chunk size for postMessage. The shared relay route rejects decoded ciphertext at 3.3 MB
@@ -79,7 +80,8 @@ export class BrokerStreamRotationError extends Error {
 }
 
 export interface BrokerClientOptions {
-  /** Broker origin, e.g. "https://broker.example.com" (no trailing slash needed). */
+  /** Exact broker app origin. Remote origins require HTTPS; loopback may use HTTP. The browser viewer
+   * uses an empty string as its same-origin sentinel; it can never carry a deployment bypass. */
   baseUrl: string;
   /** Seals/opens frames and supplies the bearer (auth_token). */
   provider: SecurityProvider;
@@ -143,7 +145,17 @@ export class BrokerClient {
   #serverDurable: boolean | undefined;
 
   constructor(opts: BrokerClientOptions) {
-    this.#baseUrl = opts.baseUrl.replace(/\/+$/, "");
+    this.#baseUrl = opts.baseUrl === "" ? "" : normalizeBrokerOrigin(opts.baseUrl);
+    if (
+      opts.protectionBypass !== undefined &&
+      (this.#baseUrl === "" ||
+        new URL(this.#baseUrl).protocol !== "https:" ||
+        isLoopbackBrokerOrigin(this.#baseUrl))
+    ) {
+      throw new BrokerOriginError(
+        "the Vercel protection bypass requires a remote HTTPS broker origin",
+      );
+    }
     this.#provider = opts.provider;
     // Normalize the backend ONCE: trim, and treat blank as unset. So `durable` and the
     // `x-broker-backend` header both see the same value — no host-vs-broker disagreement from stray

@@ -41,6 +41,11 @@ test("connect + pass screen", async ({ page, seedHost }) => {
   const { pass } = await seedHost();
   await page.goto(`/#${encodeURIComponent(pass)}`);
   await expect(page.getByLabel("Machine pass", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect" })).toBeVisible();
+  await expect(page.locator("#machine-pass-authority")).toContainText(
+    "Indefinite, machine-wide access",
+  );
+  await page.evaluate(() => document.fonts.ready);
   await page.screenshot({ path: `${OUT()}/01-connect.png` });
 });
 

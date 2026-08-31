@@ -14,6 +14,19 @@ test("the connect gate autofocuses its pass field", async ({ page }) => {
   await expect(page.getByLabel("Machine pass", { exact: true })).toBeFocused();
 });
 
+test("the connect gate discloses the machine pass's full bearer authority", async ({ page }) => {
+  await page.goto(`/${qp}`);
+  const field = page.getByLabel("Machine pass", { exact: true });
+  const disclosure = page.locator("#machine-pass-authority");
+  await expect(disclosure).toBeVisible();
+  await expect(field).toHaveAttribute("aria-describedby", "machine-pass-authority");
+  await expect(disclosure).toContainText("Indefinite, machine-wide access");
+  await expect(disclosure).toContainText("read, control, and forge records");
+  await expect(disclosure).toContainText("equally trusted");
+  await expect(disclosure).toContainText("can’t revoke one holder");
+  await expect(disclosure).toContainText("does not revoke old retained routes");
+});
+
 // #design-pass: the disabled primary CTA used to render as a dead grey slab indistinguishable from a
 // broken button. The fix keeps the accent identity and just dims it (opacity .5) so it reads as an
 // inactive primary, not a failure. Assert the COMPUTED style so a CSS regression fails here.

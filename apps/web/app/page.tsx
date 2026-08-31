@@ -572,6 +572,7 @@ export function Connect(props: {
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
+            aria-describedby="machine-pass-authority"
           />
           <IconButton
             className="pass-reveal"
@@ -583,6 +584,12 @@ export function Connect(props: {
             onClick={() => setShowPass((shown) => !shown)}
           />
         </div>
+        <Text id="machine-pass-authority" type="supporting" as="p">
+          <strong>Indefinite, machine-wide access.</strong> Anyone with this pass can read, control,
+          and forge records remote-claw trusts across every retained session. All pass holders are
+          equally trusted; you can’t revoke one holder, and resetting the identity does not revoke
+          old retained routes.
+        </Text>
         {props.error !== null && (
           <Banner status="error" title={`Couldn’t load that pass: ${props.error}`} />
         )}
