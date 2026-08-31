@@ -34,7 +34,7 @@ What exists today:
 | Claude native collaboration plus multiple remote-claw browsers | M1 complete on Linux/exact-2.1.237: structured provider-ordered text, local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and exact-SHA deployed-broker acceptance |
 | OpenCode server adapter | M2 complete for exact 1.17.5/Linux arm64, the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart |
 | tmux fallback | Experimental lower-fidelity implementation with documented limits |
-| Codex | M3a complete for exact 0.151.0/Linux arm64: one exact app-server thread, local TUI, two remote-claw browsers, native text/status, and TUI-owned approvals/questions; same-thread Codex Remote coexistence remains M3b |
+| Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation; per-device unsubscribe, richer controls, restart/backfill, and broker-loss are not claimed |
 | Bedrock and no-Anthropic-account launch | Experimental inference/account paths, separate from adapter fidelity |
 
 The current private relay is useful product infrastructure, but no single adapter is the whole
@@ -77,7 +77,7 @@ The repository has three production components:
 
 There is no required host daemon or plaintext cloud service in the current path. Each wrapper process
 owns its process-local projection and binding; externally owned Claude-native and OpenCode sessions
-outlive companion failure or restart. The caller-owned Codex app-server, thread, and attached TUI also
+outlive companion failure or restart. The externally owned Codex app-server, thread, and attached TUI also
 outlive its companion. Sessions sharing one secret are grouped under one logical host identity.
 
 ## 3. Identity and key hierarchy
@@ -426,14 +426,21 @@ commands.
 ### 10.6 Pinned Codex text/status companion
 
 <code>--rc-app &lt;origin&gt; --rc-driver=codex --rc-codex-thread &lt;uuidv7&gt;</code> resumes/joins
-one exact thread on a caller-owned explicit-port loopback Codex app-server. The supported tuple is
-exact 0.151.0 on Linux arm64. The companion accepts no forwarded arguments and never starts/stops
-app-server, discovers/selects/creates/deletes/stops a thread, or owns the TUI. Resume may load the exact
-stored thread, but the supported topology requires the caller to keep a local TUI attached for the
-companion lifetime.
+one exact thread through either a caller-owned explicit-port loopback Codex app-server or literal
+<code>unix://</code>. The literal token resolves only to Codex's same-user managed control socket under
+<code>$CODEX_HOME/app-server-control/</code> (falling back to <code>~/.codex</code>); arbitrary Unix
+paths are rejected. The supported tuple is exact 0.151.0 on Linux arm64. The companion accepts no
+forwarded arguments and never starts/stops app-server, discovers/selects/creates/deletes/stops a
+thread, or owns the TUI. Resume may load the exact stored thread, but the supported topology requires
+the caller to keep a local TUI attached for the companion lifetime.
 
-The driver subscribes before bounded ascending item history, drains buffered notifications before
-readiness, and projects completed user/assistant text at native item coordinates. Browser text first
+The driver subscribes before history. Resume's <code>historyMode</code> selects bounded ascending
+<code>thread/items/list</code> for <code>paginated</code> or bounded ascending
+<code>thread/turns/list</code> with <code>itemsView:"full"</code> for <code>legacy</code>. Both paths
+validate native envelopes and filter to supported user/assistant text before the 10,000 projected-item
+cap, then drain buffered notifications before readiness. Completed text is keyed by immutable
+<code>(turnId,itemId)</code>, not the turn-scoped item ID alone; exact replay deduplicates and changed
+projected bytes at the same coordinate fence the projection. Browser text first
 gets seq-less pending admission; its final acknowledgement waits for the exact native user item carrying
 the host client ID and text. A 15-second correlation deadline and bounded history/dedup fence ambiguous
 or contradictory outcomes. Native active/idle status is advertised. Every browser control, attachment,
@@ -447,7 +454,7 @@ app-server, TUI, or native thread.
 ## 11. Agent adapters and inference connectors
 
 The adapter seam maps a native harness into the same host session, broker, and viewer contracts.
-The MITM private-relay path, Claude native text companion, exact OpenCode M2 tuple, and exact Codex M3a
+The MITM private-relay path, Claude native text companion, exact OpenCode M2 tuple, and exact Codex M3a/M3b
 tuple are supported at their stated boundaries. Other implementations have narrower, truthfully
 labeled guarantees.
 
@@ -456,7 +463,7 @@ labeled guarantees.
 | Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart and literal official-client coexistence | Exact Linux/2.1.237 only; no remote controls, permissions, attachments, or status |
 | tmux | Experimental Claude compatibility driver | Transcript/pane correlation is weaker than native RC; permission mirroring uses hooks |
 | OpenCode | Supported text/interrupt server companion for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; broader tuples and permission mirroring are not graduated |
-| Codex | Supported text/status app-server companion for exact 0.151.0/Linux arm64; Codex Remote is a current product | One explicit thread, attached local-TUI precondition, all browser controls disabled; restart/backfill and same-thread Remote coexistence are not yet graduated |
+| Codex | Supported text/status app-server companion for exact 0.151.0/Linux arm64, including bounded same-thread official Remote coexistence | One explicit thread and attached local-TUI precondition; provider-transport isolation is proved, but per-device unsubscribe, browser controls, restart/backfill, and broker-loss are not |
 | Bedrock inference | Experimental MITM connector | Replaces Anthropic inference while preserving the private local RC facade |
 | Accountless mode | Experimental Bedrock companion | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
 
@@ -625,16 +632,36 @@ A native command approval appeared only in the local TUI, was declined there, an
 effect. A separate native question appeared in the TUI and was answered there. Both app-server
 subscribers observed the requests resolve; the structurally response-less companion returned neither a
 result nor error and stayed live. A clean companion stop left app-server, TUI, and native thread live.
-Focused deterministic tests own compatibility, bounded-history/readiness ordering, history/live
-deduplication, exact correlation and timeout, response-less request handling, disconnect/archive/revert
+Focused deterministic tests own compatibility, bounded-history/readiness ordering, history/live mode
+selection, supported-text filtering, `(turnId,itemId)` deduplication and changed-byte fencing, exact
+correlation and timeout, response-less request handling, disconnect/archive/revert
 and broker/projection fail-stop, companion-only teardown, dispatch, and capability gates. This live
 run does not claim companion restart/backfill.
 
-M3b is next: same-thread coexistence with the supported Codex Remote topology. Phone pairing begins in
-ChatGPT desktop on macOS or Windows, and that desktop app can run a project reached over SSH, including
-a Linux development host. M3a does not prove that provider-app result. See the official
+M3a did not itself prove provider-app coexistence. M3b subsequently exercised that boundary through
+the literal managed Unix socket and legacy full-turn reader; its bounded result is recorded separately
+below. See the official
 [Codex app-server](https://learn.chatgpt.com/docs/app-server) and
 [Remote connections](https://learn.chatgpt.com/docs/remote-connections).
+
+## 15.2 M3b complete: official Codex Remote coexistence
+
+The bounded M3b run used an exact official Remote thread for Codex 0.151.0/Linux arm64, literal
+`unix://` to the managed same-user control socket, `historyMode:"legacy"` full-turn hydration, one
+attached local TUI, and two independent remote-claw browsers. The TUI remained the sole owner of
+approval and question handling.
+
+One provider-origin marker appeared exactly once in each browser. One browser-origin prompt and its
+acknowledgement appeared exactly once in the official thread, TUI, and both browsers; the sending
+browser also showed the host receipt. For the failure-isolation step, an ephemeral provider transport
+was disabled and remained disabled while a browser-B turn completed. The managed daemon, TUI,
+companion, and both browsers stayed live, and provider transport subsequently restored to connected.
+
+This proves provider-transport isolation: browser collaboration stayed live while the provider
+transport was absent. It does not prove that one provider device was selectively unsubscribed while
+another remained connected, so it is not a per-device unsubscribe result. The run also does not
+graduate richer controls, attachments, browser approval/question ownership, companion
+restart/backfill, or broker-loss behavior.
 
 ## 16. Post-M2 viewer parity lane
 

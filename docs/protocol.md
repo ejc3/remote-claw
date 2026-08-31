@@ -18,8 +18,9 @@ gate passed. The exact OpenCode 1.17.5/Linux arm64/pinned-Bedrock text-and-inter
 supported adapter after its real-TUI/two-browser M2 acceptance. Its proved server environment was
 `AWS_REGION=us-west-1` plus explicit temporary SigV4 credential values; other regions or credential
 modes remain outside that claim, as do broader OpenCode tuples. The exact Codex 0.151.0/Linux arm64
-app-server text/status companion passed M3a with one local TUI and two browsers; Codex/ChatGPT Remote
-coexistence remains M3b.
+app-server text/status companion passed M3a with one local TUI and two browsers. M3b also passed on one
+exact official Remote thread through the literal managed Unix socket and legacy full-turn hydration;
+its bounded failure result is provider-transport isolation, not per-device unsubscribe.
 
 ## 1. Topology
 
@@ -42,8 +43,8 @@ exact successful bridge, then uses Anthropic history/SSE/text POST as an app cli
 form accepts an explicit exact native session ID and starts no interactive Claude session or proxy;
 the pinned-version probe still runs. The pinned OpenCode adapter, pinned Codex companion, and
 experimental tmux fallback reach the same `Session` seam through their own native surfaces. Codex
-resumes one exact thread on a caller-owned loopback app-server and requires the local TUI to remain
-attached.
+resumes one exact thread through a constrained local app-server transport and requires the local TUI
+to remain attached.
 See
 [pluggable-harness.md](pluggable-harness.md).
 
@@ -229,16 +230,25 @@ the same exact `ses_*` and consumes no commands from the old broker session.
 
 ### 4.4 Pinned Codex app-server companion
 
-The supported Codex path requires exact app-server 0.151.0 on Linux arm64, a caller-owned explicit-
-port loopback WebSocket origin, one explicit canonical UUIDv7, and a broker backend that supplies both
-durable host sequence and inbound frame cursors. It accepts no forwarded arguments and never
-starts/stops app-server, discovers/selects/creates/deletes/stops a thread, or owns the local TUI.
-`thread/resume` with `excludeTurns:true` subscribes and can load the exact stored thread; the companion
-then pages bounded `thread/items/list` results in ascending order and drains notifications buffered
-during that history read before it announces readiness. A missing half of the broker cursor pair
-fails the projection before it serves the session.
+The Codex path requires exact app-server 0.151.0 on Linux arm64, one explicit canonical UUIDv7, and a
+broker backend that supplies both durable host sequence and inbound frame cursors. Its transport is
+either a caller-owned explicit-port loopback WebSocket origin or the literal `unix://` token. The
+latter resolves only to Codex's same-user managed control socket at
+`$CODEX_HOME/app-server-control/app-server-control.sock` (with `~/.codex` as the unset fallback);
+arbitrary Unix paths are rejected. It accepts no forwarded arguments and never starts/stops app-server,
+discovers/selects/creates/deletes/stops a thread, or owns the local TUI.
 
-Completed native `userMessage` and non-empty `agentMessage` items publish at their immutable item IDs.
+`thread/resume` with `excludeTurns:true` subscribes and can load the exact stored thread. Its returned
+`historyMode` selects one of two bounded ascending readers: `paginated` uses `thread/items/list`, while
+`legacy` uses `thread/turns/list` with `itemsView:"full"`. Each reader validates the native envelope,
+filters to supported `userMessage` and `agentMessage` text before the shared 10,000 projected-item cap,
+and drains notifications buffered during history before readiness. Page count and cursor-cycle bounds
+still fail closed. A missing half of the broker cursor pair fails the projection before it serves the
+session.
+
+Completed native `userMessage` and non-empty `agentMessage` items publish at their immutable
+`(turnId,itemId)` coordinates; an item ID alone is only turn-scoped. Exact history/live replay at one
+coordinate deduplicates, while changed projected bytes at the same coordinate fence the projection.
 Browser text first receives only seq-less `{native_pending:true}` admission. One idle gate serializes
 `turn/start`, using the host event UUID as `clientUserMessageId`; the final downstream acknowledgement
 waits up to 15 seconds for the exact completed native user item with the same client ID and text. A
@@ -252,6 +262,16 @@ The supported topology requires a local TUI attached to the exact thread for the
 lifetime; app-server provides no atomic way to prove that attachment. The TUI solely owns approvals
 and questions. Closing the companion closes only its socket and remote-claw projection, not app-server,
 the TUI, or the native thread.
+
+The bounded M3b run exercised this exact Codex 0.151.0/Linux arm64 path against an official Remote
+thread through literal `unix://` and `historyMode:"legacy"` full-turn hydration. The attached local TUI
+remained the sole approval/question owner. A provider-origin marker appeared exactly once in two
+independent browsers. A browser-origin prompt and acknowledgement appeared exactly once in the official
+thread, TUI, and both browsers, and the sending browser received the host receipt. An ephemeral provider
+transport then stayed disabled while a browser-B turn completed; the managed daemon, TUI, companion,
+and both browsers remained live, after which provider transport restored to connected. This isolates
+loss of provider transport from browser collaboration. It does not prove a per-device unsubscribe and
+does not graduate richer controls, restart/backfill, or broker-loss.
 
 ## 5. `Session` and the relay
 
@@ -454,7 +474,8 @@ does not claim durable exactly-once collaboration:
 8. Tmux recognizes local prompts only after terminal observation and retains its documented text-ledger
    limits. Pinned OpenCode and Codex instead publish TUI/browser text at immutable native coordinates;
    OpenCode browser attribution requires the exact host marker and full text, while Codex requires the
-   exact `clientUserMessageId` and text. Stable MITM intentionally drops ordinary native user echoes to
+   exact `(turnId,itemId)` coordinate plus `clientUserMessageId` and text. Stable MITM intentionally
+   drops ordinary native user echoes to
    avoid duplicating remote prompts, so a local Claude TUI prompt may execute without appearing in the
    viewer. The native Claude companion projects pinned top-level provider user events from both local-
    worker and app-client sources.
@@ -468,9 +489,9 @@ and invalid-success parse details are discarded before errors reach normal relay
 publish and recovery-cursor bodies are shape-checked. The exact `410 + channel_storage_lost` pair
 remains the only typed permanent channel-loss response.
 
-These are product limits, not invitations to rebuild a second protocol stack. M1, pinned M2, and
-pinned M3a are complete; M3b is not. Add protocol machinery only for a concrete later capability
-failure.
+These are product limits, not invitations to rebuild a second protocol stack. M1, pinned M2, M3a, and
+the bounded exact-tuple M3b coexistence/provider-transport-isolation gate are complete. Add protocol
+machinery only for a concrete later capability failure.
 
 ## 13. Code and test map
 

@@ -20,8 +20,14 @@ OpenCode M2 also passed its real-TUI, two-browser, interrupt, reload, and fresh-
 acceptance for the exact pinned tuple, whose proved OpenCode server environment was
 `AWS_REGION=us-west-1` plus explicit temporary SigV4 credential values. Other regions or credential
 modes require their own gate. Tmux retains narrower experimental guarantees. Codex M3a passed its
-real-TUI, two-browser, text, status, and native-only approval/question acceptance; same-thread
-Codex/ChatGPT Remote coexistence remains M3b. Every current `Session` binding remains process-local.
+real-TUI, two-browser, text, status, and native-only approval/question acceptance. M3b then passed on
+an exact official Remote thread for Codex 0.151.0/Linux arm64 using the literal managed Unix socket and
+legacy full-turn hydration. One provider marker appeared once in two browsers; one browser prompt and
+acknowledgement appeared once in official Remote, the TUI, and both browsers, with a host receipt in the
+sending browser. A browser-B turn completed while an ephemeral provider transport stayed disabled;
+daemon, TUI, companion, and browsers stayed live before provider transport restored to connected. This
+is provider-transport isolation, not per-device unsubscribe, and it does not graduate richer controls,
+restart/backfill, or broker-loss. Every current `Session` binding remains process-local.
 
 This adapter choice is independent of inference routing. Anthropic, OpenAI, or Bedrock selects where
 model work runs; it does not select browser identity, broker transport, readiness, or native
@@ -165,6 +171,8 @@ row. Any rejected or outcome-unknown POST permanently fences the projection and 
 
 The Codex companion waits for native idle, starts one turn with the broker event ID as
 `clientUserMessageId`, and acknowledges only after the matching completed native user item appears.
+The immutable projection coordinate is `(turnId,itemId)`, because Codex item IDs are only turn-scoped.
+An exact replay deduplicates; changed projected bytes at the same pair fence the projection.
 The companion client exposes no app-server request-response method, so native approvals and questions
 cannot be answered or errored by remote-claw.
 
@@ -204,13 +212,13 @@ attached for the projection lifetime.
 
 ## 5. Current adapters
 
-| Property | Claude `mitm` | Claude `claude-native` | Experimental `tmux` | Pinned OpenCode M2 | Pinned Codex M3a |
+| Property | Claude `mitm` | Claude `claude-native` | Experimental `tmux` | Pinned OpenCode M2 | Pinned Codex M3a/M3b |
 | --- | --- | --- | --- | --- | --- |
-| Native connection | Claude RC HTTP/SSE through local MITM | transparent bridge observer or explicit-ID attach, plus Anthropic history/SSE client | private tmux pane + transcript files | OpenCode HTTP + server-wide SSE | caller-owned loopback app-server WebSocket |
+| Native connection | Claude RC HTTP/SSE through local MITM | transparent bridge observer or explicit-ID attach, plus Anthropic history/SSE client | private tmux pane + transcript files | OpenCode HTTP + server-wide SSE | explicit-port loopback app-server WebSocket, or literal `unix://` to Codex's same-user managed socket |
 | Native session choice | Claude creates a fresh `cse_*` in the local RC service | exact `cse_*` from the spawned child's successful bridge request or explicit `--rc-native-session` | fresh UUID unless user supplied resume/session flags | required exact existing root `ses_*`; never list, discover, or create that root; follow announced children | required exact existing UUIDv7; resume/join only, never discover, select, create, delete, or stop |
-| Capture | authenticated RC event batches | subscribe-before-history provider reconciliation | tail main and sub-agent JSONL | history plus coalesced SSE parts | resume subscription, bounded item history, then buffered/live notifications |
+| Capture | authenticated RC event batches | subscribe-before-history provider reconciliation | tail main and sub-agent JSONL | history plus coalesced SSE parts | resume subscription, `historyMode`-selected bounded text history, then buffered/live notifications |
 | Remote text | Claude downstream SSE | serialized provider event POST | bracketed pane paste + Enter | `prompt_async` | serialized `turn/start`, correlated to completed native user item |
-| Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at its native ID |
+| Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
 | Permission behavior | stable surface disabled | native/local; never projected or answered | PreToolUse mirror by default | native/local by default; positive mirroring opt-in is experimental | approvals/questions solely owned by attached local TUI; companion cannot respond |
 | Status advertised | yes | no | no | no | yes |
 | Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection; restart acceptance is not yet claimed |
@@ -274,7 +282,7 @@ OpenCode options:
 Codex options:
 
 ```text
---rc-codex-url <loopback-ws-origin>
+--rc-codex-url <unix://|loopback-ws-origin>
 --rc-codex-thread <uuidv7>
 ```
 
@@ -288,8 +296,15 @@ arguments are forwarded to Claude by the MITM, Claude-native launch, and tmux la
 Claude-native attach-only form rejects them. OpenCode and Codex attach to existing native servers,
 reject forwarded arguments, and use only their explicit driver options. Any OpenCode or Codex
 driver/configuration intent without `--rc-app` fails instead of silently launching plain Claude. Codex
-accepts only an explicit-port `ws://127.0.0.1` or `ws://[::1]` origin with no credentials, path, query,
-or fragment, and requires the exact thread ID.
+accepts either an explicit-port `ws://127.0.0.1` or `ws://[::1]` origin with no credentials, path,
+query, or fragment, or the exact literal `unix://`. That token resolves only to
+`$CODEX_HOME/app-server-control/app-server-control.sock`, falling back to the current user's
+`~/.codex`; arbitrary Unix paths are rejected. The exact thread ID remains required.
+
+After resume, `historyMode:"paginated"` selects bounded ascending `thread/items/list` and
+`historyMode:"legacy"` selects bounded ascending `thread/turns/list` with `itemsView:"full"`. Both
+filter unsupported item families before the 10,000 projected user/assistant text-item cap. The exact
+official-Remote M3b acceptance exercised the literal managed socket and this legacy full-turn reader.
 
 ## 7. Safety rules for a driver change
 

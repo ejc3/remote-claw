@@ -41,8 +41,10 @@ still replaces Anthropic Remote Control, and `--rc-trace` is passive. Since this
 exact-session, fresh-projection restart path. This archive intentionally does not duplicate the live
 acceptance ledger; current evidence and remaining gates are maintained in
 [Product goal and release gates](release-finish-line.md). The pinned OpenCode M2 text/interrupt tuple
-and pinned Codex M3a app-server text/status tuple have since completed; Codex Remote M3b, broader
-tuples, tmux, and inference milestones retain their own acceptance scenarios.
+and pinned Codex M3a app-server text/status tuple have since completed. M3b also completed same-thread
+ChatGPT Remote text coexistence and provider-transport isolation for that exact Codex tuple; broader
+Codex tuples/controls/recovery, tmux graduation, and inference milestones retain their own acceptance
+scenarios.
 
 ## Current reproduction
 

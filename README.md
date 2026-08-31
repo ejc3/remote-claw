@@ -18,7 +18,11 @@ credentials.
 > restart acceptance on 2026-08-30. Codex M3a is also complete for exact Codex 0.151.0 on Linux arm64:
 > one local TUI and two independent remote-claw browsers shared an exact app-server thread, exchanged
 > uniquely labelled text once, and left one native approval and one native question solely to the TUI.
-> Codex/ChatGPT Remote coexistence remains the separate M3b gate. See
+> M3b is also complete on an exact official Remote thread through Codex's managed Unix socket and
+> legacy full-turn history: official Remote, the TUI, and two browsers exchanged one-copy text, and a
+> browser turn remained live while provider transport was disabled. This proves provider-transport
+> isolation, not per-device unsubscribe, and does not claim richer controls, restart, or broker-loss.
+> See
 > [Product goal and release gates](docs/release-finish-line.md).
 
 ## Product goal
@@ -39,7 +43,7 @@ The intended surface matrix is:
 | Agent surface | Local native UI | Official provider collaboration | remote-claw browsers | Current truth |
 | --- | --- | --- | --- | --- |
 | Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; M1's exact-2.1.237 native companion passed local TUI, literal official web UI on the user's phone, two-browser, fresh-projection restart, broker-loss, packed-install, and exact-SHA deployed-broker acceptance |
-| Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | M3a complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native-ordered text/status, and TUI-owned approvals/questions on one exact app-server thread; same-thread Codex Remote coexistence remains M3b |
+| Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket; failure isolation is proved at the provider-transport boundary, not as per-device unsubscribe |
 | OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | M2 complete for exact OpenCode 1.17.5 on Linux arm64 with the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart |
 | tmux compatibility | Terminal pane | Plain Claude retains its own provider remote when requested | Multiple browsers | Experimental and deliberately lower fidelity; one Claude 2.1.237 coexistence run passed, but the official app UI was not exercised |
 
@@ -62,7 +66,7 @@ The implemented native modes are:
 | `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text to remote-claw. Linux and exact Claude 2.1.237 only; permissions, questions, interrupts, model/mode changes, attachments, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
 | `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The supported tuple accepts non-empty non-slash text and interrupt only; native/local UI owns permissions, questions, status, model/mode, attachments, and end. |
-| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact thread on a caller-owned loopback Codex app-server. Exact Codex 0.151.0/Linux arm64 only. Non-empty non-slash text and native status are supported; the attached local TUI solely owns approvals and questions, and every other browser control is disabled. |
+| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. Exact Codex 0.151.0/Linux arm64 only. Non-empty non-slash text and native status are supported; the attached local TUI solely owns approvals and questions, and every other browser control is disabled. |
 | `--rc-app <origin> --rc-driver=tmux --remote-control [name]` | Runs plain Claude with its own Anthropic Remote Control intact while the lower-fidelity tmux adapter projects transcript and pane input to remote-claw. A bounded real run passed through the Anthropic API and two browsers; official-app UI acceptance is still pending. |
 
 The launch form waits for the exact successful bridge request from its Claude child. The attach form
@@ -105,9 +109,11 @@ Other supported and experimental paths have narrower current claims:
 - The pinned OpenCode M2 path connects to an exact loopback HTTP/SSE server and maps native-ordered
   text plus interrupt. Other versions, models, and platforms are unsupported; permission mirroring is
   a separate experimental opt-in.
-- The pinned Codex M3a path connects to an exact loopback app-server thread and maps native-ordered
-  text plus real status. The local TUI must stay attached and owns approvals/questions. Codex Remote
-  coexistence and richer controls remain separate gates.
+- The pinned Codex M3a acceptance used an explicit-port loopback app-server and remains the historical
+  text/status result. The current companion also accepts literal `unix://` for Codex's same-user
+  managed control socket; it rejects arbitrary Unix paths. The local TUI must stay attached and owns
+  approvals/questions. M3b's exact official-Remote/TUI/two-browser coexistence and provider-transport
+  isolation gate is complete; richer controls, restart/backfill, and broker-loss remain separate.
 - tmux captures transcripts and injects pane input when no higher-fidelity native seam is available.
 - Bedrock redirects inference while collaboration remains a separate adapter concern.
 - Accountless Bedrock seeds isolated Claude state so no Anthropic account is needed; it still requires
@@ -225,6 +231,29 @@ Use the real UUIDv7 supplied by Codex. remote-claw resumes/joins only that threa
 stops app-server, discovers/selects/creates/deletes/stops a thread, or owns the TUI. Only non-empty,
 non-slash browser text is accepted. Approvals and questions stay in the local Codex TUI. Interrupt,
 model/mode, files, attachments, and end are disabled. A durable SQLite/libSQL broker is required.
+
+For the Codex-managed daemon used by the current Remote topology, keep the exact thread and substitute
+`--rc-codex-url unix://`. That literal token maps only to
+`$CODEX_HOME/app-server-control/app-server-control.sock`, or
+`~/.codex/app-server-control/app-server-control.sock` when `CODEX_HOME` is unset. An arbitrary
+`unix:///path` is rejected; the only other accepted transport is the historical explicit-port
+`ws://127.0.0.1:<port>` or `ws://[::1]:<port>` form.
+
+After `thread/resume`, Codex's returned `historyMode` selects the bounded history API. `paginated`
+uses ascending `thread/items/list`; `legacy` uses ascending `thread/turns/list` with
+`itemsView:"full"`. Both paths discard every item family except supported user/assistant text before
+the 10,000 projected-item limit is counted. Projected identity is the immutable
+`(turnId,itemId)` pair: replay of the same pair and bytes deduplicates, while changed projected bytes
+at the same pair fence the companion.
+
+The bounded M3b gate used an exact official Remote thread on Codex 0.151.0/Linux arm64 with literal
+`unix://`, legacy full-turn hydration, the local TUI, and two independent browsers. The TUI remained
+the sole approval/question owner. A provider marker appeared exactly once in both browsers; a browser
+prompt and acknowledgement appeared exactly once in official Remote, the TUI, and both browsers, and
+the sending browser showed its host receipt. While an ephemeral provider transport stayed disabled, a
+browser-B turn completed and the managed daemon, TUI, companion, and both browsers stayed live; provider
+transport then restored to connected. This proves provider-transport isolation, not per-device
+unsubscribe. Richer controls, restart/backfill, and broker-loss remain unclaimed.
 
 ## Development gates
 

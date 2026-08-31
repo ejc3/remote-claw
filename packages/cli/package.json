@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "@remote-claw/clawsec": "workspace:*",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "ws": "8.21.0"
   },
   "scripts": {
     "dev": "tsx src/cli.ts",
@@ -30,6 +31,7 @@
     "@biomejs/biome": "^2.4.16",
     "@types/node": "^25.9.2",
     "@types/qrcode-terminal": "^0.12.2",
+    "@types/ws": "8.18.1",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"

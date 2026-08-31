@@ -69,10 +69,14 @@ function assistantItem(id: string, text: string): CodexThreadItem {
   return { type: "agentMessage", id, text };
 }
 
-function completed(item: CodexThreadItem, threadId = THREAD_ID): CodexInbound {
+function coordinate(turnId: string, itemId: string): string {
+  return JSON.stringify([turnId, itemId]);
+}
+
+function completed(item: CodexThreadItem, threadId = THREAD_ID, turnId = "turn-1"): CodexInbound {
   return {
     kind: "notification",
-    value: { method: "item/completed", params: { threadId, item } },
+    value: { method: "item/completed", params: { threadId, turnId, item } },
   };
 }
 
@@ -80,6 +84,7 @@ class FakeCodexClient implements CodexClient {
   initializeCalls = 0;
   readonly resumeCalls: string[] = [];
   readonly listCalls: Array<{ threadId: string; cursor: string | undefined }> = [];
+  readonly turnListCalls: Array<{ threadId: string; cursor: string | undefined }> = [];
   readonly startCalls: Array<{
     threadId: string;
     clientUserMessageId: string;
@@ -92,9 +97,11 @@ class FakeCodexClient implements CodexClient {
       id: THREAD_ID,
       status: { type: "idle" },
       canAcceptDirectInput: true,
+      historyMode: "paginated",
     },
   };
   pages: CodexItemsPage[] = [{ data: [], nextCursor: null }];
+  turnPages: CodexItemsPage[] = [{ data: [], nextCursor: null }];
   historyBarrier: Promise<void> | null = null;
   readonly buffered: CodexInbound[] = [];
   readonly #live: CodexInbound[] = [];
@@ -125,6 +132,14 @@ class FakeCodexClient implements CodexClient {
     if (this.historyBarrier !== null) await this.historyBarrier;
     const page = this.pages[Math.min(this.listCalls.length - 1, this.pages.length - 1)];
     if (page === undefined) throw new Error("missing fake history page");
+    return structuredClone(page);
+  }
+
+  async listTurnItems(threadId: string, cursor: string | undefined): Promise<CodexItemsPage> {
+    this.turnListCalls.push({ threadId, cursor });
+    if (this.historyBarrier !== null) await this.historyBarrier;
+    const page = this.turnPages[Math.min(this.turnListCalls.length - 1, this.turnPages.length - 1)];
+    if (page === undefined) throw new Error("missing fake turn page");
     return structuredClone(page);
   }
 
@@ -399,8 +414,12 @@ describe("Codex M3a companion", () => {
       { threadId: THREAD_ID, cursor: "page-2" },
     ]);
     if (session === null) throw new Error("driver did not create a session");
-    expect(upstream(session, "user")).toMatchObject([{ uuid: "user-history", local_prompt: true }]);
-    expect(upstream(session, "assistant")).toMatchObject([{ uuid: "assistant-history" }]);
+    expect(upstream(session, "user")).toMatchObject([
+      { uuid: coordinate("turn-1", "user-history"), local_prompt: true },
+    ]);
+    expect(upstream(session, "assistant")).toMatchObject([
+      { uuid: coordinate("turn-1", "assistant-history") },
+    ]);
 
     await stop(ac, run);
     controllers.splice(controllers.indexOf(ac), 1);
@@ -442,14 +461,123 @@ describe("Codex M3a companion", () => {
     await waitFor(() => upstream(launched.session, "assistant").length === 2);
     expect(upstream(launched.session, "user")).toHaveLength(1);
     expect(upstream(launched.session, "assistant").map((item) => item.uuid)).toEqual([
-      "assistant-1",
-      "assistant-2",
+      coordinate("turn-1", "assistant-1"),
+      coordinate("turn-1", "assistant-2"),
     ]);
     expect(client.startCalls).toEqual([]);
     expect(launched.session.closed).toBe(false);
 
     await stop(launched.ac, launched.run);
     controllers.splice(controllers.indexOf(launched.ac), 1);
+  });
+
+  it("hydrates official Remote legacy history without calling its unsupported item pager", async () => {
+    const client = new FakeCodexClient();
+    client.resumeResult.thread.historyMode = "legacy";
+    client.turnPages = [
+      {
+        data: [{ turnId: "turn-legacy", item: userItem("user-legacy", "provider prompt") }],
+        nextCursor: "legacy-page-2",
+      },
+      {
+        data: [
+          { turnId: "turn-legacy", item: assistantItem("assistant-legacy", "provider answer") },
+        ],
+        nextCursor: null,
+      },
+    ];
+
+    const launched = await start(client);
+    controllers.push(launched.ac);
+
+    expect(client.turnListCalls).toEqual([
+      { threadId: THREAD_ID, cursor: undefined },
+      { threadId: THREAD_ID, cursor: "legacy-page-2" },
+    ]);
+    expect(client.listCalls).toEqual([]);
+    expect(upstream(launched.session, "user")).toMatchObject([
+      { uuid: coordinate("turn-legacy", "user-legacy"), local_prompt: true },
+    ]);
+    expect(upstream(launched.session, "assistant")).toMatchObject([
+      { uuid: coordinate("turn-legacy", "assistant-legacy") },
+    ]);
+
+    await stop(launched.ac, launched.run);
+    controllers.splice(controllers.indexOf(launched.ac), 1);
+  });
+
+  it("does not charge ignored text shapes or hidden pages against projected history", async () => {
+    const client = new FakeCodexClient();
+    client.pages = [
+      ...Array.from({ length: 101 }, (_, index) => ({
+        data: [],
+        nextCursor: `hidden-page-${index + 2}`,
+      })),
+      {
+        data: [
+          ...Array.from({ length: 10_001 }, (_, index) => ({
+            turnId: `turn-ignored-${index}`,
+            item: userItem(`ignored-${index}`, "/hidden-command"),
+          })),
+          { turnId: "turn-visible", item: assistantItem("visible", "visible answer") },
+        ],
+        nextCursor: null,
+      },
+    ];
+
+    const launched = await start(client);
+    controllers.push(launched.ac);
+
+    expect(client.listCalls).toHaveLength(102);
+    expect(upstream(launched.session, "user")).toEqual([]);
+    expect(upstream(launched.session, "assistant")).toMatchObject([
+      { uuid: coordinate("turn-visible", "visible") },
+    ]);
+
+    await stop(launched.ac, launched.run);
+    controllers.splice(controllers.indexOf(launched.ac), 1);
+  });
+
+  it("treats item ids as turn-scoped while preserving same-turn mutation fencing", async () => {
+    const client = new FakeCodexClient();
+    client.pages = [
+      {
+        data: [
+          { turnId: "turn-a", item: userItem("item-1", "first prompt") },
+          { turnId: "turn-b", item: assistantItem("item-1", "second answer") },
+        ],
+        nextCursor: null,
+      },
+    ];
+    const launched = await start(client);
+    controllers.push(launched.ac);
+
+    expect(upstream(launched.session, "user")).toMatchObject([
+      { uuid: coordinate("turn-a", "item-1"), local_prompt: true },
+    ]);
+    expect(upstream(launched.session, "assistant")).toMatchObject([
+      { uuid: coordinate("turn-b", "item-1") },
+    ]);
+
+    client.emit(completed(assistantItem("item-1", "changed answer"), THREAD_ID, "turn-b"));
+    await expect(launched.run).resolves.toBe(1);
+    expect(launched.session.closed).toBe(true);
+    controllers.splice(controllers.indexOf(launched.ac), 1);
+  });
+
+  it("fails closed when a projected live item has no turn coordinate", async () => {
+    const launched = await start();
+    launched.client.emit({
+      kind: "notification",
+      value: {
+        method: "item/completed",
+        params: { threadId: THREAD_ID, item: assistantItem("item-1", "answer") },
+      },
+    });
+
+    await expect(launched.run).resolves.toBe(1);
+    expect(launched.session.closed).toBe(true);
+    expect(launched.client.externalThreadRunning).toBe(true);
   });
 
   it("acknowledges a browser prompt only after the exact native user item appears", async () => {
