@@ -1,16 +1,14 @@
 // Inject tests: injectUserText records exactly [stdin loadBuffer, pasteBuffer, sleep, sendKeys Enter] in
-// order; runInjectPump drains a real Session's downstream queue (prompt → paste+Enter, interrupt →
-// Escape), acks after each, and ignores control_response/initialize. The tmux exec is a spy, the
+// order; runInjectPump drains a real Session's downstream queue, excludes prompts from active native
+// turns and their focused permission/question modal,
+// acks unsupported controls without pane input, and ignores control_response/initialize. The tmux exec is a spy, the
 // settle sleep a no-op — no real tmux, no real timers.
 
 import { describe, expect, it } from "vitest";
 import { Session } from "../session.js";
 import {
-  downstreamControlResponse,
-  downstreamSetModel,
   downstreamUserText,
   injectUserText,
-  isInterrupt,
   PASTE_SETTLE_MAX_MS,
   PASTE_SETTLE_MS,
   PASTE_SETTLE_PER_CHAR_MS,
@@ -49,67 +47,11 @@ function spyTmux(): {
   return { tmux: new TmuxCtl(exec), verbs, calls, options };
 }
 
-describe("downstreamUserText / isInterrupt", () => {
+describe("downstreamUserText", () => {
   it("reads the STRING content pushUserInput sets", () => {
     const s = new Session("cse_1", "t", null);
     const ev = s.pushUserInput("hello world");
     expect(downstreamUserText(ev)).toBe("hello world");
-  });
-  it("detects an interrupt control_request", () => {
-    const s = new Session("cse_1", "t", null);
-    expect(isInterrupt(s.pushControlRequest("interrupt"))).toBe(true);
-    expect(isInterrupt(s.pushControlRequest("set_model", { model: "opus" }))).toBe(false);
-    expect(isInterrupt(s.pushUserInput("x"))).toBe(false);
-  });
-});
-
-describe("downstreamControlResponse / downstreamSetModel (pure)", () => {
-  it("extracts {requestId, behavior} from an explicit allow / deny", () => {
-    const s = new Session("cse_1", "t", null);
-    expect(downstreamControlResponse(s.pushControlResponse("r1", "allow"))).toEqual({
-      requestId: "r1",
-      behavior: "allow",
-    });
-    expect(downstreamControlResponse(s.pushControlResponse("r2", "deny"))).toEqual({
-      requestId: "r2",
-      behavior: "deny",
-    });
-  });
-  it("FAILS CLOSED: a malformed/non-allow behavior denies (never auto-approves)", () => {
-    const s = new Session("cse_1", "t", null);
-    const ev = s.pushControlResponse("r3", "allow");
-    // Corrupt the behavior to a non-allow value — the last-gate guard must resolve it to deny, not allow.
-    (ev.payload.response as { response: { behavior: unknown } }).response.behavior = "maybe";
-    expect(downstreamControlResponse(ev)).toEqual({ requestId: "r3", behavior: "deny" });
-  });
-  it("carries AskUserQuestion updatedInput {questions, answers} on an ALLOW (#42)", () => {
-    const s = new Session("cse_1", "t", null);
-    const questions = [{ question: "Which name?", header: "Name", options: [{ label: "Orion" }] }];
-    const answers = { "Which name?": "Orion" };
-    // pushControlResponse(extra) builds response.updatedInput = {questions, answers} (the relay path).
-    const ev = s.pushControlResponse("askq-1", "allow", { toolUseId: "tu_q", answers, questions });
-    expect(downstreamControlResponse(ev)).toEqual({
-      requestId: "askq-1",
-      behavior: "allow",
-      updatedInput: { questions, answers },
-    });
-  });
-  it("DROPS updatedInput on a deny (a denied tool never runs, so it carries no answers)", () => {
-    const s = new Session("cse_1", "t", null);
-    const ev = s.pushControlResponse("askq-2", "deny", { answers: { q: "a" } });
-    // session builds updatedInput regardless; the extractor must strip it on deny (fail-closed + clean).
-    expect(downstreamControlResponse(ev)).toEqual({ requestId: "askq-2", behavior: "deny" });
-  });
-  it("returns null for a non-control_response", () => {
-    const s = new Session("cse_1", "t", null);
-    expect(downstreamControlResponse(s.pushUserInput("x"))).toBeNull();
-    expect(downstreamControlResponse(s.pushControlRequest("interrupt"))).toBeNull();
-  });
-  it("downstreamSetModel reads a set_model's model, else null", () => {
-    const s = new Session("cse_1", "t", null);
-    expect(downstreamSetModel(s.pushControlRequest("set_model", { model: "opus" }))).toBe("opus");
-    expect(downstreamSetModel(s.pushControlRequest("interrupt"))).toBeNull();
-    expect(downstreamSetModel(s.pushUserInput("x"))).toBeNull();
   });
 });
 
@@ -132,6 +74,14 @@ describe("injectUserText", () => {
     // TUI parse had false-"submitted" reads that silently dropped prompts (codex review).
     expect(order).toEqual(["load-buffer", "paste-buffer", "sleep", "send-keys"]);
     expect(inputs).toEqual(["hi", undefined, undefined]);
+  });
+
+  it("rejects pane-active controls before loading the tmux buffer", async () => {
+    const { tmux, verbs } = spyTmux();
+    await expect(injectUserText(tmux, "rc-cse_x", "x\u001b[201~/permissions")).rejects.toThrow(
+      /pane-unsafe control/,
+    );
+    expect(verbs).toEqual([]);
   });
 });
 
@@ -204,11 +154,17 @@ describe("runInjectPump", () => {
     expect(await replayedEventIds(s, ev.eventId)).toBe(false); // acked, so not replayed
   });
 
-  it("maps interrupt → Escape and acks it", async () => {
+  it("acks every unsupported control without sending pane keys", async () => {
     const s = new Session("cse_1", "t", null);
     const { tmux, calls } = spyTmux();
     const ac = new AbortController();
-    s.pushControlRequest("interrupt");
+    const events = [
+      s.pushControlRequest("interrupt"),
+      s.pushControlRequest("set_model", { model: "opus" }),
+      s.pushControlRequest("set_mode", { mode: "plan" }),
+      s.pushControlRequest("end"),
+    ];
+    s.pushUserInput("after controls");
     const pump = runInjectPump({
       session: s,
       tmux,
@@ -216,11 +172,62 @@ describe("runInjectPump", () => {
       signal: ac.signal,
       sleep: noSleep,
     });
-    await waitFor(() => calls.some((c) => c[0] === "send-keys" && c.includes("Escape")));
+    await waitFor(() => calls.some((c) => c[0] === "send-keys" && c.includes("Enter")));
     ac.abort();
     s.wake();
     await pump;
-    expect(calls.some((c) => c[0] === "send-keys" && c.includes("Escape"))).toBe(true);
+    expect(calls.some((c) => c.includes("Escape"))).toBe(false);
+    expect(calls.some((c) => c.includes("/model"))).toBe(false);
+    for (const event of events) expect(await replayedEventIds(s, event.eventId)).toBe(false);
+  });
+
+  it("rejects slash-prefixed text at the pane boundary", async () => {
+    const s = new Session("cse_1", "t", null);
+    const { tmux, verbs } = spyTmux();
+    const ac = new AbortController();
+    const slash = s.pushUserInput(" \n /permissions");
+    const after = s.pushUserInput("ordinary text");
+    const pump = runInjectPump({
+      session: s,
+      tmux,
+      target: "rc-cse_1",
+      signal: ac.signal,
+      sleep: noSleep,
+    });
+    await waitFor(() => verbs.includes("send-keys"));
+    ac.abort();
+    s.wake();
+    await pump;
+    expect(verbs).toEqual(["load-buffer", "paste-buffer", "send-keys"]);
+    expect(await replayedEventIds(s, slash.eventId)).toBe(false);
+    expect(await replayedEventIds(s, after.eventId)).toBe(false);
+  });
+
+  it("rejects C0/C1 controls at the pane boundary while preserving TAB, LF, and Unicode", async () => {
+    const s = new Session("cse_1", "t", null);
+    const { tmux, verbs, options } = spyTmux();
+    const ac = new AbortController();
+    const escapeControl = s.pushUserInput("break out\u001b[201~/permissions");
+    const carriageReturn = s.pushUserInput("submit\rnow");
+    const del = s.pushUserInput("delete\u007f");
+    const c1 = s.pushUserInput("colour\u009b31m");
+    const safe = s.pushUserInput("line one\nline two\t✓");
+    const pump = runInjectPump({
+      session: s,
+      tmux,
+      target: "rc-cse_1",
+      signal: ac.signal,
+      sleep: noSleep,
+    });
+    await waitFor(() => verbs.includes("send-keys"));
+    ac.abort();
+    s.wake();
+    await pump;
+    expect(verbs).toEqual(["load-buffer", "paste-buffer", "send-keys"]);
+    expect(options[0]?.stdin).toBe("line one\nline two\t✓");
+    for (const event of [escapeControl, carriageReturn, del, c1, safe]) {
+      expect(await replayedEventIds(s, event.eventId)).toBe(false);
+    }
   });
 
   it("acks (but does not type) initialize and control_response", async () => {
@@ -247,85 +254,6 @@ describe("runInjectPump", () => {
     // initialize was acked (review #5) → not replayed.
     expect(init).not.toBeNull();
     if (init) expect(await replayedEventIds(s, init.eventId)).toBe(false);
-  });
-
-  it("verb fidelity (B2): set_model → types `/model <id>` and records it in the ledger", async () => {
-    const s = new Session("cse_1", "t", null);
-    const { tmux, verbs, options } = spyTmux();
-    const ac = new AbortController();
-    const recorded: string[] = [];
-    s.pushControlRequest("set_model", { model: "opus" });
-    const pump = runInjectPump({
-      session: s,
-      tmux,
-      target: "rc-cse_1",
-      signal: ac.signal,
-      sleep: noSleep,
-      onInjected: (t) => recorded.push(t),
-    });
-    await waitFor(() => recorded.length > 0);
-    ac.abort();
-    s.wake();
-    await pump;
-    // The slash command was pasted + submitted like a prompt …
-    expect(verbs).toEqual(["load-buffer", "paste-buffer", "send-keys"]);
-    expect(options.find((option) => option?.stdin !== undefined)?.stdin).toBe("/model opus");
-    // … and recorded in the local-prompt ledger so claude's transcript echo of it is suppressed.
-    expect(recorded).toEqual(["/model opus"]);
-  });
-
-  it("permission mirroring (B2): a DENY (even with answers) invokes onDecision with behavior 'deny' and NO updatedInput", async () => {
-    const s = new Session("cse_1", "t", null);
-    const { tmux, verbs } = spyTmux();
-    const ac = new AbortController();
-    const decisions: Array<{ id: string; behavior: string; updatedInput: unknown }> = [];
-    // Push a DENY that nonetheless carries answers (session builds updatedInput regardless of behavior) —
-    // the pump must surface behavior 'deny' and DROP the updatedInput (a denied tool never runs).
-    s.pushControlResponse("tu_42", "deny", { answers: { q: "a" } });
-    s.pushUserInput("after"); // a real prompt as a deterministic drain marker (processed AFTER the response)
-    const pump = runInjectPump({
-      session: s,
-      tmux,
-      target: "rc-cse_1",
-      signal: ac.signal,
-      sleep: noSleep,
-      onDecision: (id, behavior, updatedInput) => {
-        decisions.push({ id, behavior, updatedInput });
-      },
-    });
-    await waitFor(() => verbs.includes("send-keys")); // the "after" prompt drained ⇒ the response was handled
-    ac.abort();
-    s.wake();
-    await pump;
-    expect(decisions).toEqual([{ id: "tu_42", behavior: "deny", updatedInput: undefined }]);
-  });
-
-  it("permission mirroring (B2): an AskUserQuestion allow forwards updatedInput to onDecision (#42)", async () => {
-    const s = new Session("cse_1", "t", null);
-    const { tmux, verbs } = spyTmux();
-    const ac = new AbortController();
-    const questions = [{ question: "Which name?", header: "Name", options: [{ label: "Orion" }] }];
-    const answers = { "Which name?": "Orion" };
-    const seen: Array<{ id: string; behavior: string; updatedInput: unknown }> = [];
-    s.pushControlResponse("askq-9", "allow", { toolUseId: "askq-9", answers, questions });
-    s.pushUserInput("after"); // deterministic drain marker
-    const pump = runInjectPump({
-      session: s,
-      tmux,
-      target: "rc-cse_1",
-      signal: ac.signal,
-      sleep: noSleep,
-      onDecision: (id, behavior, updatedInput) => {
-        seen.push({ id, behavior, updatedInput });
-      },
-    });
-    await waitFor(() => verbs.includes("send-keys"));
-    ac.abort();
-    s.wake();
-    await pump;
-    expect(seen).toEqual([
-      { id: "askq-9", behavior: "allow", updatedInput: { questions, answers } },
-    ]);
   });
 
   it("retries the PASTE phase as a unit and acks once it lands (codex #4)", async () => {
@@ -413,17 +341,14 @@ describe("runInjectPump", () => {
   it.each([
     "paste",
     "submit",
-    "interrupt",
   ] as const)("fails closed after one unknown %s mutation attempt", async (phase) => {
     const s = new TrackingSession("cse_1", "t", null);
-    const event =
-      phase === "interrupt" ? s.pushControlRequest("interrupt") : s.pushUserInput("once only");
+    const event = s.pushUserInput("once only");
     let mutationAttempts = 0;
     const exec: TmuxExec = (args) => {
       const isAmbiguousMutation =
         (phase === "paste" && args[0] === "paste-buffer") ||
-        (phase === "submit" && args[0] === "send-keys" && args.includes("Enter")) ||
-        (phase === "interrupt" && args[0] === "send-keys" && args.includes("Escape"));
+        (phase === "submit" && args[0] === "send-keys" && args.includes("Enter"));
       if (isAmbiguousMutation) {
         // Model the dangerous order: the server applies the mutation, then its completion is lost.
         mutationAttempts += 1;

@@ -10,6 +10,7 @@
 // `followDownstream` would REPLAY old prompts/controls on a reclaimed stream unless we call
 // `session.ack(eventId)` after each SUCCESSFUL inject — including the leading `initialize`.
 
+import { isTmuxPaneSafeText } from "../driver.js";
 import type { RcEvent, Session } from "../session.js";
 import { type TmuxCtl, TmuxError } from "./tmuxctl.js";
 
@@ -50,51 +51,6 @@ export function downstreamUserText(ev: RcEvent): string {
   return typeof message?.content === "string" ? message.content : "";
 }
 
-/** True if a downstream control_request is an `interrupt` (the one verb the tmux pane can honor — ESC). */
-export function isInterrupt(ev: RcEvent): boolean {
-  if (ev.eventType !== "control_request") return false;
-  const req = ev.payload.request as { subtype?: unknown } | undefined;
-  return req?.subtype === "interrupt";
-}
-
-/** Extract the model id from a downstream `set_model` control_request (the verb fidelity path, B2): the
- *  driver injects `/model <id>` into the pane. Returns the model string, or null if this isn't a
- *  well-formed set_model. `pushControlRequest("set_model", { model })` sets payload.request.model. */
-export function downstreamSetModel(ev: RcEvent): string | null {
-  if (ev.eventType !== "control_request") return null;
-  const req = ev.payload.request as { subtype?: unknown; model?: unknown } | undefined;
-  if (req?.subtype !== "set_model") return null;
-  return typeof req.model === "string" && req.model !== "" ? req.model : null;
-}
-
-/** Extract { requestId, behavior, updatedInput? } from a downstream `control_response` (the
- *  permission-mirroring answer, B2): the viewer's grant/deny rides this, and the driver writes the matching
- *  decision file the blocked PreToolUse hook is polling. `pushControlResponse` sets
- *  payload.response.{request_id,response.behavior} and, for an AskUserQuestion answer (#42),
- *  response.response.updatedInput = {questions, answers}. Returns null if it isn't a well-formed
- *  control_response. */
-export function downstreamControlResponse(
-  ev: RcEvent,
-): { requestId: string; behavior: "allow" | "deny"; updatedInput?: unknown } | null {
-  if (ev.eventType !== "control_response") return null;
-  const resp = ev.payload.response as
-    | { request_id?: unknown; response?: { behavior?: unknown; updatedInput?: unknown } }
-    | undefined;
-  const requestId = resp?.request_id;
-  if (typeof requestId !== "string" || requestId === "") return null;
-  // Fail CLOSED: only an explicit "allow" allows; anything else — "deny", or a malformed/absent behavior —
-  // denies, so a garbled control_response can never auto-approve a tool. The relay normalizes behavior to
-  // exactly allow|deny before this, so a real viewer grant is always "allow"; this is the last-gate guard.
-  const behavior = resp?.response?.behavior === "allow" ? "allow" : "deny";
-  // AskUserQuestion (#42): carry the {questions, answers} the relay built so the PreToolUse helper re-emits
-  // it as hookSpecificOutput.updatedInput and claude proceeds with the viewer's answers instead of
-  // prompting in the pane. Only meaningful on ALLOW — a deny never carries it (a denied tool doesn't run).
-  const updatedInput = resp?.response?.updatedInput;
-  return behavior === "allow" && updatedInput !== undefined
-    ? { requestId, behavior, updatedInput }
-    : { requestId, behavior };
-}
-
 /**
  * PHASE 1 of injection — get the text into the pane's input box: load it into a named buffer, then
  * BRACKETED-paste it (so multiline / backticks / special chars don't submit early). `load-buffer` is
@@ -108,6 +64,9 @@ export async function loadAndPaste(
   text: string,
   buffer: string = INJECT_BUFFER,
 ): Promise<void> {
+  if (!isTmuxPaneSafeText(text)) {
+    throw new TypeError("refusing pane-unsafe control character in tmux prompt");
+  }
   await tmux.setBuffer(buffer, text);
   await tmux.pasteBuffer(target, buffer);
 }
@@ -202,15 +161,19 @@ export interface InjectPumpOptions {
   signal: AbortSignal;
   /** Per-session paste-buffer name (codex review #5). Defaults to INJECT_BUFFER. */
   buffer?: string;
+  /** Production tmux path: one tmux-owned helper claims the gate, bracket-pastes, settles, submits,
+   *  and releases its hook-shared kernel lock on exit. It returns true only when Enter was
+   *  authoritatively applied. The lower-level path remains injectable for focused primitive tests. */
+  injectAtomically?: (text: string) => Promise<boolean>;
   /** Injectable settle delay (tests pass a no-op). */
   sleep?: (ms: number) => Promise<void>;
   /** Optional diagnostics callback (driver wires its tracer). `phase` is which retried step failed
-   *  ("paste" = setBuffer+pasteBuffer unit; "submit" = Enter; "interrupt" = Escape). Unknown
+   *  ("paste" = setBuffer+pasteBuffer unit; "submit" = Enter). Unknown
    *  mutation outcomes are reported once and then close the remote Session; only safe failures retry. */
   onError?: (
     event: string,
     error: unknown,
-    info?: { attempt: number; phase: "paste" | "submit" | "interrupt" },
+    info?: { attempt: number; phase: "paste" | "submit" },
   ) => void;
   /** Called with a prompt's text right AFTER it is successfully submitted (Enter sent, ack'd), so the
    *  driver records it in its local-prompt ledger. Recording AFTER submit keeps this display-side
@@ -220,26 +183,14 @@ export interface InjectPumpOptions {
    *  echo is briefly mis-tagged as a local prompt (a harmless double-show in the viewer), never a
    *  wrong/dropped command. */
   onInjected?: (text: string) => void;
-  /** Called on a `control_response` (a viewer permission answer) when permission MIRRORING is on (B2):
-   *  the driver writes the decision file the blocked PreToolUse hook is polling, keyed by request_id (==
-   *  the can_use_tool gate's id == the tool_use_id). `updatedInput` is present only for an AskUserQuestion
-   *  allow (#42): the {questions, answers} the helper re-emits as hookSpecificOutput.updatedInput. When
-   *  absent (mirroring off), control_responses are just acked. May be async; awaited before the ack. */
-  onDecision?: (
-    requestId: string,
-    behavior: "allow" | "deny",
-    updatedInput?: unknown,
-  ) => void | Promise<void>;
 }
 
 /**
  * Drain the downstream queue into the pane until `signal` aborts. For each event:
  *   • `user`            → loadAndPaste (phase 1) then submitPrompt (phase 2), then `session.ack`.
- *   • `control_request` `interrupt` → send Escape, then ack.
- *   • `control_request` `set_model` → type `/model <id>` into the pane (capabilities.controls.setModel=true).
- *   • `control_request` (other verbs: set_permission_mode/end) → no faithful pane analogue; ack so a
- *      reclaimed stream doesn't replay it (capabilities.controls.setMode/end=false documents this).
- *   • `control_request` `initialize`, `control_response` → no pane action, but ACK (review #5) so the
+ *   • `control_request`, `initialize`, and `control_response` → no pane action, but ACK so a
+ *      reclaimed stream doesn't replay them (the capability vector declares every control false).
+ *      ACKing initialize also prevents the leading setup event from replaying on reconnect (review #5).
  *      leading initialize isn't replayed on reconnect.
  *
  * RETRY DISCIPLINE (step-aware and application-aware):
@@ -247,7 +198,7 @@ export interface InjectPumpOptions {
  * pump will NOT redeliver a failed inject. We therefore retry IN PLACE (serially — the for-await is
  * strictly sequential, so a burst can't interleave). Crucially the phases retry DIFFERENTLY:
  *   - `load-buffer` may retry after any failure because replacing the same named buffer is idempotent.
- *   - `paste-buffer`, Enter, and Escape retry only after tmux proves `not-applied`.
+ *   - `paste-buffer` and Enter retry only after tmux proves `not-applied`.
  *   - An unknown mutation outcome is never retried or ACKed. It closes this Session and ends the inject
  *     pump normally, retiring the remote projection without turning broker ambiguity into pane failure.
  * Safe retries continue until success or abort; heartbeat ticks (`null`) are ignored.
@@ -267,6 +218,28 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
       // is a no-op, not a junk turn pasted into the pane. Still acked (it's "handled").
       if (text.trim() === "") {
         session.ack(ev.eventId);
+        continue;
+      }
+      // Slash commands can open or mutate native TUI surfaces (`/model`, `/permissions`, …). The relay
+      // and viewer reject them too; keep the irreversible pane boundary independently fail-closed.
+      if (text.trimStart().startsWith("/")) {
+        session.ack(ev.eventId);
+        continue;
+      }
+      // Defense at the irreversible pane boundary: even an attachment-generated prompt or a direct
+      // Session producer that bypassed relay admission cannot smuggle ESC / a bracketed-paste terminator
+      // or another raw C0/C1 terminal control through `tmux load-buffer`. TAB/LF remain valid multiline
+      // text. Suppress+ack so a reclaimed stream cannot replay the rejected mutation forever.
+      if (!isTmuxPaneSafeText(text)) {
+        session.ack(ev.eventId);
+        continue;
+      }
+      if (opts.injectAtomically !== undefined) {
+        const applied = await opts.injectAtomically(text);
+        if (applied) {
+          session.ack(ev.eventId);
+          opts.onInjected?.(text);
+        }
         continue;
       }
       // Phase 1: get the text into the box (retry as a unit). Phase 2: submit it (retry Enter alone).
@@ -296,55 +269,9 @@ export async function runInjectPump(opts: InjectPumpOptions): Promise<void> {
         session.ack(ev.eventId);
         opts.onInjected?.(text);
       }
-    } else if (isInterrupt(ev)) {
-      const sent = await retryInjectStep(
-        () => tmux.sendKeys(target, "Escape"),
-        session,
-        signal,
-        sleep,
-        (attempt, error) => opts.onError?.(ev.eventType, error, { attempt, phase: "interrupt" }),
-        "tmux interrupt application outcome unknown",
-      );
-      if (sent) session.ack(ev.eventId);
-    } else if (downstreamSetModel(ev) !== null) {
-      // Verb fidelity (B2): a viewer `set_model` → type `/model <id>` into the pane (claude's documented
-      // one-shot model switch). Injected via the SAME paste+submit path as a prompt and recorded in the
-      // local-prompt ledger so claude's transcript echo of the slash command is suppressed (the viewer
-      // drove it from the ⋯ sheet, not as a typed message).
-      const text = `/model ${downstreamSetModel(ev)}`;
-      const pasted = await retryInjectStep(
-        () => loadAndPaste(tmux, target, text, buffer),
-        session,
-        signal,
-        sleep,
-        (attempt, error) => opts.onError?.("set_model", error, { attempt, phase: "paste" }),
-        "tmux model paste application outcome unknown",
-      );
-      if (!pasted) continue;
-      const submitted = await retryInjectStep(
-        () => submitPrompt(tmux, target, text, sleep),
-        session,
-        signal,
-        sleep,
-        (attempt, error) => opts.onError?.("set_model", error, { attempt, phase: "submit" }),
-        "tmux model submit application outcome unknown",
-      );
-      if (submitted) {
-        session.ack(ev.eventId);
-        opts.onInjected?.(text);
-      }
-    } else if (ev.eventType === "control_response" && opts.onDecision) {
-      // Permission mirroring (B2): the viewer's grant/deny → write the decision file the blocked PreToolUse
-      // hook polls. ACK after so a reclaimed stream doesn't replay the answer (a second, redundant write).
-      // For an AskUserQuestion allow, `updatedInput` ({questions, answers}, #42) rides along — the helper
-      // re-emits it as hookSpecificOutput.updatedInput so claude proceeds with the viewer's chosen answers
-      // instead of falling back to its own in-pane question flow.
-      const dec = downstreamControlResponse(ev);
-      if (dec !== null) await opts.onDecision(dec.requestId, dec.behavior, dec.updatedInput);
-      session.ack(ev.eventId);
     } else {
-      // control_request (initialize / set_mode / end) and an unhandled control_response (mirroring off):
-      // no pane analogue, but ACK so followDownstream won't replay them after a stream reclaim.
+      // control_request and control_response: no pane analogue, but ACK so
+      // followDownstream won't replay them after a stream reclaim. Native/local Claude owns permissions.
       session.ack(ev.eventId);
     }
   }

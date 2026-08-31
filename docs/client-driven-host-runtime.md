@@ -50,7 +50,8 @@ does not mirror the changing acceptance ledger; current evidence and remaining g
 [release roadmap](release-finish-line.md).
 
 This experiment deliberately does not resurrect the generalized runtime or remove broader OpenCode
-capability/tuple work, post-M3 Codex controls/restart/other-tuples work, tmux, and provider work. If the
+capability/tuple work, post-M3 Codex controls/restart/other-tuples work, later tmux tuples/controls, and
+provider work. If the
 provider-native API cannot meet a requirement, record the exact failure first and design only the
 missing mechanism.
 

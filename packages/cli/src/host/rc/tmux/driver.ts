@@ -6,9 +6,9 @@
 // Claude's private SessionStart marker, constructs every native pump, then crosses one readiness latch
 // to publish truthful capabilities and make the broker bridge visible.
 //
-// Because the transcript's `message.content` blocks are byte-identical to the relay's input and the
-// relay is a pure function of (Session, BrokerClient), this is a PURE ADDITION: the relay, the broker
-// router/backends, and the web viewer are unchanged.
+// The transcript's `message.content` blocks are byte-identical to the relay's input. The relay and
+// viewer additionally enforce this driver's deliberately narrow capability and pane-text boundary;
+// broker routing/backends remain shared with the other drivers.
 //
 // Review findings handled here: #2 dedup (uuid set before pushUpstream), #5 ack (in the inject pump),
 // #6 local-prompt visibility (a prompt typed into the LOCAL tmux TUI is surfaced via the local-prompt
@@ -16,29 +16,22 @@
 // injected is tagged `local_prompt` so the relay renders it), #9 strict inject queue.
 
 import { randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, open, readFile, rename, rm } from "node:fs/promises";
+import { chmod, link, mkdir, mkdtemp, open, readFile, rename, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import { type Driver, type DriverContext, TMUX_HARNESS } from "../driver.js";
 import { ReadyBridge } from "../drivers/ready-bridge.js";
 import { RelayCore, type Session } from "../session.js";
-import { INJECT_BUFFER, runInjectPump } from "./inject.js";
-import {
-  decisionFileContent,
-  isSafeToolUseId,
-  PRE_TOOL_USE_HELPER_SOURCE,
-  parsePermRequest,
-  preToolUseHookFragment,
-} from "./permhook.js";
+import { INJECT_BUFFER, runInjectPump, settleMs } from "./inject.js";
 import {
   extractSettingsArg,
-  type HookFragment,
   insertSettingsArg,
   mergeHooksIntoSettings,
   parseSentinel,
   type SessionHookEvent,
   sessionHookFragment,
+  turnGateHookFragment,
 } from "./sessionhook.js";
 import { StatusTracker } from "./status.js";
 import { realTmuxExec, TmuxCtl, type TmuxExec, type TmuxSessionState } from "./tmuxctl.js";
@@ -56,19 +49,243 @@ import {
   transcriptToPayload,
   userMessageText,
 } from "./transcript.js";
-import { ensureCwdTrusted } from "./trust.js";
 
-/** Capabilities. With permission MIRRORING on (default, B2) the driver surfaces structured can_use_tool
- *  gates via the injected PreToolUse hook (so structuredPermissions=true); with it off (the opt-out flag)
- *  it runs `--dangerously-skip-permissions` and auto-approves (false). interrupt works via ESC and
- *  set_model via a `/model <alias>` inject; set_mode/end have no faithful pane analogue so they stay
- *  false (the viewer disables those controls). Transcript timing only gives heuristic status, so the
- *  capability stays false. Attachments arrive as relay-owned `user` injects. */
-export function tmuxCapabilities(mirrorPermissions: boolean): Driver["capabilities"] {
+/** Whether argv itself explicitly disabled Claude's native permission checks. Settings and managed
+ * policy are resolved from Claude's transcript after startup; this helper never tries to emulate them. */
+export function tmuxPermissionPosture(
+  args: readonly string[],
+): NonNullable<Driver["capabilities"]["permissionPosture"]> {
+  const separator = args.indexOf("--");
+  const options = separator === -1 ? args : args.slice(0, separator);
+  for (let i = 0; i < options.length; i++) {
+    const arg = options[i];
+    if (arg === "--dangerously-skip-permissions") return "bypassed";
+    if (arg === "--permission-mode=bypassPermissions") return "bypassed";
+    if (arg === "--permission-mode" && options[i + 1] === "bypassPermissions") return "bypassed";
+  }
+  return "local";
+}
+
+function tmuxRuntimePermissionMode(
+  event: SessionHookEvent,
+  args: readonly string[],
+  transcript: string,
+  transcriptNotBefore?: number,
+): string | null {
+  const options = args.slice(0, args.indexOf("--") === -1 ? args.length : args.indexOf("--"));
+  const directBypass = options.some(
+    (arg, index) =>
+      arg === "--dangerously-skip-permissions" ||
+      arg === "--permission-mode=bypassPermissions" ||
+      (arg === "--permission-mode" && options[index + 1] === "bypassPermissions"),
+  );
+  if (directBypass) return "bypassPermissions";
+  if (event.permissionMode !== undefined && event.permissionMode !== "") {
+    return event.permissionMode;
+  }
+  // A resumed transcript contains permission records from prior launches. Without a caller-supplied
+  // current-launch boundary, none of that history is evidence of the mode Claude resolved *now*.
+  return transcriptNotBefore === undefined
+    ? null
+    : transcriptPermissionMode(transcript, event.sessionId, transcriptNotBefore);
+}
+
+/** Read Claude's own resolved mode from timestamped transcript evidence at/after a caller-owned
+ * boundary. `null` is retained for focused pure callers that have separately proved the bytes were
+ * appended live; the tmux driver itself always supplies its per-attach clock boundary. Current Claude's
+ * bare `permission-mode` record has no timestamp, so attached history never promotes it. */
+function transcriptPermissionMode(
+  text: string,
+  sessionId: string,
+  notBefore: number | null,
+): string | null {
+  let latest: string | null = null;
+  for (const line of text.split("\n")) {
+    try {
+      const value = JSON.parse(line) as {
+        type?: unknown;
+        permissionMode?: unknown;
+        sessionId?: unknown;
+        timestamp?: unknown;
+      };
+      const timestamp =
+        typeof value.timestamp === "string" ? Date.parse(value.timestamp) : Number.NaN;
+      if (
+        (value.type === "permission-mode" || value.type === "user") &&
+        typeof value.permissionMode === "string" &&
+        value.permissionMode !== "" &&
+        (typeof value.sessionId !== "string" || value.sessionId === sessionId) &&
+        (notBefore === null || (Number.isFinite(timestamp) && timestamp >= notBefore))
+      ) {
+        latest = value.permissionMode;
+      }
+    } catch {
+      // A blank, partial, or future record is not evidence of local enforcement.
+    }
+  }
+  return latest;
+}
+
+type TurnGateRelease = "absent" | "preserved-newer" | "released";
+
+/** Atomically reconcile one native completion with the content-free turn gate. The gate mtime is its
+ * generation boundary: UserPromptSubmit updates it before every turn, while Claude timestamps
+ * `turn_duration` only after the full model loop and continuation hooks finish. Rename first so a newer
+ * hook or tmux-owned input helper creates a distinct pathname; preserve/restore any gate whose mtime is
+ * not strictly older than this completion. External writers are safe on either side of the rename. */
+export async function releaseTurnGateForCompletion(
+  gatePath: string,
+  reconcilePath: string,
+  completedAt: number,
+): Promise<TurnGateRelease> {
+  try {
+    await rename(gatePath, reconcilePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+    throw error;
+  }
+
+  const restore = async (): Promise<void> => {
+    try {
+      await link(reconcilePath, gatePath);
+    } catch (error) {
+      // A concurrent UserPromptSubmit created a newer gate after our rename; preserve that pathname.
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    await rm(reconcilePath, { force: true });
+  };
+
+  let gateMtime: number;
+  try {
+    gateMtime = (await stat(reconcilePath)).mtimeMs;
+  } catch (error) {
+    // Unknown generation is never permission to open the pane. Restore the gate, then retire this
+    // remote injection path through the caller's normal error boundary.
+    await restore();
+    throw error;
+  }
+  if (!(gateMtime < completedAt)) {
+    await restore();
+    return "preserved-newer";
+  }
+  await rm(reconcilePath, { force: true });
+  return "released";
+}
+
+type NativeTurnFact = { at: number; kind: "blocked" | "cancelled" | "completed" };
+
+const INTERRUPTED_MARKERS = new Set([
+  "[Request interrupted by user]",
+  "[Request interrupted by user for tool use]",
+]);
+
+function exactInterruptedMarker(content: unknown): boolean {
+  if (!Array.isArray(content) || content.length !== 1) return false;
+  const block = content[0];
+  return (
+    typeof block === "object" &&
+    block !== null &&
+    (block as { type?: unknown }).type === "text" &&
+    typeof (block as { text?: unknown }).text === "string" &&
+    INTERRUPTED_MARKERS.has((block as { text: string }).text)
+  );
+}
+
+/** Exact Claude 2.1.237 native-turn terminal facts from the current main transcript. Normal completion
+ * is the post-loop `turn_duration`. A user/remote cancel carries one of two exact marker payloads plus a
+ * non-empty `interruptedMessageId` only after Claude's abort signal is latched; that signal prevents any
+ * later tool/permission/question work. A hook-rejected UserPromptSubmit has one of two exact
+ * informational-warning families: command-hook blocking, or a successful sibling hook's structured
+ * `{continue:false}` stop. Claude can emit either warning before all concurrent hooks finish, so the
+ * caller must fail-stop the remote projection rather than guess which gate generation to release.
+ * Completion/cancellation generation reconciliation makes old backfill harmless while retaining a
+ * newer prompt's gate. */
+export function nativeTurnFact(
+  line: string,
+  sessionId: string,
+  notBefore: number,
+): NativeTurnFact | null {
+  try {
+    const value = JSON.parse(line) as {
+      type?: unknown;
+      subtype?: unknown;
+      timestamp?: unknown;
+      sessionId?: unknown;
+      isSidechain?: unknown;
+      interruptedMessageId?: unknown;
+      level?: unknown;
+      preventContinuation?: unknown;
+      content?: unknown;
+      message?: { role?: unknown; content?: unknown };
+    };
+    const timestamp =
+      typeof value.timestamp === "string" ? Date.parse(value.timestamp) : Number.NaN;
+    if (
+      (typeof value.sessionId === "string" && value.sessionId !== sessionId) ||
+      value.isSidechain === true ||
+      !Number.isFinite(timestamp) ||
+      timestamp < notBefore
+    ) {
+      return null;
+    }
+    if (value.type === "system" && value.subtype === "turn_duration") {
+      return { at: timestamp, kind: "completed" };
+    }
+    const exactHookRejection =
+      typeof value.content === "string" &&
+      (value.content.startsWith("UserPromptSubmit operation blocked by hook:\n") ||
+        value.content === "Operation stopped by hook" ||
+        value.content.startsWith("Operation stopped by hook: "));
+    if (
+      value.type === "system" &&
+      value.subtype === "informational" &&
+      value.level === "warning" &&
+      value.preventContinuation === true &&
+      exactHookRejection
+    ) {
+      return { at: timestamp, kind: "blocked" };
+    }
+    if (
+      value.type === "user" &&
+      value.message?.role === "user" &&
+      exactInterruptedMarker(value.message.content) &&
+      typeof value.interruptedMessageId === "string" &&
+      value.interruptedMessageId !== ""
+    ) {
+      return { at: timestamp, kind: "cancelled" };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Prefer Claude's resolved mode from SessionStart or its transcript. If neither is readable, report
+ * unknown rather than make a false local or bypass claim. Direct bypass flags win over records. */
+export function tmuxRuntimePermissionPosture(
+  event: SessionHookEvent,
+  args: readonly string[] = [],
+  transcript = "",
+  transcriptNotBefore?: number,
+): NonNullable<Driver["capabilities"]["permissionPosture"]> {
+  const resolved = tmuxRuntimePermissionMode(event, args, transcript, transcriptNotBefore);
+  if (resolved === null) return "unknown";
+  return resolved === "bypassPermissions" ? "bypassed" : "local";
+}
+
+/** Honest lower-fidelity capabilities. Claude's native pane owns permissions and questions unless the
+ * caller explicitly bypassed them. Browser input is excluded from an already-active native turn and
+ * the permission/question modal reached within it; idle editor and generic idle-modal concurrency are
+ * not isolated. Raw controls and slash commands stay local. Transcript timing only gives heuristic
+ * status, so that capability stays false. */
+export function tmuxCapabilities(
+  permissionPosture: NonNullable<Driver["capabilities"]["permissionPosture"]> = "local",
+): Driver["capabilities"] {
   return {
-    structuredPermissions: mirrorPermissions,
+    structuredPermissions: false,
+    permissionPosture,
     status: false,
-    controls: { interrupt: true, setModel: true, setMode: false, end: false },
+    controls: { interrupt: false, setModel: false, setMode: false, end: false },
     attachments: true,
   };
 }
@@ -102,12 +319,9 @@ const PROXY_CA_VARS = [
   "NODE_EXTRA_CA_CERTS",
 ] as const;
 
-/** Same stale-server defense for CLAUDE_CONFIG_DIR — but here it's also a COHERENCE requirement: claude
- *  reads this var to locate `.claude.json`, and so does our folder-trust writer (trust.ts). If the
- *  wrapper's env sets it, buildChildEnv passes it through (`-e`) so the pane + the writer agree; if it
- *  does NOT, we must unset it for the child so a stale value baked into a PRE-EXISTING tmux server's env
- *  can't make the pane read a DIFFERENT `.claude.json` than the one we seeded trust into (→ a hung pane
- *  on the startup trust gate). The writer is fed the same `parentEnv` value (see the trust call site). */
+/** Same stale-server defense for CLAUDE_CONFIG_DIR. If the wrapper's env sets it, buildChildEnv passes it
+ * through so the pane honors the caller's configuration; if it does not, we unset it so a stale value in
+ * a pre-existing tmux server cannot redirect Claude to an unrelated config directory. */
 const CHILD_CONFIG_VARS = ["CLAUDE_CONFIG_DIR"] as const;
 
 /** Build the child env: inherit the parent env and scrub only the stub-gotcha ids + host-only secrets
@@ -211,23 +425,11 @@ export interface TmuxDriverDeps {
   /** Override the private readiness-marker path (tests). When ongoing follow is enabled, capture uses
    * this same file for transcript discovery and rotations. */
   sentinelPath?: string;
-  /** Mirror permissions to the viewer (B2): inject a blocking PreToolUse hook so each tool waits for a
-   *  viewer allow/deny — faithful to a real RC session — instead of `--dangerously-skip-permissions`.
-   *  DEFAULT ON; the opt-out (`--rc-tmux-skip-permissions`) sets this false to restore auto-approve. */
-  mirrorPermissions?: boolean;
-  /** Override the permission requests-sentinel / decisions-dir / helper paths (tests). Production derives
-   *  all of them inside a private per-launch runtime directory. */
-  permReqPath?: string;
-  permDecDir?: string;
-  permHelperPath?: string;
   /** Override the private per-launch runtime directory (tests only). A caller-supplied directory is
    *  chmodded to 0700 but retained after teardown so the test owner can inspect/remove it. */
   runtimeDir?: string;
   /** Hook fired after the private runtime directory exists (tests/observability). */
   onRuntimeDir?: (path: string) => void;
-  /** Pre-accept claude's per-folder trust gate for the cwd before spawn (mirror on only). Injectable so
-   *  unit tests don't touch the real ~/.claude.json; production uses the real ensureCwdTrusted. */
-  ensureCwdTrusted?: (cwd: string) => { changed: boolean; path: string; bailed?: boolean };
 }
 
 const sleepReal = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -240,7 +442,7 @@ export const PANE_GONE_CONFIRMATIONS = 2;
 /** How long after spawn to wait for claude's transcript before warning it may not be writing one. */
 export const DISCOVERY_WARN_MS = 15_000;
 /** A pane is not public merely because tmux briefly reports it alive. Claude must execute the
- * SessionStart hook from the exact merged settings file that also carries PreToolUse when mirroring. */
+ * SessionStart hook from the exact merged settings file. */
 export const READINESS_TIMEOUT_MS = 30_000;
 /** Readiness polling is intentionally independent of the inject/capture test sleeper. */
 export const READINESS_POLL_MS = 50;
@@ -301,12 +503,103 @@ async function makeRuntimeDir(override: string | undefined): Promise<{
   return { path, owned: true };
 }
 
+/** Fixed helper run by tmux/Claude—not Node—for the short UserPromptSubmit/remote-submit critical
+ * section. Linux `flock` is tied to fd 9, so the kernel releases it on every exit including SIGKILL/OOM.
+ * Remote prompt bytes never enter helper argv: Node loaded the named tmux buffer over stdin first. A
+ * Claude hook payload enters only helper stdin and is drained without storage or transport. Remote
+ * outcomes are non-secret, per-attempt files written temp+rename so missing/malformed means ambiguity,
+ * never a stale success. A failed/ambiguous remote mutation deliberately leaves the gate closed. */
+export function tmuxInputHelperScript(): string {
+  return `#!/bin/sh
+set -u
+umask 077
+
+write_outcome() {
+  outcome_tmp="\${outcome}.tmp.$$"
+  if printf '%s\\n' "$1" > "$outcome_tmp"; then
+    mv -f -- "$outcome_tmp" "$outcome"
+  else
+    rm -f -- "$outcome_tmp"
+    return 1
+  fi
+}
+
+mode=\${1-}
+if [ "$mode" = probe ]; then
+  [ "$#" -eq 3 ] || exit 64
+  lock_file=$2
+  outcome=$3
+  command -v flock >/dev/null 2>&1 || { write_outcome unavailable; exit 69; }
+  exec 9>"$lock_file" || { write_outcome unavailable; exit 70; }
+  flock -x 9 || { write_outcome unavailable; exit 71; }
+  write_outcome ready
+  exit 0
+fi
+
+if [ "$mode" = prompt ]; then
+  [ "$#" -eq 3 ] || exit 2
+  gate=$2
+  lock_file=$3
+  cat >/dev/null || exit 2
+  exec 9>"$lock_file" || exit 2
+  flock -x 9 || exit 2
+  : > "$gate" || exit 2
+  # Completion/cancellation records used by the generation CAS can occur only after this synchronous
+  # hook returns, at integer-ms precision. Keep those timestamps strictly newer than the fractional
+  # filesystem mtime. Concurrent sibling-hook rejections are fail-stopped separately, never CAS-released.
+  sleep 0.010 || exit 2
+  exit 0
+fi
+
+if [ "$mode" = end ]; then
+  [ "$#" -eq 4 ] || exit 2
+  gate=$2
+  lock_file=$3
+  ended=$4
+  cat >/dev/null || exit 2
+  exec 9>"$lock_file" || exit 2
+  flock -x 9 || exit 2
+  : > "$gate" || exit 2
+  : > "$ended" || exit 2
+  exit 0
+fi
+
+[ "$mode" = remote ] && [ "$#" -eq 8 ] || exit 64
+socket=$2
+target=$3
+gate=$4
+lock_file=$5
+buffer=$6
+settle=$7
+outcome=$8
+exec 9>"$lock_file" || { write_outcome ambiguous; exit 70; }
+flock -x 9 || { write_outcome ambiguous; exit 71; }
+if ! (set -C; : > "$gate") 2>/dev/null; then
+  write_outcome busy
+  exit 0
+fi
+if ! tmux -S "$socket" paste-buffer -d -p -b "$buffer" -t "$target"; then
+  write_outcome failed
+  exit 0
+fi
+if ! sleep "$settle"; then
+  write_outcome ambiguous
+  exit 0
+fi
+if ! tmux -S "$socket" send-keys -t "$target" Enter; then
+  write_outcome ambiguous
+  exit 0
+fi
+write_outcome applied
+`;
+}
+
 /**
  * Run the tmux driver until `signal` aborts, claude exits / the pane closes, or a pump crashes:
  *   1. Create a readiness latch in `starting`; no broker client exists yet.
- *   2. Prepare a private runtime directory/socket, hooks, trust, and a scrubbed launch environment.
+ *   2. Prepare a private runtime directory/socket, readiness hook, and scrubbed launch environment.
  *   3. Spawn claude and require both a live pane and its exact private SessionStart marker.
- *   4. Construct capture/injection/permission pumps, then start the bridge. That readiness edge alone
+ *   4. Construct capture/injection pumps, then start the bridge. That readiness edge alone
  *      creates the broker client and announces the conversation.
  *   5. Teardown closes the bridge and pane under one deadline; private files are removed only when pane
  *      termination is known.
@@ -383,14 +676,9 @@ export async function runTmuxDriver(
   const privateFiles = new Set<string>();
   let readinessPath: string | null = null;
   let sentinelPath: string | null = null;
-  let permReqPath: string | null = null;
-  let permDecDir: string | null = null;
-  let permHelperPath: string | null = null;
-  let permActivePath: string | null = null;
   let status: StatusTracker | null = null;
   let capture: Promise<void> = Promise.resolve();
   let inject: Promise<void> = Promise.resolve();
-  let permPump: Promise<void> = Promise.resolve();
   let pumpCrashed = false;
   let registrationReady = false;
 
@@ -438,16 +726,20 @@ export async function runTmuxDriver(
     const trackedId = sessionUuid ?? userSession.explicitId;
     // A SessionStart event from OUR merged settings is the positive native-readiness proof. A successful
     // tmux probe alone only proves that a short-lived launcher happened to exist for one instant; it does
-    // not prove Claude loaded the settings or the PreToolUse hook. The discovery flag controls whether
+    // not prove Claude loaded the settings. The discovery flag controls whether
     // capture follows this file after readiness, but the one startup proof is always required.
     readinessPath = deps.sentinelPath ?? join(runtime.path, "session-events.ndjson");
+    const activeTurnGatePath = join(runtime.path, "turn-active");
+    const turnGateReconcilePath = join(runtime.path, "turn-active.reconcile");
+    const sessionEndedPath = join(runtime.path, "session-ended");
+    const inputHelperPath = join(runtime.path, "input-gate.sh");
+    const inputLockPath = join(runtime.path, "input-gate.lock");
+    privateFiles.add(activeTurnGatePath);
+    privateFiles.add(turnGateReconcilePath);
+    privateFiles.add(sessionEndedPath);
+    privateFiles.add(inputHelperPath);
+    privateFiles.add(inputLockPath);
     sentinelPath = deps.injectSessionHook ? readinessPath : null;
-    // Permission MIRRORING (B2, DEFAULT ON): inject a blocking PreToolUse hook so each tool waits for a
-    // viewer allow/deny — faithful to a real RC session — instead of `--dangerously-skip-permissions`. The
-    // helper (a tiny Node script) appends each tool request to `permReqPath` (the driver tails it → raises a
-    // can_use_tool gate) and blocks polling `permDecDir/<id>.json` (the inject pump writes it on the viewer's
-    // answer). Off (the `--rc-tmux-skip-permissions` opt-out) → keep today's auto-approve.
-    const mirror = deps.mirrorPermissions ?? true;
     const hookDisablingArg = ["--bare", "--safe-mode"].find((option) =>
       hasHarnessOption(ctx.harnessArgs, option),
     );
@@ -460,83 +752,17 @@ export async function runTmuxDriver(
         `tmux remote readiness requires Claude hooks; remove ${hookDisablingArg ?? hookDisablingEnv}`,
       );
     }
-    if (mirror && hasHarnessOption(ctx.harnessArgs, "--dangerously-skip-permissions")) {
-      throw new Error(
-        "tmux permission mirroring conflicts with --dangerously-skip-permissions; remove it or explicitly opt out with --rc-tmux-skip-permissions",
-      );
-    }
-    permReqPath = mirror
-      ? (deps.permReqPath ?? join(runtime.path, "permission-requests.ndjson"))
-      : null;
-    permDecDir = mirror ? (deps.permDecDir ?? join(runtime.path, "permission-decisions")) : null;
-    permHelperPath = mirror
-      ? (deps.permHelperPath ?? join(runtime.path, "permission-hook.mjs"))
-      : null;
-    permActivePath = mirror ? join(runtime.path, "permission-remote-active") : null;
     await writePrivateFile(readinessPath, "");
     privateFiles.add(readinessPath);
-    if (
-      mirror &&
-      permReqPath !== null &&
-      permDecDir !== null &&
-      permHelperPath !== null &&
-      permActivePath !== null
-    ) {
-      await writePrivateFile(permReqPath, "");
-      privateFiles.add(permReqPath);
-      await mkdir(permDecDir, { recursive: false, mode: 0o700 });
-      await chmod(permDecDir, 0o700);
-      await writePrivateFile(permHelperPath, PRE_TOOL_USE_HELPER_SOURCE);
-      privateFiles.add(permHelperPath);
-      await writePrivateFile(permActivePath, "active\n");
-      privateFiles.add(permActivePath);
-
-      // Broker/relay failure closes only the compatibility Session; the native tmux pane deliberately
-      // remains alive. Retire the remote permission gate at that exact one-way boundary. The helper sees
-      // the missing sentinel and returns explicit `ask`, so both an in-flight and every later tool fall
-      // back to Claude's LOCAL permission UI instead of waiting forever or being auto-approved.
-      const activePath = permActivePath;
-      session.onClose(() => {
-        void rm(activePath, { force: true }).catch((error: unknown) => {
-          // Preserving a pane whose hook still believes a dead viewer owns permissions would wedge its
-          // next tool forever. If retirement itself fails, fail the native owner closed: aborting the
-          // driver reaches bounded teardown and kills the private pane instead of leaving it unserviceable.
-          requestDriverStop("could not retire tmux remote permission gate");
-          try {
-            tracer.error("could not retire tmux remote permission gate", { error: String(error) });
-          } catch {
-            // Diagnostics never own the fail-closed action above.
-          }
-        });
-      });
-    }
     throwIfAborted(stop);
 
-    // Build the combined settings file (SessionStart + PreToolUse), deep-merged with the user's. The
-    // merged JSON is never placed in tmux argv or the public error surface.
-    const fragments: HookFragment[] = [sessionHookFragment(readinessPath)];
-    if (
-      mirror &&
-      permReqPath !== null &&
-      permDecDir !== null &&
-      permHelperPath !== null &&
-      permActivePath !== null
-    ) {
-      // Pass this process's absolute node binary so the helper works even when the pane shell has no
-      // `node` on PATH. Local tmux means both processes share the same filesystem.
-      fragments.push(
-        preToolUseHookFragment(
-          permHelperPath,
-          permReqPath,
-          permDecDir,
-          permActivePath,
-          100,
-          process.execPath,
-        ),
-      );
-    }
+    // Build the private SessionStart readiness setting, deep-merged with the user's settings and hooks.
+    // Native Claude remains the sole owner of permissions; no PreToolUse hook or policy mutation is added.
     const { value, rest } = extractSettingsArg(ctx.harnessArgs);
-    const merged = await mergeHooksIntoSettings(value, fragments);
+    const merged = await mergeHooksIntoSettings(value, [
+      sessionHookFragment(readinessPath),
+      turnGateHookFragment(activeTurnGatePath, sessionEndedPath, inputHelperPath, inputLockPath),
+    ]);
     if (merged === null) {
       throw new Error(
         "could not merge the required tmux readiness hook into --settings; fix the settings input",
@@ -549,49 +775,20 @@ export async function runTmuxDriver(
     tracer.debug("hooks injected", {
       sessionHook: sentinelPath !== null,
       readinessHook: true,
-      permMirror: mirror,
+      turnGateHook: true,
       mergedUserSettings: value !== null,
     });
-
-    // Without skip-permissions, Claude's startup trust dialog can block before the hook exists. Trust
-    // preparation is therefore a required readiness prerequisite when mirroring is on.
-    if (mirror) {
-      const trust =
-        deps.ensureCwdTrusted ??
-        ((cwd: string) =>
-          ensureCwdTrusted(cwd, {
-            ...(deps.home !== undefined ? { home: deps.home } : {}),
-            configDir: parentEnv.CLAUDE_CONFIG_DIR ?? "",
-          }));
-      let t: ReturnType<typeof trust>;
-      try {
-        t = trust(ctx.cwd);
-      } catch {
-        throw new Error(
-          "could not prepare Claude folder trust required for tmux permission mirroring; trust the folder locally or explicitly opt out with --rc-tmux-skip-permissions",
-        );
-      }
-      if (t.bailed) {
-        throw new Error(
-          "could not safely update Claude folder trust required for tmux permission mirroring; repair or trust the folder locally, or explicitly opt out with --rc-tmux-skip-permissions",
-        );
-      }
-      if (t.changed) {
-        tracer.info("pre-accepted folder trust for cwd (mirror on)", { path: t.path });
-      }
-      throwIfAborted(stop);
-    }
 
     const command = shellQuoteCommand([
       "env",
       ...envUnset,
       bin,
-      ...(mirror ? [] : ["--dangerously-skip-permissions"]),
       ...(sessionUuid !== null ? ["--session-id", sessionUuid] : []),
       ...harnessArgs,
     ]);
     await writePrivateFile(launcherPath, `#!/bin/sh\nexec ${command}\n`, 0o700);
     privateFiles.add(launcherPath);
+    await writePrivateFile(inputHelperPath, tmuxInputHelperScript(), 0o700);
 
     // Snapshot before spawn so capture cannot attach to an already-running sibling transcript.
     const dir = projectDir(ctx.cwd, deps.home);
@@ -609,6 +806,14 @@ export async function runTmuxDriver(
     } catch (e) {
       throw new Error(`could not start private tmux session: ${(e as Error)?.message ?? e}`);
     }
+    // Print the recovery path as soon as the pane exists, before the readiness barrier. A fresh cwd can
+    // legitimately show Claude's native folder-trust prompt before SessionStart runs; remote-claw never
+    // pre-accepts that trust or changes permission policy, so the local owner must be able to attach now.
+    const attachCommand = shellQuoteCommand(["tmux", "-S", socketPath, "attach", "-t", tmuxName]);
+    process.stderr.write(`remote-claw: claude running in tmux — attach with: ${attachCommand}\n`);
+    process.stderr.write(
+      "remote-claw: tmux idle editor/slash/config UI is shared; do not manipulate it while remote viewers may submit\n",
+    );
     throwIfAborted(stop);
     const readinessDeadline = Date.now() + (deps.readinessTimeoutMs ?? READINESS_TIMEOUT_MS);
     let readyEvent: SessionHookEvent | null = null;
@@ -632,27 +837,30 @@ export async function runTmuxDriver(
     throwIfAborted(stop);
     if (readyEvent === null) {
       throw new Error(
-        "Claude did not execute the required SessionStart readiness hook; hooks may be disabled by safe mode, settings, or policy",
+        "Claude did not execute the required SessionStart readiness hook; attach to the tmux pane above and complete any native trust prompt, or check settings/policy",
       );
+    }
+    // Folder trust remains wholly native. Once SessionStart proves Claude loaded the merged settings,
+    // prove the helper's kernel lock before publishing any writable remote projection. The synchronous
+    // UserPromptSubmit hook already uses this helper; no global key binding or TUI parser is installed.
+    const helperProbeOutcome = join(runtime.path, `input-probe-${randomUUID()}`);
+    await tmux.runShell(
+      shellQuoteCommand([inputHelperPath, "probe", inputLockPath, helperProbeOutcome]),
+    );
+    const helperProbe = await readFile(helperProbeOutcome, "utf8").catch(() => "");
+    await rm(helperProbeOutcome, { force: true }).catch(() => {});
+    if (helperProbe.trim() !== "ready") {
+      throw new Error("tmux input arbitration requires a working Linux flock command");
     }
     tracer.debug("Claude native readiness proved", {
       sessionId: readyEvent.sessionId,
       transcriptPath: readyEvent.transcriptPath,
     });
 
-    // On each real turn end (a top-level assistant line with a terminal stop_reason), emit a synthetic
-    // `result` frame. Interactive claude never sends one, so without it the viewer shows no turn separator
-    // between tmux turns (the mitm driver, on real RC, does). The relay maps `result` → a turn-sep marker;
-    // an empty `result` is exactly that. handleLine pushes the assistant frame BEFORE calling status.onLine,
-    // so this synthetic result lands immediately after the answer it closes.
-    const runStatus = new StatusTracker({
-      session,
-      onTurnEnd: () => {
-        if (!session.closed) {
-          session.pushUpstream({ type: "result", subtype: "success", result: "" });
-        }
-      },
-    });
+    // Activity remains heuristic and unadvertised. Turn separators are emitted below from Claude's
+    // authoritative post-loop `turn_duration`, not an earlier assistant stop_reason that a Stop hook or
+    // built-in continuation may follow.
+    const runStatus = new StatusTracker({ session });
     status = runStatus;
 
     // A pump that crashes is a BUG, not a clean exit — record it so we return non-zero (codex review #3).
@@ -710,6 +918,14 @@ export async function runTmuxDriver(
     let subDir: string | null = null;
     const subTailers = new Map<string, { tailer: TranscriptTailer; taskId: string }>();
     let currentPath: string | null = null; // the main transcript we're tailing (changes on a rotation)
+    let currentNativeSessionId = readyEvent.sessionId;
+    let observedPermissionMode: string | null = null;
+    // Set on EVERY transcript attach, not once per wrapper launch. Existing bytes in a resumed/rotated
+    // file are never posture evidence: another same-user process may have written them after this wrapper
+    // originally spawned. `+1` makes same-millisecond ambiguity fail closed; the next timestamped live
+    // user record resolves the posture.
+    let permissionEvidenceNotBefore = Number.POSITIVE_INFINITY;
+    const completedTurns: number[] = [];
 
     // (Re)bind the tailer to `path`. A rotation (the hook sentinel reporting a NEW transcript after /clear,
     // /branch, /compact, or resume) clears the sub-agent tailers (a new session = a fresh subagents/ dir)
@@ -726,6 +942,7 @@ export async function runTmuxDriver(
       subDir = subagentDir(path);
       subTailers.clear();
       currentPath = path;
+      permissionEvidenceNotBefore = Date.now() + 1;
       deps.onTranscript?.(path);
       tracer.debug("transcript attached", { path, subDir });
     };
@@ -742,6 +959,42 @@ export async function runTmuxDriver(
     // (a sub-agent file), overrides parent_tool_use_id so the line nests under its Agent. seenUuids dedups
     // across the main + every sub-agent tailer.
     const handleLine = (line: string, parentTaskId?: string): void => {
+      if (parentTaskId === undefined) {
+        const turnFact = nativeTurnFact(line, currentNativeSessionId, Number.NEGATIVE_INFINITY);
+        if (turnFact?.kind === "completed") {
+          // Interactive Claude does not emit RC `result`; this empty result is the viewer's turn
+          // separator. Backfilled duration records still render history separators; their old timestamp
+          // cannot release a later gate generation.
+          if (!session.closed) {
+            session.pushUpstream({ type: "result", subtype: "success", result: "" });
+          }
+        }
+        if (turnFact?.kind === "blocked") {
+          // Claude races UserPromptSubmit hook results and can publish this warning before our sibling
+          // helper has even touched the gate. No timestamp can safely identify that generation. Retire
+          // only the remote projection and leave the gate closed; the native pane remains locally usable.
+          // Unlike completion CAS, a fail-stop has no generation guard, so old transcript backfill must
+          // not retire a fresh projection. Only a warning from this wrapper launch is actionable.
+          if (turnFact.at >= spawnedAt && !session.closed) {
+            session.close("native prompt rejected by hook");
+          }
+        } else if (turnFact !== null) {
+          completedTurns.push(turnFact.at);
+        }
+        const permissionMode = transcriptPermissionMode(
+          line,
+          currentNativeSessionId,
+          permissionEvidenceNotBefore,
+        );
+        if (
+          permissionMode !== null &&
+          permissionMode !== observedPermissionMode &&
+          !session.closed
+        ) {
+          observedPermissionMode = permissionMode;
+          session.pushUpstream({ type: "system", permissionMode });
+        }
+      }
       const payload = transcriptToPayload(line);
       if (payload === null) return;
       if (parentTaskId !== undefined) payload.parent_tool_use_id = parentTaskId;
@@ -772,13 +1025,27 @@ export async function runTmuxDriver(
           else payload.local_prompt = true; // typed at the local pane → surface it for viewers
         }
       }
-      // Push the frame BEFORE status.onLine so that when onLine sees a terminal assistant line and fires
-      // onTurnEnd (→ a synthetic `result`), the result is queued AFTER the assistant answer it closes.
       // A broker fail-stop closes only the compatibility Session. Keep watching the local pane, but
       // stop projecting into the closed relay so remote failure cannot become a pane failure.
       if (session.closed) return;
       if (!suppressFrame) session.pushUpstream(payload);
       runStatus.onLine(payload); // ALWAYS while projected: a user text line remains a turn boundary
+    };
+
+    /** Drain exact native completion/cancel/rejection facts promptly, even when no browser prompt is
+     * waiting. The rename/link CAS itself serializes against local-hook and remote-helper gate writes:
+     * backfill can never release a newer generation, and no Node-held lock can outlive this process. */
+    const reconcileCompletedTurns = async (): Promise<void> => {
+      while (completedTurns.length > 0) {
+        const completedAt = completedTurns.shift();
+        if (completedAt === undefined) break;
+        const outcome = await releaseTurnGateForCompletion(
+          activeTurnGatePath,
+          turnGateReconcilePath,
+          completedAt,
+        );
+        tracer.debug("native turn gate reconciled", { outcome, completedAt });
+      }
     };
 
     // Drain newly-appended lines from the main transcript AND every discovered sub-agent file. Idempotent
@@ -804,6 +1071,7 @@ export async function runTmuxDriver(
       // stream, so its lines are already chronological. Emit directly, with zero timestamp parsing.
       if (subLines.length === 0) {
         for (const line of mainLines) handleLine(line);
+        await reconcileCompletedTurns();
         return;
       }
       // Mixed batch — main + sub lines must interleave by their transcript `timestamp`, NOT "all main then
@@ -816,6 +1084,7 @@ export async function runTmuxDriver(
       for (const { line, parentTaskId } of mergeBatchByTimestamp(mainLines, subLines)) {
         handleLine(line, parentTaskId);
       }
+      await reconcileCompletedTurns();
     };
 
     // The cross-project scan in findTranscriptById is an O(project-dirs) sweep; the O(1) direct-path check
@@ -828,6 +1097,20 @@ export async function runTmuxDriver(
       let tick = 0;
       let discoverTick = 0;
       while (!stop.aborted) {
+        // SessionEnd is not process-terminal in Claude: /clear, resume, and compaction can fire it while
+        // an in-process transition continues. Its hook therefore closes the gate and leaves this marker.
+        // No generic SessionStart sibling proves aggregate readiness afterward, so retire the remote
+        // projection instead of guessing; the locally owned tmux pane remains alive and usable.
+        if (!session.closed) {
+          const ended = await stat(sessionEndedPath).then(
+            () => true,
+            () => false,
+          );
+          if (ended) {
+            tracer.info("native SessionEnd — retiring tmux remote projection");
+            session.close("native Claude session ended or transitioned");
+          }
+        }
         if (tailer === null) {
           // Prefer the ongoing SessionStart marker (the EXACT transcript_path — no scan or long-cwd-hash
           // problem) when follow is enabled. Else, when we know the tracked id (our PIN, or explicit
@@ -883,7 +1166,20 @@ export async function runTmuxDriver(
                 from: currentPath,
                 to: ev.transcriptPath,
               });
+              currentNativeSessionId = ev.sessionId;
+              observedPermissionMode = null;
               attach(ev.transcriptPath);
+              // A closed compatibility projection must never become a reason to kill the still-local
+              // pane. Rotation-follow may continue tailing for liveness, but it cannot mutate or push to
+              // a Session that SessionEnd/broker fail-stop/helper ambiguity already retired.
+              if (!session.closed) {
+                session.clearPermissionMode();
+                const rotatedPermissionMode = tmuxRuntimePermissionMode(ev, ctx.harnessArgs, "");
+                if (rotatedPermissionMode !== null) {
+                  observedPermissionMode = rotatedPermissionMode;
+                  session.pushUpstream({ type: "system", permissionMode: rotatedPermissionMode });
+                }
+              }
             }
           }
           if (await tmux.sessionGone(tmuxName)) {
@@ -902,139 +1198,91 @@ export async function runTmuxDriver(
       }
     })().catch((e) => onPumpCrash("capture", e));
 
-    // Track which OPEN gates are AskUserQuestion (by tool_use_id), so onDecision only carries the answer
-    // `updatedInput` for THOSE — never letting a crafted `answers` payload on, say, a Bash gate replace that
-    // tool's real input (#42 / #147 codex). Populated by the perm pump when it raises a gate; consumed and
-    // DELETED by onDecision when the gate closes, so the set tracks only currently-open gates (bounded) —
-    // not every AskUserQuestion the session ever saw (codex #147: was append-only → unbounded growth).
-    const askqGateIds = new Set<string>();
-
-    // INJECT: drain the downstream queue into the pane (strict serial; ack after success — review #5/#9).
-    // Per-session paste buffer so concurrent drivers can't cross-wire (codex review #5). Injection
-    // retries only idempotent work or a command proved not applied; an unknown mutating outcome retires
-    // the compatibility Session without killing the still-owned local pane/provider session.
-    const decisionDir = mirror ? permDecDir : null;
+    // INJECT: drain the downstream queue into one tmux-owned critical section per prompt (strict serial;
+    // ack only after its atomic outcome says Enter applied). Node loads the private per-session buffer,
+    // but the helper owns exclusive gate claim → bracketed paste → bounded settle → Enter under the
+    // same kernel-released flock as Claude's synchronous UserPromptSubmit/SessionEnd hooks. Node/helper
+    // ambiguity retires only the compatibility projection; it cannot strand a lock or kill the pane.
+    const inputBuffer = `${INJECT_BUFFER}-${session.id}`;
+    const injectSocketPath = socketPath;
+    if (injectSocketPath === null) throw new Error("private tmux socket was not initialized");
     inject = runInjectPump({
       session,
       tmux,
       target: tmuxName,
-      buffer: `${INJECT_BUFFER}-${session.id}`,
+      buffer: inputBuffer,
       signal: stop,
       sleep,
+      injectAtomically: async (text) => {
+        try {
+          await tmux.setBuffer(inputBuffer, text);
+        } catch (error) {
+          // The private buffer may or may not have been loaded, but no pane mutation was attempted.
+          // Retire only the compatibility projection; never turn a staging failure into a pane kill.
+          session.close("tmux input buffer load failed");
+          tracer.warn("tmux input buffer load failed", { error: String(error) });
+          return false;
+        }
+        while (!stop.aborted && !session.closed) {
+          const outcomePath = join(runtime.path, `input-outcome-${randomUUID()}`);
+          const helperCommand = shellQuoteCommand([
+            inputHelperPath,
+            "remote",
+            injectSocketPath,
+            tmuxName,
+            activeTurnGatePath,
+            inputLockPath,
+            inputBuffer,
+            (settleMs(text) / 1000).toFixed(3),
+            outcomePath,
+          ]);
+          try {
+            await tmux.runShell(helperCommand);
+          } catch (error) {
+            session.close("tmux input helper outcome unknown");
+            tracer.warn("tmux input helper failed", { error: String(error) });
+            return false;
+          }
+          const outcome = (await readFile(outcomePath, "utf8").catch(() => "")).trim();
+          await rm(outcomePath, { force: true }).catch(() => {});
+          if (outcome === "applied") {
+            return true;
+          }
+          if (outcome !== "busy") {
+            session.close("tmux input helper outcome unknown");
+            tracer.warn("tmux input helper returned no authoritative application outcome", {
+              outcome: outcome === "" ? "missing" : outcome,
+            });
+            return false;
+          }
+          await sleep(pollMs);
+        }
+        return false;
+      },
       onError: (event, error, info) =>
         tracer.warn("inject failed", { event, error: String(error), ...info }),
       onInjected: recordInjected, // ledger: claude's echo of this prompt is OUR own → suppressed in capture
-      // Permission mirroring (B2): the viewer's allow/deny → write the decision file the blocked PreToolUse
-      // hook is polling (keyed by request_id == the can_use_tool gate id == tool_use_id). Only wired when
-      // mirroring is on; off, control_responses are just acked.
-      ...(decisionDir !== null
-        ? {
-            onDecision: async (
-              requestId: string,
-              behavior: "allow" | "deny",
-              updatedInput?: unknown,
-            ) => {
-              // Defense-in-depth: never let a crafted id escape the decisions dir (the relay only forwards
-              // ids it already gated, but the path join is user-influenced data).
-              if (!isSafeToolUseId(requestId)) {
-                throw new Error("permission decision rejected: unsafe request id");
-              }
-              try {
-                // ATOMIC write: the blocked helper polls this path with existsSync→readFileSync, so a plain
-                // writeFile would briefly expose a 0-byte/partial file. Write a temp sibling then rename
-                // (atomic on the same fs) so the helper only ever observes a COMPLETE decision. `updatedInput`
-                // (AskUserQuestion answers, #42) rides into the file on an allow so the helper re-emits it.
-                const finalPath = join(decisionDir, `${requestId}.json`);
-                const tmpPath = `${finalPath}.${randomUUID()}.tmp`;
-                // Only carry answer `updatedInput` for an AskUserQuestion gate (the helper also enforces this);
-                // for any other tool, drop it so a stray/crafted `answers` can't clobber the tool's input.
-                const answerInput = askqGateIds.has(requestId) ? updatedInput : undefined;
-                try {
-                  await writePrivateFile(
-                    tmpPath,
-                    decisionFileContent(behavior, undefined, answerInput),
-                  );
-                  await rename(tmpPath, finalPath);
-                } catch (error) {
-                  await rm(tmpPath, { force: true }).catch(() => {});
-                  throw error;
-                }
-                tracer.debug("permission decision written", {
-                  requestId,
-                  behavior,
-                  answers: answerInput !== undefined,
-                });
-                // The gate is closed only after the durable decision file lands. Keep the classification
-                // across a failed write so a retried AskUserQuestion answer does not lose updatedInput.
-                askqGateIds.delete(requestId);
-              } catch (e) {
-                tracer.warn("permission decision write failed", { requestId, error: String(e) });
-                throw new Error("permission decision persistence failed");
-              }
-            },
-          }
-        : {}),
     }).catch((e) => onPumpCrash("inject", e));
 
-    // PERMISSION REQUESTS pump (B2): tail the requests sentinel the PreToolUse hook appends to; each new tool
-    // request → raise a canonical can_use_tool gate (pushUpstream) so the relay + viewer render the card. The
-    // blocked hook stays parked until the inject pump's onDecision writes the matching decision file. Tracks
-    // toolUseIds so a re-read never double-raises a gate. Only runs when mirroring is on.
-    //
-    // Reuse TranscriptTailer: it reads only NEW bytes (no O(n²) full re-read each poll), HOLDS BACK a torn
-    // final line until its newline lands (so parsePermRequest only ever sees complete lines), and returns []
-    // when the sentinel doesn't exist yet (no tool has run). A pushUpstream throw is a real bug — let it
-    // propagate to onPumpCrash (which tears down) rather than be swallowed, which would mark the id `seen` and
-    // strand the blocked helper forever; for that reason we add to `seen` only AFTER the push succeeds.
-    permPump =
-      mirror && permReqPath !== null
-        ? (async () => {
-            const reqTailer = new TranscriptTailer(permReqPath);
-            const seen = new Set<string>();
-            while (!stop.aborted && !session.closed) {
-              const lines = await reqTailer.poll();
-              // Session closure can race the async file read. Once the remote owner is retired, do not
-              // try to publish a just-read request into the closed Session: the helper observes the
-              // missing active sentinel and hands that still-unexecuted tool to the local prompt.
-              if (stop.aborted || session.closed) break;
-              for (const line of lines) {
-                const req = parsePermRequest(line);
-                if (req === null || seen.has(req.toolUseId)) continue;
-                if (!isSafeToolUseId(req.toolUseId)) {
-                  tracer.warn("permission gate skipped — unsafe tool_use_id", {
-                    toolUseId: req.toolUseId,
-                  });
-                  continue;
-                }
-                tracer.debug("permission gate raised", {
-                  toolUseId: req.toolUseId,
-                  tool: req.toolName,
-                });
-                session.pushUpstream({
-                  type: "control_request",
-                  uuid: `perm-${req.toolUseId}`,
-                  request_id: req.toolUseId,
-                  request: {
-                    subtype: "can_use_tool",
-                    tool_name: req.toolName,
-                    tool_input: req.toolInput,
-                    tool_use_id: req.toolUseId,
-                  },
-                });
-                // Remember AskUserQuestion gates so onDecision carries the answer updatedInput for them only.
-                if (req.toolName === "AskUserQuestion") askqGateIds.add(req.toolUseId);
-                seen.add(req.toolUseId); // only after a SUCCESSFUL push (a throw above propagates, not strands)
-              }
-              await sleep(pollMs);
-            }
-          })().catch((e) => onPumpCrash("perm", e))
-        : Promise.resolve();
-
     // All native-side pumps now exist, and the SessionStart marker proved that Claude loaded the exact
-    // settings source carrying the required hooks. Only now may the readiness latch create a broker
+    // settings source carrying the required readiness hook. Only now may the readiness latch create a broker
     // client and publish writable capabilities.
     throwIfAborted(stop);
-    const readyCapabilities = tmuxCapabilities(mirror);
+    // Do not derive posture from attached history, even when its timestamps are newer than wrapper
+    // spawn: a resumed file may have been written by another same-user process before this attach.
+    const readyPermissionMode =
+      tmuxRuntimePermissionMode(readyEvent, ctx.harnessArgs, "") ?? observedPermissionMode;
+    if (readyPermissionMode !== null) {
+      observedPermissionMode = readyPermissionMode;
+      session.permissionMode = readyPermissionMode;
+    }
+    const readyCapabilities = tmuxCapabilities(
+      readyPermissionMode === null
+        ? "unknown"
+        : readyPermissionMode === "bypassPermissions"
+          ? "bypassed"
+          : "local",
+    );
     bridge.start({
       title: ctx.title,
       cwd: ctx.cwd,
@@ -1049,16 +1297,6 @@ export async function runTmuxDriver(
     throwIfAborted(stop);
 
     tracer.info("tmux session up", { name: tmuxName, nativeSessionId: readyEvent.sessionId });
-    process.stderr.write(
-      `remote-claw: claude running in tmux — attach with: ${shellQuoteCommand([
-        "tmux",
-        "-S",
-        socketPath,
-        "attach",
-        "-t",
-        tmuxName,
-      ])}\n`,
-    );
 
     // Run until the signal fires — external abort, a confirmed pane death, or a crashed pump (each
     // synchronously closes the readiness latch before aborting the local pumps).
@@ -1079,7 +1317,7 @@ export async function runTmuxDriver(
     // Pumps and registration/relay closure share one deadline so an unresponsive broker cannot add a
     // second timeout window after an unresponsive pane operation.
     await boundedWait(
-      Promise.allSettled([capture, inject, permPump, bridgeTeardown]),
+      Promise.allSettled([capture, inject, bridgeTeardown]),
       Math.max(0, teardownDeadline - Date.now()),
     );
     // Dispose AFTER the capture pump settles (it is the only caller of status.onLine, which re-arms the
@@ -1102,9 +1340,6 @@ export async function runTmuxDriver(
     if (cleanupSafe) {
       for (const path of [socketPath, ...privateFiles]) {
         if (path !== null) await rm(path, { force: true }).catch(() => {});
-      }
-      if (permDecDir !== null) {
-        await rm(permDecDir, { force: true, recursive: true }).catch(() => {});
       }
       if (runtimeOwned && runtimePath !== null) {
         await rm(runtimePath, { force: true, recursive: true }).catch(() => {});
@@ -1129,9 +1364,11 @@ export async function runTmuxDriver(
 }
 
 /** The Driver façade the dispatcher uses: holds the ctx + deps, exposes capabilities + run(signal).
- *  It starts conservative and is mutated to the proved post-setup capabilities only after readiness. */
+ *  The fixed capability set is published only after native readiness succeeds. */
 export function tmuxDriver(ctx: DriverContext, deps: TmuxDriverDeps = {}): Driver {
-  const capabilities = tmuxCapabilities(false);
+  const capabilities = tmuxCapabilities(
+    tmuxPermissionPosture(ctx.harnessArgs) === "bypassed" ? "bypassed" : "unknown",
+  );
   return {
     capabilities,
     run: (signal: AbortSignal) => runTmuxDriver(ctx, signal, deps, capabilities),

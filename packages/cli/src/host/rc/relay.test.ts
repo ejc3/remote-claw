@@ -32,6 +32,7 @@ import {
   safeAttachmentName,
 } from "./relay.js";
 import { Session } from "./session.js";
+import { tmuxCapabilities } from "./tmux/driver.js";
 
 /** A capturing tracer that records `error` lines (and is its own `child`) — for asserting alerts. */
 function spyTracer(): {
@@ -666,6 +667,17 @@ function codexRelayOf(session: Session, client: FakeClient): HostRcRelay {
   });
 }
 
+function tmuxRelayOf(session: Session, client: FakeClient): HostRcRelay {
+  return new HostRcRelay({
+    client: client as unknown as BrokerClient,
+    identityId: ID,
+    sessionId: session.id,
+    session,
+    capabilities: tmuxCapabilities(),
+    harness: TMUX_HARNESS,
+  });
+}
+
 const tick = () => new Promise((r) => setTimeout(r, 0));
 async function waitFor(pred: () => boolean, ms = 2000): Promise<void> {
   const end = Date.now() + ms;
@@ -967,6 +979,53 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
         .filter(({ recordKind }) => recordKind === "accepted")
         .map(({ text: receipt }) => JSON.parse(receipt)),
     ).toEqual([{ client_msg_id: "codex-client", native_pending: true }]);
+
+    ac.abort();
+    await served;
+  });
+
+  it("tmux admits ordinary text but suppresses slash text, raw controls, and permission answers", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const relay = tmuxRelayOf(session, client);
+    const pushUser = vi.spyOn(session, "pushUserInput");
+    const pushControl = vi.spyOn(session, "pushControlRequest");
+    const pushResponse = vi.spyOn(session, "pushControlResponse");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+
+    await waitFor(() => client.streamStarts.length === 1);
+    client.pushInbound(inFrame("user", "tmux-empty", " \n\t", "empty-client"));
+    client.pushInbound(inFrame("user", "tmux-slash", " \n /permissions", "slash-client"));
+    for (const kind of ["interrupt", "set_model", "set_mode", "end"]) {
+      client.pushInbound(
+        inFrame(
+          kind,
+          `tmux-${kind}`,
+          JSON.stringify({ model: "opus", mode: "plan", expiry: Date.now() + 60_000 }),
+        ),
+      );
+    }
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "tmux-permission",
+        JSON.stringify({ request_id: "native-owner", behavior: "allow" }),
+      ),
+    );
+    client.pushInbound(
+      inFrame("user", "tmux-escape", "break out\u001b[201~/permissions", "escape-client"),
+    );
+    client.pushInbound(inFrame("user", "tmux-c1", "colour\u009b31m", "c1-client"));
+    client.pushInbound(inFrame("user", "tmux-text", "ordinary\ntext\t✓", "tmux-client"));
+
+    await waitFor(() => pushUser.mock.calls.length === 1);
+    await waitFor(() => client.opened.length === 10);
+    expect(pushUser).toHaveBeenCalledWith("ordinary\ntext\t✓");
+    expect(pushControl).not.toHaveBeenCalled();
+    expect(pushResponse).not.toHaveBeenCalled();
+    expect(client.content.filter((post) => post.recordKind === "user")).toHaveLength(1);
 
     ac.abort();
     await served;

@@ -91,20 +91,19 @@ describe("classifyArgs (unit)", () => {
     expect(classifyArgs(["--rc-identity=x"]).errors).toEqual(["--rc-identity takes no value"]);
   });
 
-  it("registers driver permission flags as booleans (else the parser rejects them)", () => {
+  it("registers OpenCode permission flags as booleans and retires the tmux permission switch", () => {
     // The retired OpenCode inverse remains reserved solely so run.ts can emit its targeted migration
     // error; the positive flag is the only OpenCode permission configuration.
-    for (const flag of [
-      "rc-tmux-skip-permissions",
-      "rc-oc-mirror-permissions",
-      "rc-oc-skip-permissions",
-    ]) {
+    for (const flag of ["rc-oc-mirror-permissions", "rc-oc-skip-permissions"]) {
       const c = classifyArgs(["chat", `--${flag}`]);
       expect(c.errors).toEqual([]);
       expect(c.rc[flag]).toBe(true);
       expect(c.claudeArgs).toEqual(["chat"]); // consumed, not leaked to claude
       expect(classifyArgs([`--${flag}=1`]).errors).toEqual([`--${flag} takes no value`]);
     }
+    expect(classifyArgs(["--rc-tmux-skip-permissions"]).errors).toEqual([
+      "unknown flag --rc-tmux-skip-permissions",
+    ]);
   });
 
   it("errors when a value flag is missing its value or followed by a flag (never swallows it)", () => {

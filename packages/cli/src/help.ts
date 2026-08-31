@@ -55,8 +55,10 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
                      Anthropic Remote Control intact alongside the local TUI and remote-claw browsers.
                      Literal official-client coexistence acceptance passed for the pinned release.
                      Use it with claude's own --remote-control.
-                     tmux remains an experimental/internal compatibility driver. OpenCode has one
-                     pinned supported text/interrupt/status tuple. Codex has one pinned text-only companion
+                     tmux is the maintained lower-fidelity compatibility driver; its accepted tuple is
+                     Linux arm64 with Claude 2.1.237, and it makes no provider-native/official-client
+                     coexistence claim. OpenCode has one
+                     pinned supported text/interrupt/status tuple. Codex has one pinned text/status companion
                      tuple described below.
 
 Claude native companion (--rc-driver=claude-native):
@@ -79,10 +81,13 @@ Inference (mitm driver; the supported default is anthropic):
                      real account (or set RC_ACCOUNTLESS=1). Requires --rc-inference=bedrock (a fabricated
                      credential can't reach real Anthropic).
 
-Experimental/internal tmux driver (--rc-driver=tmux):
-  --rc-tmux-skip-permissions   auto-approve tools (\`claude --dangerously-skip-permissions\`) instead of
-                     mirroring each tool gate to the viewer (or set RC_TMUX_SKIP_PERMISSIONS). Default is
-                     mirroring ON (the viewer is the gate).
+Maintained lower-fidelity tmux driver (--rc-driver=tmux):
+  Permissions and questions remain native/local in the tmux pane. remote-claw does not add a PreToolUse
+                     gate, pre-trust the cwd, or enable \`--dangerously-skip-permissions\`. A native trust
+                     prompt can be completed with the private tmux attach command printed at startup.
+                     Browser input is fenced behind active model turns and their native modals only.
+                     The idle editor and slash/config UI share one keystream; do not manipulate them while
+                     remote viewers may submit.
   --rc-session-hook / --rc-no-session-hook   enable/disable using the private SessionStart marker for
                      ongoing exact transcript discovery + rotation-follow (or set RC_SESSION_HOOK;
                      default ON). Native startup readiness always requires that private hook once;

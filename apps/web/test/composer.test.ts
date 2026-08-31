@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Viewer } from "../app/lib/viewer.js";
 import {
   composerTextForSend,
+  currentTmuxPermissionPosture,
   enterShouldSend,
   fitStaged,
   isOpenCodeNativeTextSurface,
@@ -126,6 +127,14 @@ describe("stable Claude mutation surface", () => {
     expect(stableTextBlockReason(" /compact ", false)).toBeNull();
   });
 
+  it("rejects pane-active controls only on the tmux text surface", () => {
+    expect(stableTextBlockReason("line one\nline two\t✓", true, true)).toBeNull();
+    expect(stableTextBlockReason("escape\u001b[201~/permissions", true, true)).toBe("control");
+    expect(stableTextBlockReason("delete\u007f", true, true)).toBe("control");
+    expect(stableTextBlockReason("c1\u009b31m", true, true)).toBe("control");
+    expect(stableTextBlockReason("native api\u001b", true, false)).toBeNull();
+  });
+
   it("requires fresh connected presence in addition to capability support", () => {
     expect(remoteMutationEnabled(true, true)).toBe(true);
     expect(remoteMutationEnabled(false, true)).toBe(false);
@@ -136,6 +145,28 @@ describe("stable Claude mutation surface", () => {
     expect(reportsWorkerStatus(nativeCompanionCaps)).toBe(false);
     expect(reportsWorkerStatus(privateRelayCaps)).toBe(true);
     expect(reportsWorkerStatus(undefined)).toBe(true);
+  });
+});
+
+describe("tmux permission posture", () => {
+  const tmuxHarness = { agent: "claude-code" as const, mode: "tmux" as const };
+  const tmuxCaps = {
+    structuredPermissions: false,
+    permissionPosture: "local" as const,
+    status: true,
+    controls: { interrupt: false, setModel: false, setMode: false, end: false },
+    attachments: true,
+  };
+
+  it("clears a stale launch posture when the current presence omits its mode", () => {
+    expect(currentTmuxPermissionPosture(tmuxHarness, tmuxCaps, undefined)).toBe("unknown");
+  });
+
+  it("derives local and bypassed posture from the current presence mode", () => {
+    expect(currentTmuxPermissionPosture(tmuxHarness, tmuxCaps, "default")).toBe("local");
+    expect(currentTmuxPermissionPosture(tmuxHarness, tmuxCaps, "bypassPermissions")).toBe(
+      "bypassed",
+    );
   });
 });
 

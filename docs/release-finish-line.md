@@ -1,8 +1,9 @@
 # remote-claw execution roadmap and release gates
 
 **Status: the full product is not implemented.** The shared crypto, broker, browser, and Claude
-private-relay path work. OpenCode, tmux, Bedrock, and accountless paths have useful implementations
-and evidence with narrower guarantees. M1's Linux/exact-2.1.237 structured text companion and explicit
+private-relay path work. OpenCode and tmux have completed narrow supported tuples; Bedrock inference and
+accountless have useful implementations with narrower evidence. M1's Linux/exact-2.1.237 structured
+text companion and explicit
 same-native-session restart attachment are implemented. Bounded 2026-08-30 runs proved the local TUI,
 an authenticated Anthropic RC API client, two remote-claw browsers, fresh-projection restart,
 broker-loss isolation, installed-package use, and a bounded exact-value/log and raw-storage scan.
@@ -24,6 +25,15 @@ the same native thread, and another browser turn completed after the provider tr
 Viewer UI-1 is also complete: routine contiguous tool/task events now collapse into an exact-count
 activity row with a responsive detail sheet, while errors and other already-visible non-routine rows
 remain first-class. This does not claim background-task lifecycle semantics the adapters do not expose.
+
+M4 is complete for the maintained lower-fidelity tmux fallback. On 2026-08-31, a packed-installed CLI,
+exact Claude 2.1.237/Linux arm64, Bedrock Sonnet 4.6, a real local pane, and two browsers passed labelled
+turns and durable reload. A browser turn remained queued behind an active model turn and its focused
+native permission modal; both browsers departed, local approval completed the native turn, and the
+queued browser turn then completed. Forced broker loss left the pane usable for a later local turn. The
+idle editor and idle slash/config UI still share the pane keystream and must not be manipulated while
+remote viewers may submit. The result claims neither independent peer ordering nor
+provider-native/official-client coexistence.
 
 ## Decision policy
 
@@ -65,8 +75,10 @@ remote-claw browsers ⇄ sealed broker ⇄ host adapter
 
 tmux is deliberately different. It offers terminal compatibility when no native structured seam is
 available, but a shared pane keystream cannot honestly promise independent peer ordering or structured
-delivery receipts. Its plain-Claude launch preserved provider-native collaboration in the bounded M0
-run; keep that result labeled as architecture evidence until M4 adds a maintained acceptance gate.
+delivery receipts. M4's maintained acceptance covers the local pane and remote-claw browsers only. The
+bounded M0 provider-side result remains architecture evidence; tmux advertises neither provider-native
+nor official-client coexistence. Its idle local editor, partial drafts, slash commands, and configuration
+UI must not be manipulated while remote viewers may submit.
 
 ### V1 release decisions
 
@@ -131,7 +143,7 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 | Claude native companion | M1 complete on Linux with exact Claude 2.1.237: exact launch/attach binding, provider-ordered text, host-only OAuth, local TUI, literal official web UI on the user's phone, two browsers, ambiguity fencing, fresh-projection restart, broker-loss isolation, packed install, and exact-SHA deployed-broker evidence | Later controls, platforms, and versions remain separate capability tranches, not M1 blockers |
 | OpenCode | M2 complete for Linux arm64, exact OpenCode 1.17.5, the pinned Bedrock Sonnet model, one explicit live session, non-empty non-slash text, interrupt, native/local permissions, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete | Later versions, platforms, models, permission graduation, and richer controls are separate tranches |
 | Codex | M3a and M3b complete for exact 0.151.0/Linux arm64: explicit UUIDv7, local TUI plus two browsers, native-ordered text/status, TUI-only approvals/questions, explicit-loopback and literal managed-`unix://` attachment, same-thread ChatGPT Remote text coexistence, clean companion-stop isolation, and provider-transport isolation | Companion restart/backfill, Codex broker-loss acceptance, stable projection identity, per-device Remote unsubscribe, richer controls/content, and other versions/platforms remain separate results |
-| tmux | Private pane, transcript capture, conservative input injection, optional permission mirroring, and one bounded Claude/Anthropic/two-browser coexistence run | Productize only its honest fallback contract; verify the official app separately and never claim native peer fidelity it cannot supply |
+| tmux | M4 complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed install, private pane, two browsers, reload, non-empty non-slash text plus attachments held behind an active turn and its native modal, queued completion after browser departure, and broker-loss isolation | Idle editor/slash/config UI concurrency is unsupported; other versions/platforms/providers, native peer ordering, exactly-once native application, raw browser controls, slash commands, and provider-native/official-client coexistence remain unclaimed |
 | Bedrock/accountless | Experimental inference translation and isolated no-Anthropic-account launch path | Credentialed compatibility matrix and coexistence gates for each agent adapter that advertises it |
 
 The provider fixtures establish bounded facts about pinned versions. They are valuable adapter
@@ -139,9 +151,8 @@ evidence, not a separate proof/receipt program and not a substitute for the user
 
 ## 4. Delivery roadmap
 
-The structured critical path **M1 → M2 → M3** is complete at its pinned, deliberately narrow
-text/control tuples. M4 is an independent lower-fidelity graduation when it remains a bounded,
-non-overlapping tranche. M5 qualification travels with each adapter instead of becoming a final
+The structured critical path **M1 → M2 → M3** and the independent lower-fidelity M4 graduation are
+complete at their pinned, deliberately narrow tuples. M5 qualification travels with each adapter instead of becoming a final
 Cartesian-product marathon, and the viewer-parity lane may continue without reopening M1–M3.
 
 | Delivery | User-visible result | Why this order |
@@ -153,7 +164,7 @@ Cartesian-product marathon, and the viewer-parity lane may continue without reop
 | M3b — complete | Codex Remote same-thread coexistence | The official Remote thread, local TUI, companion, and two browsers exchanged text; a browser turn still completed after provider-transport disconnect |
 | UI-1 — complete | Compact activity rollup and detail sheet | Exact transcript event counts and chronological details reduce routine noise without inventing task status |
 | OpenCode status — complete | Viewer-visible read-only MAIN running/idle status | Startup/live/reconnect/child/error behavior has focused ownership, and the separate real-TUI/two-browser running-to-idle acceptance passed |
-| M4 — independent after M1 | Maintained, honest tmux fallback | Nearer to graduation, but deliberately outside the structured critical path |
+| M4 — complete | Maintained, honest tmux fallback | Exact accepted tuple is green without widening the structured critical path or claiming provider-native coexistence |
 | M5 — incremental | Advertised inference/account tuples | Qualifies claims as they ship; the final pass only closes the published matrix |
 
 ### Execution contract
@@ -433,21 +444,67 @@ boundaries remain unchanged. See the official
 
 ### M4 — tmux fallback contract
 
-Ship tmux as an explicitly lower-fidelity adapter: local pane plus multiple browsers, conservative
-input states, truthful transcript attribution, and safe recovery instructions. Do not label pane paste
-as exactly-once native application or independent official collaboration. Before advertising provider
-coexistence, retain and run the smallest opt-in real acceptance covering the local pane, provider-side
-client, two browsers, reload, and broker-loss isolation. The one-off M0 result selected the architecture;
-it is not a permanent regression gate.
+M4 completed on 2026-08-31 as an explicitly lower-fidelity adapter. The retained opt-in acceptance used
+a packed-installed CLI, exact Claude 2.1.237/Linux arm64, Bedrock
+`global.anthropic.claude-sonnet-4-6` in `us-west-1`, a real private tmux pane, a durable local SQLite
+broker, and two independent Chromium contexts. Browser-A and browser-B labels appeared once in both
+viewers, and reload reconstructed both. The fresh session first showed that permission mode was being
+confirmed without disabling browser text; native transcript evidence then resolved the viewer posture.
+A safe local Bash turn next focused Claude's native permission prompt. Browser B submitted another
+prompt, but the modal remained focused and the native turn did not complete: the browser paste and
+Enter stayed behind the already-active turn's gate. Both browsers departed; local approval completed the Bash turn
+and the queued browser turn then completed. The test next closed its broker proxy and every accepted
+socket, then proved a new local turn still completed in the retained pane. The closed transport is the
+broker-loss fact; no internal retry-log wording is part of the gate.
 
-If M4 advertises Claude Remote Control coexistence, that acceptance uses the official Claude client UI;
-another host-side API client is insufficient. Otherwise the release explicitly declines the official-
-client claim.
+The maintained command is `pnpm --dir tests/web test:tmux-live` with explicit packed-CLI, exact-Claude,
+pre-trusted-cwd, provider, region, and model environment shown in [the tmux driver document](tmux-driver.md).
+Missing prerequisites fail the dedicated gate rather than skipping it. Deterministic tests own the
+private-buffer load followed by a fixed helper's shared Linux-`flock` claim/paste/settle/Enter critical
+section, the working-flock startup probe, synchronous `UserPromptSubmit` arbitration, normalization of
+every prompt-helper failure to blocking status `2`, exact-2.1.237 main-transcript
+`system/turn_duration` and latched-interrupt records with generation-safe atomic reconcile, and exact
+current-launch hook-rejection warnings that retire only the projection, leaving the gate closed and pane
+usable, because their concurrent-hook generation is ambiguous. Old backfill and generic warnings do
+neither. Normal `SessionEnd` uses the same lock, closes the gate, then writes the retirement marker and
+retires the remote projection while preserving the local pane. Its fallback requires the private marker
+first and then best-effort closes the gate. `Stop`, `StopFailure`, and asynchronous notifications cannot
+release the gate because they can continue or race newer work. Tests also require the absence of any
+global Enter binding or TUI parser. Deterministic tests additionally own three-layer
+slash/raw-control rejection, fixed `structuredPermissions:false`, optional
+`permissionPosture:"local"|"bypassed"|"unknown"`, current-launch permission-mode resolution, the
+fresh-session unknown disclosure with text still enabled, later presence-mode updates, native settings
+preservation, absence of request/decision content, trust mutation, and automatic
+`--dangerously-skip-permissions`, immediate pre-readiness recovery output, conservative injection, and
+bounded teardown.
 
-M4 has no dependency on the structured M1 or M2 adapters. Now that both have frozen the shared
-session/capability contract, M4 can proceed independently when its remaining work stays driver-local
-and its maintained real acceptance is green. It must not interrupt the structured critical path or
-grow into a second protocol.
+The posture is published from a direct actual-bypass argument or current-launch native evidence:
+Claude's resolved SessionStart mode when supplied or a timestamped matching-session record written after
+the current transcript attach. Every attached backfill is ignored; rotation clears the current
+announce's prior mode and republishes without one, immediately restoring `unknown`. A flag that only
+makes bypass selectable is not itself bypass. Because
+Claude 2.1.237 creates a fresh transcript lazily, missing, stale, or unreadable evidence publishes
+explicit `unknown`; the maintained viewer says the mode is being confirmed and keeps ordinary text and
+attachments enabled, subject to the no-concurrent-idle-TUI rule. Later timestamped permission-mode
+evidence for the current native session updates existing presence `mode`, so the viewer resolves to
+`local` or `bypassed` and follows later
+local changes. This does not add a settings parser, permission hook, request content, or decision
+content. Explicit bypass and legacy missing posture show **Permissions off**; an older viewer also treats
+the new local or unknown posture pessimistically.
+
+Three-layer text rejection also means terminal control bytes cannot masquerade as ordinary text: tmux
+viewer/relay admission rejects C0/C1 controls other than TAB/LF in text and attachment captions, and the
+pane injector independently checks every downstream prompt before `load-buffer`.
+
+This result does not label pane paste as exactly-once native application or independent peer ordering.
+It also does not advertise provider-native Remote Control or official-client coexistence; M1's
+structured `claude-native` adapter owns that product surface. The one-off M0 provider/API run remains
+architecture evidence, not a second permanent gate.
+
+The safety claim is deliberately narrower than generic terminal isolation. Browser pane keys cannot
+cross an active model turn or the native permission/question modal reached within it. The idle local
+editor, partial drafts, slash commands, and configuration UI share one terminal stream and must not be
+manipulated while remote viewers may submit; they may otherwise merge or reorder.
 
 ### M5 — inference and account matrix
 
@@ -460,8 +517,10 @@ Add each tuple's credentialed smoke when the adapter first advertises that tuple
 exact published ledger; it does not test every theoretical agent, model, region, and credential
 combination or invent a cross-adapter E2E without an advertised outcome.
 
-More actions—permissions, questions, interrupts, modes, attachments, and tool controls—graduate per
-adapter only after their native contract and failure states are captured.
+More actions—permissions, questions, interrupts, modes, and tool controls—graduate per adapter only
+after their native contract and failure states are captured. M4 already supports attachments as
+ordinary user input under its active-turn gate and shared-idle-TUI limitation; that does not enable any
+raw control.
 
 ## 5. Shared safety invariants
 
@@ -527,10 +586,11 @@ manual pass, submit and reconcile supported actions, survive projection loss, an
 versions and capabilities without guessing.
 
 Milestones may ship independently with truthful labels. M1 proves its Claude-native row, M2 proves its
-pinned OpenCode text/interrupt row, and M3a plus M3b prove only the pinned Codex app-server/ChatGPT
+pinned OpenCode text/interrupt row, M3a plus M3b prove only the pinned Codex app-server/ChatGPT
 Remote text/status coexistence row described above. OpenCode's read-only status follow-on is a current
-implemented and accepted capability; it does not rewrite M2. Broader tuples and controls, Codex restart
-and broker-loss acceptance, maintained tmux graduation, the advertised Bedrock/account matrix, viewer
+implemented and accepted capability; it does not rewrite M2. M4 proves only the pinned lower-fidelity
+tmux row. Broader tuples and controls, Codex restart and broker-loss acceptance, the advertised
+Bedrock/account matrix, viewer
 parity, and the full product remain separate outcomes.
 Line count, fixture count, and proof machinery are not success metrics. The metric is supported user
 surfaces working safely with the smallest maintainable implementation.

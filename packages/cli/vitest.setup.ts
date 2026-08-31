@@ -31,7 +31,6 @@ for (const key of Object.keys(process.env)) {
   if (shouldScrubEnvKey(key)) delete process.env[key];
 }
 
-// Also scrub CLAUDE_CONFIG_DIR: the tmux folder-trust writer (trust.ts) resolves it ahead of $HOME the
-// way claude does, so a developer who exports it would have tests write their REAL config dir. Tests that
-// need it pass an explicit dir/override; none read it from the ambient env.
+// Also scrub CLAUDE_CONFIG_DIR so tmux child-environment tests never inherit a developer's real custom
+// Claude configuration. Tests that need it pass an explicit value.
 delete process.env.CLAUDE_CONFIG_DIR;

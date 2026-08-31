@@ -87,6 +87,14 @@ describe("TmuxCtl argv shapes", () => {
     expect(calls[1]?.args).toEqual(["send-keys", "-t", "rc-cse_x", "Escape"]);
   });
 
+  it("runShell runs the exact fixed helper command synchronously", async () => {
+    const { exec, calls } = spyExec();
+    await new TmuxCtl(exec).runShell("/private/helper reconcile");
+    expect(calls).toEqual([
+      { args: ["run-shell", "/private/helper reconcile"], options: undefined },
+    ]);
+  });
+
   it("prefixes every verb with the configured private socket", async () => {
     const { exec, calls } = spyExec([{ code: 0, stdout: "tmux 3.4\n", stderr: "" }]);
     const tmux = new TmuxCtl(exec, "/run/user/1000/remote-claw/tmux.sock");
@@ -97,10 +105,11 @@ describe("TmuxCtl argv shapes", () => {
     await tmux.setBuffer("rcin", "hello");
     await tmux.pasteBuffer("rc-cse_x", "rcin");
     await tmux.sendKeys("rc-cse_x", "Enter");
+    await tmux.runShell("/private/helper reconcile");
     await tmux.killSession("rc-cse_x");
 
     expect(calls.map(({ args }) => args.slice(0, 2))).toEqual(
-      Array.from({ length: 7 }, () => ["-S", "/run/user/1000/remote-claw/tmux.sock"]),
+      Array.from({ length: 8 }, () => ["-S", "/run/user/1000/remote-claw/tmux.sock"]),
     );
     expect(calls.map(({ args }) => args[2])).toEqual([
       "-V",
@@ -109,6 +118,7 @@ describe("TmuxCtl argv shapes", () => {
       "load-buffer",
       "paste-buffer",
       "send-keys",
+      "run-shell",
       "kill-session",
     ]);
   });

@@ -24,6 +24,12 @@ credentials.
 > legacy full-turn history: official Remote, the TUI, and two browsers exchanged one-copy text, and a
 > browser turn remained live while provider transport was disabled. This proves provider-transport
 > isolation, not per-device unsubscribe, and does not claim richer controls, restart, or broker-loss.
+> M4 is also complete for the lower-fidelity tmux fallback: a packed CLI with exact Claude 2.1.237 on
+> Linux arm64 and Bedrock Sonnet 4.6 kept a local pane and two browsers coherent across reload, browser
+> departure, a locally approved permission prompt, broker loss, and a later local turn. A browser prompt
+> stayed queued without touching the focused permission modal, then completed after both browsers had
+> departed and the local owner approved. Tmux does not claim provider-native or official-client
+> coexistence.
 > See
 > [Product goal and release gates](docs/release-finish-line.md).
 
@@ -47,7 +53,7 @@ The intended surface matrix is:
 | Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; M1's exact-2.1.237 native companion passed local TUI, literal official web UI on the user's phone, two-browser, fresh-projection restart, broker-loss, packed-install, and exact-SHA deployed-broker acceptance |
 | Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket; failure isolation is proved at the provider-transport boundary, not as per-device unsubscribe |
 | OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | M2 complete for exact OpenCode 1.17.5 on Linux arm64 with the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
-| tmux compatibility | Terminal pane | Plain Claude retains its own provider remote when requested | Multiple browsers | Experimental and deliberately lower fidelity; one Claude 2.1.237 coexistence run passed, but the official app UI was not exercised |
+| tmux compatibility | Terminal pane | Not claimed by this fallback | Multiple browsers | M4 complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed CLI, local pane, two browsers, reload, non-empty non-slash text plus attachments, active-turn native-modal isolation, browser departure, and broker-loss isolation; idle-editor concurrency, raw controls, ordering, and native application remain lower fidelity or unsupported |
 
 Agent integration and inference routing are separate axes. Claude Code or OpenCode may route model
 traffic to Anthropic or Amazon Bedrock; Codex may route through OpenAI or another supported provider.
@@ -69,7 +75,7 @@ The implemented native modes are:
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
 | `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The mutable surface remains non-empty non-slash text plus interrupt. Read-only MAIN-session running/idle status is advertised; native/local UI still owns permissions, questions, model/mode, attachments, and end. |
 | `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. Exact Codex 0.151.0/Linux arm64 only. Non-empty non-slash text and native status are supported; the attached local TUI solely owns approvals and questions, and every other browser control is disabled. |
-| `--rc-app <origin> --rc-driver=tmux --remote-control [name]` | Runs plain Claude with its own Anthropic Remote Control intact while the lower-fidelity tmux adapter projects transcript and pane input to remote-claw. A bounded real run passed through the Anthropic API and two browsers; official-app UI acceptance is still pending. |
+| `--rc-app <origin> --rc-driver=tmux [claude args]` | Runs plain Claude in a recoverable private tmux pane while the lower-fidelity adapter projects transcript and serializes browser injection against active native turns. It fail-fast requires Linux arm64 and exact Claude 2.1.237 before identity, broker, or pane startup. Browser input is ordinary non-empty non-slash text plus attachments; interrupt, model, mode, and end are disabled. Permissions, questions, and folder trust stay in that local pane unless the caller explicitly bypasses Claude policy. Idle editor/config UI concurrency and independent peer ordering are not isolated. M4's maintained Bedrock tuple is green; provider-native and official-client coexistence are not advertised for this mode. |
 
 The launch form waits for the exact successful bridge request from its Claude child. The attach form
 requires the exact native ID explicitly and creates a new projection instead of discovering a session
@@ -88,7 +94,8 @@ Existing foundations:
   client. Vercel Workflows remains an experimental backend.
 - **`packages/cli`** — identity/pass custody, broker transport, Claude private RC façade and trace
   inspector, the native Anthropic companion/client, the pinned OpenCode text/interrupt/status adapter,
-  the pinned Codex app-server companion, and experimental tmux/Bedrock adapters.
+  the pinned Codex app-server companion, the maintained lower-fidelity tmux fallback, and experimental
+  Bedrock inference/accountless connectors.
 - **Provider evidence** — bounded Claude/OpenCode/Codex fixtures and documented Bedrock live runs.
   They establish specific compatibility facts, not whole-product completion.
 
@@ -120,7 +127,33 @@ Other supported and experimental paths have narrower current claims:
   managed control socket; it rejects arbitrary Unix paths. The local TUI must stay attached and owns
   approvals/questions. M3b's exact official-Remote/TUI/two-browser coexistence and provider-transport
   isolation gate is complete; richer controls, restart/backfill, and broker-loss remain separate.
-- tmux captures transcripts and injects pane input when no higher-fidelity native seam is available.
+- tmux captures transcripts and injects ordinary non-empty non-slash text plus attachments when no
+  higher-fidelity native seam is available. Node loads a private tmux buffer before a fixed helper
+  takes a shared Linux `flock`, claims the content-free gate, and holds the lock through paste, settle,
+  and Enter. Synchronous `UserPromptSubmit` and `SessionEnd` use the same helper and lock. Startup probes
+  `flock`; every prompt-hook helper failure becomes Claude blocking status 2. `SessionEnd` retires the
+  remote projection and best-effort closes the gate (with a fallback retirement marker) while leaving
+  the pane usable. There is no global Enter binding or TUI parser. This protects an active model turn
+  and its native permission/question modal, not the idle editor, partial drafts, slash/config UIs, generic idle
+  modals, or independent peer ordering. Those idle surfaces share one keystream and must not be
+  manipulated locally while remote viewers may submit. Every raw browser control is disabled.
+  To preserve that terminal
+  boundary, the viewer and relay reject C0/C1 controls other than TAB/LF in text/captions, and injection
+  checks every resulting prompt again before tmux. Permissions, questions, and folder trust remain in
+  the local pane. Exact 2.1.237's post-loop `system/turn_duration` record conditionally releases only a
+  strictly older gate generation; an old/backfilled completion cannot delete a newer local turn's gate.
+  Exact latched-interrupt records use the same generation-safe release. Exact current-launch
+  hook-rejection warnings instead retire only the projection, leaving the gate closed and pane usable,
+  because concurrent-hook ordering is ambiguous. Old backfill and generic warnings do neither;
+  `Stop`, `StopFailure`, and asynchronous notification hooks never release the gate.
+  The viewer labels local versus bypass only from a direct bypass argument, the current SessionStart
+  event when it supplies a mode, or a timestamped matching-session record written after the current
+  transcript attach. Every attached backfill is ignored; rotation clears the prior session's mode and
+  immediately reannounces without a mode, which maps posture to `unknown`. A fresh lazy transcript also publishes explicit `unknown`: the viewer says the mode is being confirmed and
+  keeps text and attachments enabled. Later timestamped native evidence updates presence and follows
+  local changes.
+  Explicit bypass or a legacy missing posture shows permissions off; no settings parser, permission
+  hook, request, or decision bridge is added.
 - Bedrock redirects inference while collaboration remains a separate adapter concern.
 - Accountless Bedrock seeds isolated Claude state so no Anthropic account is needed; it still requires
   AWS/Bedrock and remote-claw credentials.

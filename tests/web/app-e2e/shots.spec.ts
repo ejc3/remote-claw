@@ -125,6 +125,20 @@ test("Codex: first-class badge, local-input disclosure, and disabled controls", 
   await page.screenshot({ path: `${OUT()}/04b-codex-text-only.png`, fullPage: true });
 });
 
+test("tmux: unresolved native permission posture is explicit, not mislabeled off", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ harness: "tmux", caps: "tmux-unknown" });
+  await connect(page, pass);
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(page.locator(".local-input-disclosure")).toContainText(
+    "Confirming permission mode in the local Claude tmux pane.",
+  );
+  await expect(page.locator(".perms-bypassed")).toHaveCount(0);
+  await page.locator("section.chat").screenshot({ path: `${OUT()}/04c-tmux-confirming.png` });
+});
+
 test("compatibility permission prompt", async ({ page, seedHost }) => {
   const { pass } = await seedHost({ perm: true, caps: "compat-mitm" });
   await connect(page, pass);

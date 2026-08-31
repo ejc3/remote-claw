@@ -76,9 +76,6 @@ export const RC_FLAGS: Readonly<Record<string, RcFlagKind>> = {
   // mandatory native-readiness proof; hook-disabling Claude modes (--bare/--safe-mode) are rejected.
   "rc-session-hook": "boolean",
   "rc-no-session-hook": "boolean",
-  // tmux driver only: opt OUT of permission mirroring (mirror the picker to the viewer), restoring the
-  // legacy auto-approve-everything behavior. DEFAULT ON; env RC_TMUX_SKIP_PERMISSIONS truthy.
-  "rc-tmux-skip-permissions": "boolean",
   // Accountless native RC: seed a synthetic claude.ai login + the RC feature gates into an isolated
   // config dir so native `/remote-control` works with NO real claude.ai login. Requires
   // `--rc-inference=bedrock` (a fabricated credential can't reach real Anthropic for inference). The

@@ -48,10 +48,17 @@ function presetHarness(p: string | undefined): HarnessDescriptor {
 function presetCaps(p: string | undefined): DriverCapabilities {
   if (p === "compat-mitm") return MITM_CAPABILITIES;
   if (p === "native-rc") return CLAUDE_NATIVE_CAPABILITIES;
-  // Explicitly choose the default READY posture. The driver itself starts conservative and publishes
-  // this tuple only after its permission hook is proved ready; a static pre-ready constant previously
-  // let this fixture silently advertise the wrong permission posture.
-  if (p === "tmux") return tmuxCapabilities(true);
+  // The tmux compatibility driver always leaves permissions in Claude's native/local pane.
+  if (p === "tmux") return tmuxCapabilities();
+  if (p === "tmux-bypassed") return tmuxCapabilities("bypassed");
+  if (p === "tmux-unknown") return tmuxCapabilities("unknown");
+  if (p === "tmux-legacy-skip")
+    return {
+      structuredPermissions: false,
+      status: false,
+      controls: { interrupt: true, setModel: true, setMode: false, end: false },
+      attachments: true,
+    };
   if (p === "opencode")
     // Exact supported OpenCode default: permission interaction remains native/local, MAIN-session status
     // is read-only, and only plain text + interrupt cross the viewer mutation boundary.

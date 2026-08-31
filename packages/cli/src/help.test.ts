@@ -42,7 +42,6 @@ describe("RC_HELP banner", () => {
 
   it("documents the per-driver (tmux / opencode / codex) flags", () => {
     for (const f of [
-      "--rc-tmux-skip-permissions",
       "--rc-session-hook",
       "--rc-no-session-hook",
       "--rc-oc-url",
@@ -54,6 +53,8 @@ describe("RC_HELP banner", () => {
     ]) {
       expect(RC_HELP).toContain(f);
     }
+    expect(RC_HELP).toMatch(/Permissions and questions remain native\/local in the tmux pane/);
+    expect(RC_HELP).not.toContain("--rc-tmux-skip-permissions");
   });
 
   it("documents the env-only knobs that have no flag", () => {
@@ -104,8 +105,12 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toMatch(/required version probe still runs/);
   });
 
-  it("distinguishes the pinned OpenCode tuple from experimental tmux and Bedrock inference", () => {
-    expect(RC_HELP).toContain("tmux remains an experimental/internal compatibility driver");
+  it("distinguishes the maintained tmux boundary, pinned OpenCode tuple, and Bedrock inference", () => {
+    expect(RC_HELP).toContain("tmux is the maintained lower-fidelity compatibility driver");
+    expect(RC_HELP).toContain("Linux arm64 with Claude 2.1.237");
+    expect(RC_HELP).toContain("no provider-native/official-client");
+    expect(RC_HELP).toMatch(/idle editor and slash\/config UI share one keystream/);
+    expect(RC_HELP).toMatch(/do not manipulate them while\s+remote viewers may submit/);
     expect(RC_HELP).toContain("Pinned OpenCode driver (--rc-driver=opencode)");
     expect(RC_HELP).toMatch(/pinned supported text\/interrupt\/status tuple/);
     expect(RC_HELP).toMatch(/outside the primary coexistence\s+path/);

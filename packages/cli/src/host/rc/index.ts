@@ -105,12 +105,13 @@ export {
   type TmuxDriverDeps,
   tmuxCapabilities,
   tmuxDriver,
+  tmuxPermissionPosture,
+  tmuxRuntimePermissionPosture,
 } from "./tmux/driver.js";
 export {
   downstreamUserText,
   INJECT_BUFFER,
   injectUserText,
-  isInterrupt,
   PASTE_SETTLE_MS,
   runInjectPump,
 } from "./tmux/inject.js";

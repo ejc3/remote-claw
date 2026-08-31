@@ -23,6 +23,12 @@ acceptance passed on 2026-08-31 without rewriting the M2 evidence. The exact Cod
 app-server text/status companion passed M3a with one local TUI and two browsers. M3b also passed on one
 exact official Remote thread through the literal managed Unix socket and legacy full-turn hydration;
 its bounded failure result is provider-transport isolation, not per-device unsubscribe.
+M4's exact Claude 2.1.237/Linux arm64/Bedrock Sonnet 4.6 tmux acceptance is also complete for its
+lower-fidelity local-pane/two-browser boundary. A browser turn stayed queued while an active model turn
+held a native permission modal, both browsers departed, local approval completed the native turn, the
+queued browser turn completed, and broker loss remained isolated. The idle editor and idle slash/config
+UI remain one shared keystream and must not be manipulated while remote viewers may submit. This
+path claims neither independent peer ordering nor provider-native/official-client coexistence.
 
 ## 1. Topology
 
@@ -44,9 +50,9 @@ reaches Anthropic. The `claude-native` launch form instead uses the proxy transp
 exact successful bridge, then uses Anthropic history/SSE/text POST as an app client. Its attach-only
 form accepts an explicit exact native session ID and starts no interactive Claude session or proxy;
 the pinned-version probe still runs. The pinned OpenCode adapter, pinned Codex companion, and
-experimental tmux fallback reach the same `Session` seam through their own native surfaces. Codex
-resumes one exact thread through a constrained local app-server transport and requires the local TUI
-to remain attached.
+maintained lower-fidelity tmux fallback reach the same `Session` seam through their own native
+surfaces. Codex resumes one exact thread through a constrained local app-server transport and requires
+the local TUI to remain attached.
 See
 [pluggable-harness.md](pluggable-harness.md).
 
@@ -356,7 +362,10 @@ crash can be skipped. The current host also has no persistent source-ID-to-resul
 
 Presence uses `session_announce` on the identity bus. It contains the session title, cwd, launch-time
 git snapshot, worker status, derived phase, open-permission state, permission mode, driver capability
-vector, harness descriptor, process incarnation, per-incarnation announce sequence, and send time.
+vector, harness descriptor, process incarnation, per-incarnation announce sequence, and send time. The
+capability vector may include `permissionPosture:"local"|"bypassed"|"unknown"` when
+`structuredPermissions:false`; absence never proves a native gate, and explicit `unknown` is distinct
+from legacy absence.
 
 The host publishes immediately when meaningful presence changes and otherwise every 20 seconds. The
 viewer accepts only newer incarnation/announce coordinates and derives local connection state from a
@@ -380,14 +389,16 @@ cannot bypass a disabled button:
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
 | Claude native companion | no | no | no | no | no | no | no |
-| Experimental tmux, default mirroring | yes | no | yes | yes | no | no | yes |
+| tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | Pinned Codex M3a | no | yes | no | no | no | no | no |
 
-The stable Claude and pinned Codex surfaces accept only non-empty, non-slash text. Internal
-compatibility plumbing may understand more features, but those mutations are not advertised or
-accepted on the supported boundary.
+The stable Claude, pinned Codex, and maintained tmux surfaces accept only non-empty, non-slash text.
+Tmux also accepts attachments as ordinary relay-owned user turns. Internal compatibility plumbing may
+understand more features, but those mutations are not advertised or accepted on the supported
+boundary. Tmux protects an already active model turn and its native permission/question modal; it does
+not isolate the idle local editor or idle slash/config UI from concurrent browser injection.
 
 ## 9. Permissions
 
@@ -405,6 +416,53 @@ The pinned Codex companion also exposes no browser permission or question answer
 has no server-request response method; an attached local Codex TUI is the sole owner of approvals and
 questions.
 
+The tmux adapter likewise leaves permissions and questions in Claude's local pane unless the caller's
+resolved Claude policy explicitly bypasses them. It injects no `PreToolUse` hook, transports no request
+or decision content, changes no trust/policy state, and never adds a permission-bypass flag. Before any
+writable projection is published, the host proves that the fixed private input helper and Linux `flock`
+work. Node loads prompt bytes into a private tmux buffer over stdin; the helper then holds the shared
+kernel lock across content-free gate claim, bracketed pane paste, bounded settle, and Enter. Claude's
+synchronous `UserPromptSubmit` hook drains its payload and takes that same lock before closing the gate.
+Every prompt-helper failure is normalized to Claude's blocking status `2`. Therefore, when the local
+hook wins, remote input sees a busy gate before pane mutation; when remote input wins, Claude cannot
+start the submitted turn until the remote mutation leaves the lock.
+
+Exact 2.1.237's main-transcript `system/turn_duration` queues a conditional release only after the full
+model loop and continuations finish. The driver atomically renames the gate and releases it only when its
+mtime generation is strictly older than that completion; a delayed or backfilled turn A cannot delete
+turn B's gate. Exact latched-interrupt records use the same generation-safe release. Exact current-launch
+command-hook or structured sibling-hook rejection warnings can race our concurrent helper, so they
+retire only the remote projection and leave the gate closed and pane usable rather than guessing a
+generation. Old backfill and generic warnings do neither. Normal `SessionEnd` takes the same lock,
+closes the gate, and then writes the retirement marker. If that helper fails, a private fallback
+requires the marker first and then best-effort closes the gate. The remote projection retires while the
+local pane remains usable. `Stop`, `StopFailure`, and asynchronous notification hooks are not release
+signals because they can race a newer turn. No global Enter binding or TUI parser is installed.
+
+This guarantees only that browser keystrokes do not cross an already active model turn or the native
+permission/question modal reached within it. Tmux has no exclusive idle-editor lease: a local partial
+draft can merge or reorder with a browser prompt, and an idle slash/config UI can consume shared pane
+keys. Do not manipulate the idle local editor, slash commands, or configuration UI while remote
+viewers may submit. This fallback does not claim independent peer ordering or generic idle-modal
+isolation.
+
+Tmux publishes a known posture from a direct active-bypass argument or current-launch native evidence:
+Claude's resolved SessionStart mode when present or a timestamped matching-session record written after
+the current transcript attach. Every attached backfill is ignored; rotation clears the current
+announce's mode and republishes without one, restoring `unknown`. A flag that merely permits a later
+bypass does not by itself. When fresh
+Claude 2.1.237 has not yet created its transcript and SessionStart omits the mode, tmux publishes
+`permissionPosture:"unknown"` rather than guessing. The maintained viewer shows **Confirming
+permission mode in the local Claude tmux pane.** for that explicit value and keeps ordinary text and
+attachments enabled, subject to the same no-concurrent-idle-TUI rule above.
+
+The transcript pump projects later timestamped permission-mode evidence for the current native
+session through the existing presence `mode`. The viewer becomes `local` or `bypassed` once native
+evidence arrives and follows later local mode changes. No settings parser, `PreToolUse` hook, permission
+request, or decision channel is involved. Explicit bypass and legacy posture-absent sessions show
+**Permissions off**; an older viewer remains pessimistic for the new local or unknown tuple and cannot
+answer a gate.
+
 ## 10. Attachments
 
 The experimental attachment path carries image bytes inside an E2E `attachment` message, split into
@@ -418,9 +476,16 @@ is false.
 The viewer stamps `interrupt`, `set_model`, `set_mode`, and `end` with an expiry. The relay drops those
 actions when stale and maps supported controls to driver events:
 
-- `interrupt` → Claude `interrupt`, tmux Escape, or OpenCode abort;
-- `set_model` → Claude `set_model` or tmux `/model`; and
+- `interrupt` → Claude `interrupt` or OpenCode abort;
+- `set_model` → Claude `set_model`; and
 - `set_mode` → Claude `set_permission_mode` only where advertised.
+
+Tmux advertises every raw control false. The relay rejects those frames, and its injection boundary
+acknowledges a stale or direct control without sending any pane keys. The same viewer/relay/injection
+defense applies to slash-leading browser text so commands such as `/model` remain local-only. For text
+and attachment captions that do reach tmux, the viewer and relay reject C0/C1 terminal controls except
+TAB/LF, and injection checks every composed prompt again before `load-buffer`; ESC cannot terminate the
+bracketed paste and become raw keys.
 
 Claude Code 2.1.x's REPL bridge currently recognizes this complete `control_request.subtype` set:
 
@@ -449,8 +514,8 @@ capability vector currently advertises all three false.
 
 Claude's REPL bridge has no working remote `end_session`; the official RC server's request is rejected
 by Claude too. The current `end` action therefore only clears abandoned permission state and is
-advertised false by every driver. Slash commands use ordinary `user` input, but the stable Claude
-surface, pinned OpenCode M2 surface, and pinned Codex M3a surface reject slash-leading text.
+advertised false by every driver. Slash commands use ordinary `user` input, but the stable Claude,
+pinned OpenCode M2, pinned Codex M3a, and maintained tmux surfaces reject slash-leading text.
 
 `catch_up` is a separate replay request, not a native control verb. The viewer currently stamps it
 with an expiry, but the host's replay branch does not enforce that expiry. Stable sequence and message

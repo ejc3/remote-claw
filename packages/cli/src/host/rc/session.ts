@@ -346,6 +346,15 @@ export class Session {
     return ev;
   }
 
+  /** Forget an advisory permission mode and wake relay followers so their next presence announce omits
+   * it immediately. Drivers use this when a native session rotates: a mode proved for the old native
+   * session is not evidence for the new one. */
+  clearPermissionMode(): void {
+    if (this.permissionMode === null) return;
+    this.permissionMode = null;
+    this.#gate.wake();
+  }
+
   /** A contradiction at the pinned Claude-native boundary is terminal for this remote session. If
    *  the batch were merely rejected while later batches remained admissible, the broker projection
    *  could continue after a silently missing native event. */
