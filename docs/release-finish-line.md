@@ -1,8 +1,8 @@
 # remote-claw execution roadmap and release gates
 
 **Status: the full product is not implemented.** The shared crypto, broker, browser, and Claude
-private-relay path work. OpenCode and tmux have completed narrow supported tuples; Bedrock inference and
-accountless have useful implementations with narrower evidence. M1's Linux/exact-2.1.237 structured
+private-relay path work. OpenCode, tmux, and the currently published Bedrock/accountless ledger have
+completed narrow supported tuples. M1's Linux/exact-2.1.237 structured
 text companion and explicit
 same-native-session restart attachment are implemented. Bounded 2026-08-30 runs proved the local TUI,
 an authenticated Anthropic RC API client, two remote-claw browsers, fresh-projection restart,
@@ -607,8 +607,7 @@ Milestones may ship independently with truthful labels. M1 proves its Claude-nat
 pinned OpenCode text/interrupt row, M3a plus M3b prove only the pinned Codex app-server/ChatGPT
 Remote text/status coexistence row described above. OpenCode's read-only status follow-on is a current
 implemented and accepted capability; it does not rewrite M2. M4 proves only the pinned lower-fidelity
-tmux row. Broader tuples and controls, Codex restart and broker-loss acceptance, the advertised
-Bedrock/account matrix, viewer
-parity, and the full product remain separate outcomes.
+tmux row. Broader tuples and controls, Codex restart and broker-loss acceptance, additional
+Bedrock/account tuples, viewer parity, and the full product remain separate outcomes.
 Line count, fixture count, and proof machinery are not success metrics. The metric is supported user
 surfaces working safely with the smallest maintainable implementation.
