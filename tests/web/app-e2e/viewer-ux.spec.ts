@@ -270,20 +270,38 @@ test.describe("mobile a11y (#151)", () => {
     }
   });
 
-  test("expandable transcript rows meet the 44px touch target", async ({ page, seedHost }) => {
+  test("activity detail rows are reachable by keyboard and meet the 44px touch target", async ({
+    page,
+    seedHost,
+  }) => {
     const { pass } = await seedHost();
     await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
     await page.getByRole("button", { name: "Connect" }).click();
     await page.locator("button.row", { hasText: "rc box" }).click();
 
+    const trigger = page.getByRole("button", { name: /^Activity:/ }).first();
+    const triggerHeight = await trigger.evaluate((el) => el.getBoundingClientRect().height);
+    expect(triggerHeight).toBeGreaterThanOrEqual(44);
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "Activity details" });
+    const close = dialog.getByRole("button", { name: "Close Activity details" });
+    await expect(close).toBeFocused();
+
+    // The shared trap must include native <summary> controls, not loop forever on its only button.
+    await page.keyboard.press("Tab");
+    await expect(dialog.locator(".tool-row-x > summary").first()).toBeFocused();
+
     for (const control of [
-      page.locator(".tool-row-x > summary").first(),
-      page.locator(".tool-result > summary").first(),
+      dialog.locator(".tool-row-x > summary").first(),
+      dialog.locator(".tool-result > summary").first(),
     ]) {
       await expect(control).toBeVisible();
       const height = await control.evaluate((el) => el.getBoundingClientRect().height);
       expect(height).toBeGreaterThanOrEqual(44);
     }
+
+    await page.keyboard.press("Escape");
+    await expect(trigger).toBeFocused();
   });
 
   test("the question controls have a clear primary action and 44px targets", async ({
@@ -802,6 +820,37 @@ test.describe("desktop layout (≥761px)", () => {
     if (!sb) return;
     expect(sb.width).toBeLessThanOrEqual(360); // a compact popover, not full-width
     expect(sb.y).toBeLessThan(300); // anchored below the top-right ⋯, not pinned to the bottom edge
+  });
+
+  test("a mid-transcript activity popover stays within a short viewport and scrolls to its tail", async ({
+    page,
+    seedHost,
+  }) => {
+    await page.setViewportSize({ width: 1000, height: 360 });
+    const { pass } = await seedHost();
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+    await page
+      .getByRole("button", { name: /^Activity:/ })
+      .first()
+      .click();
+
+    const sheet = page.getByRole("dialog", { name: "Activity details" });
+    await expect(sheet).toHaveClass(/sheet--anchored/);
+    const box = await sheet.boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(360);
+    const scroll = await sheet.evaluate((element) => ({
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+    }));
+    expect(scroll.scrollHeight).toBeGreaterThan(scroll.clientHeight);
+    const lastEvent = sheet.locator(".activity-item").last();
+    await lastEvent.scrollIntoViewIfNeeded();
+    await expect(lastEvent).toBeInViewport();
   });
 });
 

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { isNearBottom, transcriptScrollAction } from "../app/page.js";
+import type { Message } from "../app/lib/viewer.js";
+import { isNearBottom, transcriptHasVisibleAddition, transcriptScrollAction } from "../app/page.js";
+
+const message = (kind: string, text = ""): Message => ({
+  kind,
+  text,
+  msgId: kind,
+  seq: 1,
+});
 
 // #design-pass regression guard for the worst transcript bug: the transcript used to autoscroll to
 // the bottom on EVERY new frame, yanking the reader down mid-scroll while history was being read.
@@ -53,5 +61,27 @@ describe("transcriptScrollAction (stick-to-bottom decision)", () => {
 
   it("does nothing when scrolled up and nothing visible was added (no spurious pill)", () => {
     expect(transcriptScrollAction(false, false)).toBe("none");
+  });
+});
+
+describe("transcriptHasVisibleAddition", () => {
+  it("treats a new compact activity frame as visible growth even at a fixed DOM height", () => {
+    const messages = [
+      message("tool_use"),
+      message("tool_result", JSON.stringify({ output: "captured" })),
+    ];
+    expect(transcriptHasVisibleAddition(false, 1, messages)).toBe(true);
+    expect(transcriptScrollAction(false, transcriptHasVisibleAddition(false, 1, messages))).toBe(
+      "show-pill",
+    );
+  });
+
+  it("keeps null-only appended frames quiet when the DOM did not grow", () => {
+    expect(
+      transcriptHasVisibleAddition(false, 1, [
+        message("assistant"),
+        message("permission_resolved"),
+      ]),
+    ).toBe(false);
   });
 });

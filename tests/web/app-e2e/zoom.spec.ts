@@ -174,7 +174,13 @@ test("console regions", async ({ page, seedHost }) => {
   metrics.push({ region: "composer", padding: comp.padding, gaps: comp.gaps });
 
   await shot(page, "17-assistant-prose", ".prose.assistant");
-  await shot(page, "18-tool-row", ".tool-row");
+  await shot(page, "18-activity-rollup", ".activity-rollup");
+  await page
+    .getByRole("button", { name: /^Activity:/ })
+    .first()
+    .click();
+  await expect(page.getByRole("dialog", { name: "Activity details" })).toBeVisible();
+  await shot(page, "18a-tool-row", ".activity-list .tool-row");
 });
 
 test("transcript cards", async ({ page, seedHost }) => {

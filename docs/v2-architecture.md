@@ -665,11 +665,17 @@ restart/backfill, or broker-loss behavior.
 
 ## 16. Post-M2 viewer parity lane
 
-Viewer work may proceed as a small parallel product lane without reopening M1 or M2. Start with a
-compact activity rollup and background-task sheet built from event families already represented by the
-shared transcript. Graduate richer Claude-native command, task-phase, media, and composer families only
-after redacted trace evidence defines their semantics and lifecycle. Visual resemblance is useful UI
-inspiration; it is not a capability or cross-agent parity claim.
+Viewer UI-1 is a pure client projection over the shared transcript. A maximal contiguous run of routine,
+visible <code>tool_use</code>, non-error/non-empty <code>tool_result</code>, and <code>task</code> frames
+renders as one exact-count Activity row from its first event. The responsive detail sheet reuses the
+same row renderers in original order. Explicit errors remain first-class rows; every other retained
+transcript message is a boundary. The durable transcript, relay schema, and provider capabilities are
+unchanged.
+
+The projection deliberately does not pair results with calls or infer background-task state, success,
+duration, tokens, phases, workflow, or provider. Richer command, task-phase, media, and composer families
+graduate only after redacted trace evidence defines their semantics and lifecycle. Visual resemblance is
+useful UI inspiration; it is not a capability or cross-agent parity claim.
 
 ## 17. Claude Remote Control boundary
 

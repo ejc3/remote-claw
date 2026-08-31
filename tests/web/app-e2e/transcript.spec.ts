@@ -15,7 +15,7 @@ import { expect, test } from "./fixtures";
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 
-test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and prose", async ({
+test("renders a full RC turn: honest activity rollups, nested work, errors, and prose", async ({
   page,
   seedHost,
 }) => {
@@ -35,24 +35,41 @@ test("renders a full RC turn: tool Output, sub-agent Task nesting, errors, and p
   await expect(row.locator(".git-chip")).toContainText("↑2");
   await row.click();
 
-  // (1) The top-level tool's Output — the tool_result the relay used to drop (#47). Target it by
-  // identity (not sub, not error) so a frame-ordering regression can't make .first() grab another row.
-  const output = page.locator('details.tool-result[data-sub="false"][data-error="false"]');
-  await expect(output).toHaveCount(1);
-  await output.click(); // expand
-  await expect(output.locator("pre.tool-output")).toContainText("built in 3.42s");
-
-  // (2) The sub-agent Task lifecycle row — the sub-agent is now visible (#47).
-  await expect(page.locator(".task-row", { hasText: "Sub-agent is running" })).toBeVisible();
-
-  // (3) The sub-agent's Output nests under the Task (the data-sub fix), surviving its null content
-  //     block (the codex crash guard) — there is exactly one sub-tagged tool_result.
-  await expect(page.locator('details.tool-result[data-sub="true"]')).toHaveCount(1);
-  await expect(page.locator('details.tool-result[data-sub="true"]')).toContainText(
-    "no flake reproduced",
+  // (1) Two routine contiguous runs collapse; exact event counts are the only summary semantics.
+  const rollups = page.getByRole("button", { name: /^Activity:/ });
+  await expect(rollups).toHaveCount(2);
+  await expect(rollups.nth(0)).toHaveAccessibleName(
+    "Activity: 2 tool calls · 1 tool result · 1 task event",
   );
+  await expect(rollups.nth(1)).toHaveAccessibleName("Activity: 1 tool call · 1 tool result");
 
-  // (4) An error tool_result renders red (data-error).
+  // (2) Opening the first rollup preserves all four captured events in exact transcript order.
+  await rollups.nth(0).click();
+  const dialog = page.getByRole("dialog", { name: "Activity details" });
+  await expect(dialog).toBeVisible();
+  const events = dialog.locator(".activity-item");
+  await expect(events).toHaveCount(4);
+  await expect(events.nth(0)).toContainText("Command build the release binary");
+  await expect(events.nth(1)).toContainText("View output");
+  await expect(events.nth(2)).toContainText("Task reproduce the flaky rc-spine test");
+  await expect(events.nth(3)).toContainText("Sub-agent started");
+
+  // The top-level tool's output still expands in place inside the sheet.
+  const output = dialog.locator('details.tool-result[data-sub="false"][data-error="false"]');
+  await output.click();
+  await expect(output.locator("pre.tool-output")).toContainText("built in 3.42s");
+  await dialog.getByRole("button", { name: "Close Activity details" }).click();
+  await expect(rollups.nth(0)).toBeFocused();
+
+  // (3) The second sheet contains the sub-agent's output, including the null-block crash guard path.
+  await rollups.nth(1).click();
+  const subOutput = dialog.locator('details.tool-result[data-sub="true"]');
+  await expect(subOutput).toHaveCount(1);
+  await subOutput.click();
+  await expect(subOutput.locator("pre.tool-output")).toContainText("no flake reproduced");
+  await page.keyboard.press("Escape");
+
+  // (4) The explicit error is salient and remains first-class outside any routine rollup.
   await expect(page.locator('details.tool-result[data-error="true"]')).toBeVisible();
 
   // (5) The model's prose (Prose renders a div.prose.assistant).

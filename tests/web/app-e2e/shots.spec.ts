@@ -64,15 +64,25 @@ test("session list", async ({ page, seedHost }) => {
   await page.screenshot({ path: `${OUT()}/02-session-list.png` });
 });
 
-test("transcript: prose, tool rows, diff, task nesting", async ({ page, seedHost }) => {
+test("transcript: prose and compact activity details", async ({ page, seedHost }) => {
   const { pass } = await seedHost();
   await connect(page, pass);
   await page.locator("button.row", { hasText: "rc box" }).click();
   await expect(page.locator(".prose.assistant", { hasText: "Build is green" })).toBeVisible();
   await page.screenshot({ path: `${OUT()}/03-transcript.png`, fullPage: true });
 
-  // Expanded tool detail (the Output pre + the chevron/summary treatment).
-  const output = page.locator('details.tool-result[data-sub="false"][data-error="false"]');
+  // The exact captured activity stays chronological in the responsive sheet/popover.
+  await page
+    .getByRole("button", { name: /^Activity:/ })
+    .first()
+    .click();
+  await settleSheet(page);
+  await page.screenshot({ path: `${OUT()}/03a-activity-sheet.png`, fullPage: true });
+
+  // Expanded tool output inside the activity sheet (the pre + chevron/summary treatment).
+  const output = page
+    .getByRole("dialog", { name: "Activity details" })
+    .locator('details.tool-result[data-sub="false"][data-error="false"]');
   await output.click();
   await expect(output.locator("pre.tool-output")).toContainText("built in 3.42s");
   await page.screenshot({ path: `${OUT()}/04-tool-output-expanded.png`, fullPage: true });

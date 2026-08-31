@@ -29,10 +29,13 @@ import { claimHandoff } from "./lib/handoff-claim";
 import { handoffEnabled } from "./lib/handoff-feature";
 import { friendlySendError } from "./lib/send-error";
 import {
+  type ActivityGroup,
   basename,
   diffOf,
   dirname,
   editStat,
+  groupTranscriptActivity,
+  isRoutineActivityMessage,
   isSlashCommand,
   parseAccepted,
   parsePermissionResolved,
@@ -42,6 +45,7 @@ import {
   parseToolUse,
   type Question,
   sanitizeInput,
+  summarizeActivity,
   type ToolInput,
   toolHint,
 } from "./lib/transcript";
@@ -740,6 +744,19 @@ export function transcriptScrollAction(
   return contentGrew ? "show-pill" : "none";
 }
 
+/** DOM height catches ordinary new rows; a growing compact activity rollup can add a real event without
+ * changing height. Treat that as visible logical growth so a reader scrolled into history still gets the
+ * New messages affordance, while null-only frames (accepted/resolved/empty result) remain quiet. */
+export function transcriptHasVisibleAddition(
+  domGrew: boolean,
+  previousMessageCount: number,
+  messages: readonly Message[],
+): boolean {
+  if (domGrew) return true;
+  if (messages.length <= previousMessageCount) return false;
+  return messages.slice(previousMessageCount).some(isRoutineActivityMessage);
+}
+
 /** The session-list label for a session's harness (#164): which agent + how it's bridged. A legacy host
  *  omits `harness` and falls back to the private-relay RC label. The native companion is named explicitly
  *  so it cannot be mistaken for that replacement relay. */
@@ -1113,6 +1130,15 @@ function Transcript(props: {
 }) {
   const { viewer, sessionId, announce, now, reconnectingSince } = props;
   const [messages, setMessages] = useState<Message[]>([]);
+  const [activitySheetId, setActivitySheetId] = useState<string | null>(null);
+  const transcriptItems = useMemo(() => groupTranscriptActivity(messages), [messages]);
+  const openActivity =
+    activitySheetId === null
+      ? null
+      : (transcriptItems.find(
+          (item): item is ActivityGroup =>
+            item.kind === "activity_group" && item.id === activitySheetId,
+        ) ?? null);
   const [input, setInput] = useState("");
   const [staged, setStaged] = useState<StagedImage[]>([]);
   const [sending, setSending] = useState(false);
@@ -1180,6 +1206,7 @@ function Transcript(props: {
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const atBottomRef = useRef(true);
   const prevScrollHeightRef = useRef(0);
+  const prevMessageCountRef = useRef(0);
   const [showJump, setShowJump] = useState(false);
   const announceMode = announce?.mode;
   const announceSentAt = announce?.sentAt;
@@ -1340,12 +1367,16 @@ function Transcript(props: {
   // "jump to latest" pill. The follow is an INSTANT scrollTop (not behavior:"smooth") on purpose: a smooth
   // animation fires onScroll at intermediate positions, which would latch atBottomRef=false mid-turn and
   // stop the live transcript from following; instant also means reduced-motion users get no surprise glide.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: react to new messages only.
   useEffect(() => {
     const el = scrollerRef.current;
     if (el === null) return;
-    const grew = el.scrollHeight > prevScrollHeightRef.current;
+    const grew = transcriptHasVisibleAddition(
+      el.scrollHeight > prevScrollHeightRef.current,
+      prevMessageCountRef.current,
+      messages,
+    );
     prevScrollHeightRef.current = el.scrollHeight;
+    prevMessageCountRef.current = messages.length;
     const action = transcriptScrollAction(atBottomRef.current, grew);
     if (action === "follow") el.scrollTop = el.scrollHeight;
     else if (action === "show-pill") setShowJump(true);
@@ -1661,20 +1692,33 @@ function Transcript(props: {
         {messages.length === 0 && !showGapRecovery && (
           <p className="empty-pad">{emptyTranscriptHint(cs)}</p>
         )}
-        {messages.map((m) => (
-          <Bubble
-            key={`${m.msgId}:${m.seq}`}
-            message={m}
-            onGrant={grant}
-            canGrant={canGrantPermissions}
-            permissionsLocal={permissionsLocal}
-            permissionAgent={permissionAgent}
-            hostConnected={connected}
-            resolved={resolved}
-            resolvedAnswers={resolvedAnswers}
-          />
-        ))}
+        {transcriptItems.map((item) =>
+          item.kind === "activity_group" ? (
+            <ActivityRollup
+              key={item.id}
+              group={item}
+              expanded={activitySheetId === item.id}
+              onOpen={() => setActivitySheetId(item.id)}
+            />
+          ) : (
+            <Bubble
+              key={`${item.message.msgId}:${item.message.seq}`}
+              message={item.message}
+              onGrant={grant}
+              canGrant={canGrantPermissions}
+              permissionsLocal={permissionsLocal}
+              permissionAgent={permissionAgent}
+              hostConnected={connected}
+              resolved={resolved}
+              resolvedAnswers={resolvedAnswers}
+            />
+          ),
+        )}
       </div>
+
+      {openActivity !== null && (
+        <ActivitySheet group={openActivity} onClose={() => setActivitySheetId(null)} />
+      )}
 
       {/* `.jump-latest` keeps only its absolute positioning (centred, floating above the composer);
           the pill chrome is the primary Button. */}
@@ -2059,10 +2103,21 @@ function Sheet({
     if (t.width === 0 && t.height === 0) return;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
+    const gap = 6;
+    const edge = 12;
+    const roomBelow = vh - t.bottom - gap - edge;
+    const roomAbove = t.top - gap - edge;
+    const available = Math.max(roomBelow, roomAbove);
+    // On an unusually short desktop viewport neither anchored side can keep even the header useful.
+    // Fall back to the ordinary bottom sheet, whose viewport-relative cap is the safer presentation.
+    if (available < 120) return;
     const s: CSSProperties = {};
-    if (t.top < vh / 2)
-      s.top = Math.round(t.bottom + 6); // trigger up top → drop below it
-    else s.bottom = Math.round(vh - t.top + 6); // trigger near the bottom → open upward
+    if (roomBelow >= roomAbove)
+      s.top = Math.round(t.bottom + gap); // more room below → drop below it
+    else s.bottom = Math.round(vh - t.top + gap); // more room above → open upward
+    // Inline cap is the actual chosen-side room (and never wider than the generic desktop 520px cap).
+    // `.sheet` already owns overflow-y:auto, so a long activity run remains fully reachable.
+    s.maxHeight = Math.min(520, Math.floor(available));
     if (t.left < vw / 2)
       s.left = Math.round(t.left); // left-side trigger → align left edges
     else s.right = Math.round(vw - t.right); // right-side trigger → align right edges
@@ -2071,7 +2126,11 @@ function Sheet({
   useEffect(() => {
     const trigger = document.activeElement as HTMLElement | null; // the button that opened the sheet
     const focusables = () =>
-      Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])") ?? []);
+      Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((element) => element.getClientRects().length > 0);
     // Move focus into the sheet (the active row, else the first) so keyboard users land on the choices.
     (
       dialogRef.current?.querySelector<HTMLElement>('[data-active="true"]') ?? focusables()[0]
@@ -2324,6 +2383,89 @@ export function SessionSheet({
   );
 }
 
+function ActivityRollup({
+  group,
+  expanded,
+  onOpen,
+}: {
+  group: ActivityGroup;
+  expanded: boolean;
+  onOpen: () => void;
+}) {
+  const summary = summarizeActivity(group.messages);
+  // Keep exactly one replaceable announcement node per run. Re-keying it makes each appended batch an
+  // aria-relevant="additions" event even though the compact button only changes text; replacing the prior
+  // node avoids retaining a second hidden transcript in both the DOM and accessibility tree.
+  const previousMessageCountRef = useRef(group.messages.length);
+  const [liveAnnouncement, setLiveAnnouncement] = useState<{
+    id: string;
+    text: string;
+  } | null>(null);
+  useEffect(() => {
+    const previousCount = previousMessageCountRef.current;
+    previousMessageCountRef.current = group.messages.length;
+    if (group.messages.length <= previousCount) return;
+    const appended = group.messages.slice(previousCount);
+    const last = appended.at(-1);
+    if (!last) return;
+    setLiveAnnouncement({
+      id: `${last.msgId}:${last.seq}`,
+      text: `New activity: ${summarizeActivity(appended)}`,
+    });
+  }, [group.messages]);
+  return (
+    <>
+      <button
+        type="button"
+        className="activity-rollup"
+        aria-label={`Activity: ${summary}`}
+        aria-haspopup="dialog"
+        aria-expanded={expanded}
+        onClick={onOpen}
+      >
+        <span className="activity-rollup-glyph" aria-hidden>
+          <UiIcon name="tool" size={18} />
+        </span>
+        <span className="activity-rollup-copy">
+          <span className="activity-rollup-title">Activity</span>
+          <span className="activity-rollup-meta">{summary}</span>
+        </span>
+        <span className="activity-rollup-chevron" aria-hidden>
+          <UiIcon name="chevron-right" size={17} />
+        </span>
+      </button>
+      {liveAnnouncement !== null && (
+        <span className="activity-live-update" key={liveAnnouncement.id}>
+          {liveAnnouncement.text}
+        </span>
+      )}
+    </>
+  );
+}
+
+function ActivitySheet({ group, onClose }: { group: ActivityGroup; onClose: () => void }) {
+  const summary = summarizeActivity(group.messages);
+  return (
+    <Sheet label="Activity details" onClose={onClose}>
+      <p className="activity-sheet-summary">{summary}</p>
+      <ol className="activity-list" aria-label="Activity events">
+        {group.messages.map((message) => (
+          <li className="activity-item" key={`${message.msgId}:${message.seq}`}>
+            <ActivityMessageRow message={message} />
+          </li>
+        ))}
+      </ol>
+    </Sheet>
+  );
+}
+
+function ActivityMessageRow({ message }: { message: Message }) {
+  if (message.kind === "tool_use") return <ToolRow text={message.text} />;
+  if (message.kind === "tool_result") return <ToolResultRow text={message.text} />;
+  if (message.kind === "task") return <TaskRow text={message.text} />;
+  return null;
+}
+
 // The transcript renders as an asymmetric document, not symmetric chat: USER turns are small
 // right-aligned pills; ASSISTANT turns are full-width prose (no bubble). Tool calls are compact
 // tappable rows that expand to a Command/Diff detail; sub-agents and thinking nest/recede. (Inspired
@@ -2399,11 +2541,9 @@ export function Bubble({
     case "assistant_thinking_sub":
       return <ThinkingRow text={message.text} sub={message.kind === "assistant_thinking_sub"} />;
     case "tool_use":
-      return <ToolRow text={message.text} />;
     case "tool_result":
-      return <ToolResultRow text={message.text} />;
     case "task":
-      return <TaskRow text={message.text} />;
+      return <ActivityMessageRow message={message} />;
     case "permission_request":
       return (
         <PermissionRow
@@ -2863,15 +3003,14 @@ function ToolRow({ text }: { text: string }) {
   const isEdit = name === "Edit" || name === "Write" || name === "MultiEdit";
   const file = input.file_path ? basename(input.file_path) : null;
   const stat = isEdit ? editStat(input) : null;
-  const verb = isTask
-    ? `Delegated${input.description ? `: ${input.description}` : " to a sub-agent"}`
-    : isEdit && file
-      ? `Edited ${file}`
-      : name === "Read" && file
-        ? `Read ${file}`
-        : name === "Bash"
-          ? input.description || "Ran a command"
-          : `${name}${input.description ? `: ${input.description}` : ""}`;
+  // A tool_use frame proves an invocation, not success. Keep the action event-like (Command/Edit/Read/
+  // Task) and render the model-authored description as secondary text instead of implying completion.
+  const action = isTask ? "Task" : isEdit ? "Edit" : name === "Bash" ? "Command" : name;
+  const subject = isTask
+    ? input.description || "Sub-agent"
+    : isEdit || name === "Read"
+      ? file
+      : input.description;
 
   // Only expandable when the detail body will actually render something. `description` is already in
   // the label, and a Task's prompt is the only prompt we render — so don't open to an empty box.
@@ -2891,7 +3030,10 @@ function ToolRow({ text }: { text: string }) {
       <span className="tool-glyph">
         <UiIcon name={icon} size={16} />
       </span>
-      <span className="tool-label">{verb}</span>
+      <span className="tool-label">
+        <span className="tool-action">{action}</span>
+        {subject && <span className="tool-subject"> {subject}</span>}
+      </span>
       {stat && (
         <span className="tool-stat">
           {stat.add > 0 && <span className="stat-add">+{stat.add}</span>}
@@ -2969,20 +3111,20 @@ function TaskRow({ text }: { text: string }) {
   const t = parseTask(text);
   const verb =
     t.subtype === "task_started"
-      ? "Sub-agent is running"
+      ? "Sub-agent started"
       : t.subtype === "task_notification"
         ? "Sub-agent update"
         : t.subtype === "task_updated"
-          ? "Sub-agent progress"
-          : "Sub-agent";
+          ? "Sub-agent update"
+          : "Sub-agent event";
   return (
     <div className="task-row" data-sub>
       <span className="tool-glyph">
         <UiIcon name="task" size={16} />
       </span>
       <span className="tool-label">
-        {verb}
-        {t.description && t.subtype !== "task_started" ? `: ${t.description}` : ""}
+        <span className="tool-action">{verb}</span>
+        {t.description && <span className="tool-subject"> {t.description}</span>}
       </span>
     </div>
   );

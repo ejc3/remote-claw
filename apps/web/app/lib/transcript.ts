@@ -1,6 +1,8 @@
 // Pure transcript helpers — the view-independent logic behind the tool-call rows and diff viewer in
 // page.tsx. Kept here (no React) so the parsing, sanitizing, and diff math are unit-testable.
 
+import type { Message } from "./viewer.js";
+
 export interface ToolInput {
   command?: string;
   description?: string;
@@ -16,6 +18,78 @@ export interface ParsedTool {
   name: string;
   input: ToolInput;
   sub: boolean;
+}
+
+export function isRoutineActivityMessage(message: Message): boolean {
+  if (message.kind === "tool_use" || message.kind === "task") return true;
+  if (message.kind !== "tool_result") return false;
+  const result = parseToolResult(message.text);
+  // Errors remain first-class in the main transcript. An empty result already renders no row, so it
+  // also acts as a boundary instead of creating a sheet with fewer than two visible events.
+  return !result.isError && result.output !== "";
+}
+
+export interface ActivityGroup {
+  kind: "activity_group";
+  /** Stable while a live contiguous run grows: it is derived only from the run's first frame. */
+  id: string;
+  messages: readonly Message[];
+}
+
+export type TranscriptItem = { kind: "message"; message: Message } | ActivityGroup;
+
+function activityCount(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Project the raw transcript into render items without changing its chronology. Only maximal,
+ * contiguous runs of routine, visible tool/task activity can roll up. Every other frame — including
+ * errors and frames that render no visible row — is a hard boundary. A run becomes a rollup from its
+ * first event so its identity, keyboard focus, and live announcements stay stable as more frames arrive.
+ */
+export function groupTranscriptActivity(messages: readonly Message[]): TranscriptItem[] {
+  const items: TranscriptItem[] = [];
+  let run: Message[] = [];
+
+  const flush = () => {
+    const first = run[0];
+    if (!first) return;
+    items.push({
+      kind: "activity_group",
+      id: JSON.stringify([first.msgId, first.seq]),
+      messages: run,
+    });
+    run = [];
+  };
+
+  for (const message of messages) {
+    if (isRoutineActivityMessage(message)) {
+      run.push(message);
+    } else {
+      flush();
+      items.push({ kind: "message", message });
+    }
+  }
+  flush();
+  return items;
+}
+
+/** Exact frame counts for a rollup. No provider state, completion, duration, or correlation is inferred. */
+export function summarizeActivity(messages: readonly Message[]): string {
+  let toolCalls = 0;
+  let toolResults = 0;
+  let taskEvents = 0;
+  for (const message of messages) {
+    if (message.kind === "tool_use") toolCalls++;
+    else if (message.kind === "tool_result") toolResults++;
+    else if (message.kind === "task") taskEvents++;
+  }
+  const parts: string[] = [];
+  if (toolCalls > 0) parts.push(activityCount(toolCalls, "tool call"));
+  if (toolResults > 0) parts.push(activityCount(toolResults, "tool result"));
+  if (taskEvents > 0) parts.push(activityCount(taskEvents, "task event"));
+  return parts.join(" · ");
 }
 
 const STR_FIELDS = [
