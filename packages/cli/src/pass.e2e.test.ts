@@ -44,6 +44,7 @@ describe("remote-claw --rc-pass (e2e)", () => {
     expect(lines).toHaveLength(1); // stdout is ONLY the pass; the note is on stderr
     expect(lines[0]).toMatch(PASS_RE);
     expect(r.stderr).toMatch(/viewer pass/);
+    expect(r.stderr).toMatch(/indefinite, machine-wide bearer credential/);
   });
 
   it("the pass differs from the master secret (rcp1_ vs rc1_)", () => {

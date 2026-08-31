@@ -154,10 +154,14 @@ claude auth login
 node dist/remote-claw.js --rc-app https://your-app.example --remote-control
 ```
 
-`RC_APP` may replace `--rc-app`. The launch does not print a viewer credential; obtain one separately
-with `remote-claw --rc-pass` and paste it into the viewer. Host and browser must use the same backend;
-the durable deployment profile is `BROKER_BACKEND=sqlite` with Turso configuration. The official
-Claude web/mobile app cannot see this replacement session.
+`RC_APP` may replace `--rc-app`. The value must be an exact root origin: remote brokers require HTTPS,
+while HTTP is accepted only for loopback; credentials, paths, queries, and fragments are rejected. If
+`VERCEL_AUTOMATION_BYPASS_SECRET` is set for a protected remote deployment, `RC_APP` is also the
+independent trust pin and must canonically match `--rc-app`; the bypass is never sent to loopback. The
+launch does not print a viewer credential; obtain one separately with `remote-claw --rc-pass` and paste
+it into the viewer. Host and browser must use the same backend; the durable deployment profile is
+`BROKER_BACKEND=sqlite` with Turso configuration. The official Claude web/mobile app cannot see this
+replacement session.
 
 ### Inspect normal Anthropic Remote Control
 

@@ -30,7 +30,7 @@ function freshIdentity(): Promise<Identity> {
 }
 function client(id: Identity): BrokerClient {
   return new BrokerClient({
-    baseUrl: "http://broker",
+    baseUrl: "https://broker",
     provider: securityProvider("sealed", id),
     fetchFn: brokerFetch,
     backend: "local",

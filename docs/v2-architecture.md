@@ -499,7 +499,11 @@ The safety boundary is small enough to state directly:
 
 Deployment Protection, when enabled, is an additional edge admission layer. Its automation bypass is
 used by the host and deployment smoke only; it is not a content-encryption key and is scrubbed from
-the Claude child.
+the Claude child. Every broker target is canonicalized to an exact root origin: remote targets require
+HTTPS, while HTTP is limited to loopback. The CLI resolves the ambient bypass once, before identity
+creation or network access, and only when the target canonically matches the independently configured
+`RC_APP`; lower driver layers never reread the ambient secret. Broker and handoff requests reject
+redirects, and loopback never receives the bypass.
 
 ## 13. Current limits
 

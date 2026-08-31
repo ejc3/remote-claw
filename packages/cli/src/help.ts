@@ -19,11 +19,12 @@ with an app origin, through the default-off one-time handoff noted below):
                      old identity. Needs a terminal unless --rc-force-noninteractive;
                      --rc-keep-old keeps the old secret as a live backup.
   --rc-show-secret   re-reveal this host's secret (warns first; --rc-yes skips the prompt)
-  --rc-pass          print a viewer PASS for this machine: a credential that can read + steer this
-                     machine's sessions but is NOT the master secret (can't reveal it or reset the
-                     machine). Hand it to a phone/browser (paste or QR). There is no per-pass
-                     revocation: reset moves future service to a new identity but copied old passes
-                     remain valid on retained old routes. The pass IS the output in every mode.
+  --rc-pass          print an indefinite, machine-wide bearer credential. Anyone holding it can read,
+                     control, and forge trusted records for every retained session; all holders are
+                     equally trusted and individual revocation is unavailable. It is NOT the master
+                     secret (can't reveal or replace it). Replacing the identity moves future service
+                     only; copied passes remain valid on retained old routes. The pass IS the output in
+                     every mode.
   --rc-file <path>   use a specific secret file (default: $XDG_STATE_HOME/remote-claw/secret;
                      or set REMOTE_CLAW_SECRET_FILE)
   --rc-json          machine-readable output for an rc action (never prints the master secret)
@@ -37,9 +38,10 @@ with an app origin, through the default-off one-time handoff noted below):
                      payload as a "qr" field instead.
 
 Remote control (relay sessions to the broker so a phone/laptop can watch + steer):
-  --rc-app <origin>  the app origin whose /api is the broker (or set RC_APP). With it, remote-claw runs
-                     the selected driver and bridges each session to the broker; without it, claude runs
-                     transparently.
+  --rc-app <origin>  the exact root app origin whose /api is the broker (or set RC_APP). Remote origins
+                     require HTTPS; HTTP is accepted only on localhost, 127.0.0.1, or [::1]. Credentials,
+                     paths, queries, and fragments are rejected. With it, remote-claw runs the selected
+                     driver and bridges each session to the broker; without it, claude runs transparently.
   --rc-backend <n>   pick the broker backend this host targets (or set RC_BACKEND): vercel | local |
                      sqlite. Omitted ⇒ the broker's default. Must match what your viewers use.
                      When the server reports a durable log, the host serves history from it instead of
@@ -124,6 +126,9 @@ Diagnostics:
                      drop. RC_LOG_FORMAT=json emits JSONL.
 
 Environment-only knobs (no flag):
+  VERCEL_AUTOMATION_BYPASS_SECRET  Vercel Deployment Protection bypass. For a remote broker,
+                     RC_APP must independently pin the exact same HTTPS origin as --rc-app; otherwise
+                     startup fails before network access. The bypass is never sent to loopback.
   RC_CLAUDE_BIN             path to the claude binary to spawn (default: \`claude\` on PATH).
   RC_BEDROCK_STRIP_KEYS    comma-separated body keys to drop before forwarding to Bedrock, for a model
                      that hard-400s on a field claude sends (e.g. output_config). Bedrock inference only.

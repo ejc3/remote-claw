@@ -253,6 +253,28 @@ function assertNoSensitiveMaterial(
 }
 
 describe("runRcLaunch public stable boundary", () => {
+  it("rejects an explicit bypass for HTTPS loopback before compatibility or setup", async () => {
+    const certsDir = tmp();
+    let compatibilityChecks = 0;
+
+    await expect(
+      runRcLaunchBoundary({
+        claudeArgs: [],
+        identity: {} as Identity,
+        brokerUrl: "https://localhost:3100",
+        protectionBypass: "never-send",
+        certsDir,
+        claudeCompatibilityCheck: async () => {
+          compatibilityChecks += 1;
+        },
+        spawnClaude: async () => 0,
+      }),
+    ).rejects.toThrow(/requires a remote HTTPS broker origin/);
+
+    expect(compatibilityChecks).toBe(0);
+    expect(existsSync(join(certsDir, "ca.pem"))).toBe(false);
+  });
+
   it("rejects an unsupported version before certificates, network setup, or child spawn", async () => {
     const certsDir = tmp();
     let spawned = false;
@@ -261,7 +283,7 @@ describe("runRcLaunch public stable boundary", () => {
       runRcLaunchBoundary({
         claudeArgs: [],
         identity: {} as Identity,
-        brokerUrl: "http://broker.example",
+        brokerUrl: "https://broker.example",
         certsDir,
         claudeBin: "unsupported-claude",
         claudeCompatibilityCheck: async (bin) => {
@@ -292,7 +314,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     const code = await runRcLaunch({
       claudeArgs: ["--model", "opus", "chat"],
       identity: id,
-      brokerUrl: "http://broker.example",
+      brokerUrl: "https://broker.example",
       certsDir,
       spawnClaude: async (bin, args, env) => {
         seenEnv = env;
@@ -332,7 +354,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       await runRcLaunch({
         claudeArgs: [],
         identity: id,
-        brokerUrl: "http://broker.example",
+        brokerUrl: "https://broker.example",
         certsDir,
         spawnClaude: async (_bin, _args, env) => {
           seenEnv = env;
@@ -369,7 +391,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       await runRcLaunch({
         claudeArgs: [],
         identity: id,
-        brokerUrl: "http://broker.example",
+        brokerUrl: "https://broker.example",
         certsDir,
         spawnClaude: async (_bin, _args, env) => {
           seenEnv = env;
@@ -413,7 +435,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       await runRcLaunch({
         claudeArgs: [],
         identity: id,
-        brokerUrl: "http://broker.example",
+        brokerUrl: "https://broker.example",
         certsDir,
         inference: "bedrock",
         bedrock: {},
@@ -460,7 +482,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     await runRcLaunch({
       claudeArgs: [],
       identity: id,
-      brokerUrl: "http://broker.example",
+      brokerUrl: "https://broker.example",
       certsDir,
       inference: "bedrock",
       bedrock: {},
@@ -493,7 +515,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       runRcLaunch({
         claudeArgs: [],
         identity: id,
-        brokerUrl: "http://broker.example",
+        brokerUrl: "https://broker.example",
         certsDir: tmp(),
         accountless: true,
         // inference omitted ⇒ defaults to anthropic passthrough
@@ -540,7 +562,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     const code = await runRcLaunch({
       claudeArgs: [],
       identity: id,
-      brokerUrl: "http://broker.test",
+      brokerUrl: "https://broker.test",
       certsDir,
       fetchFn,
       spawnClaude: async (_bin, _args, env) => {
@@ -620,7 +642,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     const code = await runRcLaunch({
       claudeArgs: [],
       identity: id,
-      brokerUrl: "http://broker.test",
+      brokerUrl: "https://broker.test",
       certsDir,
       fetchFn,
       spawnClaude: async (_bin, _args, env) => {
@@ -682,7 +704,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     const launch = runRcLaunch({
       claudeArgs: [],
       identity: id,
-      brokerUrl: "http://broker.test",
+      brokerUrl: "https://broker.test",
       certsDir,
       fetchFn,
       spawnClaude: async (_bin, _args, env) => {
@@ -741,7 +763,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     const code = await runRcLaunch({
       claudeArgs: [],
       identity: id,
-      brokerUrl: "http://broker.test",
+      brokerUrl: "https://broker.test",
       certsDir,
       fetchFn,
       spawnClaude: async (_bin, _args, env) => {
@@ -837,7 +859,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       const code = await runRcLaunch({
         claudeArgs: [],
         identity: id,
-        brokerUrl: "http://broker.test",
+        brokerUrl: "https://broker.test",
         certsDir,
         fetchFn,
         spawnClaude: async (_bin, _args, env) => {
@@ -880,7 +902,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     const code = await runRcLaunch({
       claudeArgs: [],
       identity: id,
-      brokerUrl: "http://broker.test",
+      brokerUrl: "https://broker.test",
       certsDir,
       fetchFn: broker.fetch,
       spawnClaude: async (_bin, _args, env) => {
@@ -922,7 +944,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
           });
 
           const viewer = new BrokerClient({
-            baseUrl: "http://broker.test",
+            baseUrl: "https://broker.test",
             provider: securityProvider("sealed", id),
             fetchFn: broker.fetch,
           });
@@ -1006,7 +1028,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
       const code = await runRcLaunch({
         claudeArgs: [],
         identity: id,
-        brokerUrl: "http://broker.test",
+        brokerUrl: "https://broker.test",
         certsDir,
         cwd: certsDir,
         fetchFn: broker.fetch,
@@ -1037,7 +1059,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
             );
 
             const viewer = new BrokerClient({
-              baseUrl: "http://broker.test",
+              baseUrl: "https://broker.test",
               provider: securityProvider("sealed", id),
               fetchFn: broker.fetch,
             });
@@ -1154,7 +1176,7 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     expect(seenEnv).not.toBeNull();
     expect(sessionId).not.toBe("");
     const verifier = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", id),
       fetchFn: broker.fetch,
     });

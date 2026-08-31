@@ -259,6 +259,7 @@ and does not block manual-pass onboarding while the feature remains disabled.
 | Secret file | Create atomically; reject symlink, non-file, insecure mode, malformed token |
 | CLI output | Root secret appears only on explicit create/reveal paths; passes and provider credentials never leak into diagnostics |
 | Viewer-pass UX | Manual join and any enabled pairing path label the pass as indefinite machine-identity-wide read/control/forge authority for mutually trusted holders, not a room-scoped or individually revocable invitation; pairing distinguishes the one-time link from the pass it recovers before claim |
+| Broker target | Exact root origin only; remote HTTP, credentials, paths, queries, and fragments fail before identity/network; an ambient Vercel bypass is sent only when the remote HTTPS target canonically equals `RC_APP`, never to loopback, and credential-bearing requests refuse redirects |
 | Bearer routing | Recompute identity id; reject cross-identity and cross-session frames |
 | Wire intake | Snapshot only known own-data properties; ignore unknown extension fields; reject missing, noncanonical, oversized, and malformed known fields before decrypt or native mutation |
 | AEAD | Authenticate every visible header and chunk coordinate; tamper or wrong key fails |

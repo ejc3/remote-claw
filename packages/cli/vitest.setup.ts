@@ -4,7 +4,7 @@
 //    another machine: drop OPENCODE_URL / RC_OPENCODE_E2E_SESSION there once instead of exporting them
 //    each run. Precedence is shell-WINS. The dedicated package script owns the exact RUN opt-in; ordinary
 //    Vitest excludes the live file even if that variable is present.
-// 2. Scrub ambient RC_* vars (whether from the shell OR .env.local) so tests never take the real
+// 2. Scrub ambient RC_* vars and the deployment bypass (whether from the shell OR .env.local) so tests never take the real
 //    RC-launch path: with RC_APP set, runWrapper would bypass injected spawn mocks and launch a REAL
 //    claude against a live broker. The two exact live-e2e carve-outs and WHY they matter live in
 //    src/vitest-env-scrub.ts, so the predicate stays pure + unit-testable (vitest-env-scrub.test.ts

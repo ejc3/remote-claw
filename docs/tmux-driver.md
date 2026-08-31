@@ -213,4 +213,6 @@ remote-claw --rc-app "$RC_APP" --rc-driver=tmux --model sonnet
 ```
 
 The command prints the exact private attach command after startup. If the broker is protected by
-Vercel, the host may use `VERCEL_AUTOMATION_BYPASS_SECRET`; that value is scrubbed from the child.
+Vercel, the host may use `VERCEL_AUTOMATION_BYPASS_SECRET`; `RC_APP` must pin the exact same HTTPS
+origin, and the resolved bypass is passed only to the broker client. The value is scrubbed from the
+child.

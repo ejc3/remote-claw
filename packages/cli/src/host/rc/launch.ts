@@ -12,6 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Identity } from "@remote-claw/clawsec";
 import { BrokerClient } from "../../broker/client.js";
+import {
+  BrokerOriginError,
+  isLoopbackBrokerOrigin,
+  normalizeBrokerOrigin,
+} from "../../broker/origin.js";
 import { securityProvider } from "../../security/provider.js";
 import { tracerFromEnv } from "../../trace.js";
 import { PRETEND_API_KEY, seedAccountlessConfigDir } from "./accountless.js";
@@ -61,6 +66,9 @@ export interface RcLaunchOptions {
   cwd?: string;
   /** Custom fetch for the broker client (tests). */
   fetchFn?: typeof fetch;
+  /** Already origin-bound Vercel Deployment Protection bypass. The CLI resolves ambient config once;
+   * lower layers never read the ambient secret themselves. */
+  protectionBypass?: string;
   /** Notified when a session registers (tests/observability). */
   onSession?: (s: Session) => void;
   /** Where inference goes: "anthropic" (default — pass `/v1/messages` through to the real upstream) or
@@ -80,14 +88,21 @@ export interface RcLaunchOptions {
  * broker. Resolves with claude's exit code; tears the MITM + relays down on exit.
  */
 export async function runRcLaunch(opts: RcLaunchOptions): Promise<number> {
+  const brokerUrl = normalizeBrokerOrigin(opts.brokerUrl);
+  if (opts.protectionBypass !== undefined && isLoopbackBrokerOrigin(brokerUrl)) {
+    throw new BrokerOriginError(
+      "the Vercel protection bypass requires a remote HTTPS broker origin",
+    );
+  }
   const claudeBin = opts.claudeBin ?? "claude";
   await (opts.claudeCompatibilityCheck ?? assertStableClaudeCompatibility)(claudeBin);
-  return runRcLaunchWithExecutable(opts, claudeBin);
+  return runRcLaunchWithExecutable(opts, claudeBin, brokerUrl);
 }
 
 async function runRcLaunchWithExecutable(
   opts: RcLaunchOptions,
   claudeBin: string,
+  brokerUrl: string,
 ): Promise<number> {
   // Enforce the accountless⇒bedrock invariant at the library boundary, not just in the CLI arg layer:
   // runRcLaunch is exported, so a programmatic caller could otherwise seed a fabricated claude.ai login
@@ -117,16 +132,12 @@ async function runRcLaunchWithExecutable(
   const bridgeOwner = new AbortController();
   let tearingDown = false;
 
-  // If the broker is deployed behind Vercel Deployment Protection (SSO), the host's requests need the
-  // automation-bypass secret to get past the edge. Read it from the env on this host; an unprotected
-  // broker (local dev) leaves it unset and sends no header.
-  const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
   const newClient = () =>
     new BrokerClient({
-      baseUrl: opts.brokerUrl,
+      baseUrl: brokerUrl,
       provider,
       ...(opts.fetchFn ? { fetchFn: opts.fetchFn } : {}),
-      ...(bypass ? { protectionBypass: bypass } : {}),
+      ...(opts.protectionBypass !== undefined ? { protectionBypass: opts.protectionBypass } : {}),
       ...(opts.backend !== undefined ? { backend: opts.backend } : {}),
     });
 

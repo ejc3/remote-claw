@@ -174,7 +174,7 @@ describe("bridge lifecycle", () => {
       return new Promise<Response>(() => {}); // intentionally ignores AbortSignal
     }) as typeof fetch;
     const client = new BrokerClient({
-      baseUrl: "http://broker.test",
+      baseUrl: "https://broker.test",
       provider: securityProvider("sealed", identity),
       fetchFn,
       cursorTimeoutMs: 10,

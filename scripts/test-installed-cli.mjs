@@ -63,6 +63,47 @@ try {
 		);
 	}
 
+	// Prove the packed binary preserves the broker-origin trust boundary and rejects an ambient
+	// deployment bypass before creating identity state or attempting any network/setup work.
+	const pinnedSecret = join(scratch, "must-not-create-secret");
+	const bypassCanary = "packed-bypass-canary-never-echo";
+	const trustedOrigin = "https://trusted.example";
+	const untrustedOrigin = "https://untrusted.invalid";
+	const mismatchedPin = spawnSync(
+		executable,
+		["--rc-file", pinnedSecret, "--rc-app", untrustedOrigin],
+		{
+			cwd: scratch,
+			encoding: "utf8",
+			env: {
+				PATH: process.env.PATH ?? "",
+				RC_APP: trustedOrigin,
+				VERCEL_AUTOMATION_BYPASS_SECRET: bypassCanary,
+			},
+		},
+	);
+	const expectedPinError =
+		"remote-claw: --rc-app does not match the RC_APP origin pinned for VERCEL_AUTOMATION_BYPASS_SECRET\n";
+	if (
+		mismatchedPin.status !== 2 ||
+		mismatchedPin.stdout !== "" ||
+		mismatchedPin.stderr !== expectedPinError ||
+		mismatchedPin.stderr.includes(bypassCanary) ||
+		mismatchedPin.stderr.includes(trustedOrigin) ||
+		mismatchedPin.stderr.includes(untrustedOrigin) ||
+		existsSync(pinnedSecret)
+	) {
+		throw new Error(
+			`installed broker-origin pin boundary mismatch: ${JSON.stringify({
+				status: mismatchedPin.status,
+				signal: mismatchedPin.signal,
+				stdout: mismatchedPin.stdout,
+				stderr: mismatchedPin.stderr,
+				identityCreated: existsSync(pinnedSecret),
+			})}`,
+		);
+	}
+
 	const help = spawnSync(executable, ["--rc-trace", "--help"], {
 		cwd: scratch,
 		encoding: "utf8",

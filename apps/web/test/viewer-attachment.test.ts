@@ -22,7 +22,7 @@ async function viewerWithMockFetch() {
       },
     );
   }) as typeof fetch;
-  const viewer = await Viewer.fromPass(pass, "http://broker", fetchFn);
+  const viewer = await Viewer.fromPass(pass, "https://broker", fetchFn);
   return { viewer, calls };
 }
 

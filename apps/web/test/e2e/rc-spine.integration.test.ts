@@ -53,7 +53,7 @@ async function waitFor(pred: () => boolean, ms = 20_000): Promise<void> {
 
 function hostClient(id: Identity): BrokerClient {
   return new BrokerClient({
-    baseUrl: "http://broker",
+    baseUrl: "https://broker",
     provider: securityProvider("sealed", id),
     fetchFn: brokerFetch,
   });
@@ -108,7 +108,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     worker.start(sid);
 
     // The viewer discovers the session on the bus (presence), exactly like the phone/web app.
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const announces: string[] = [];
     void (async () => {
       for await (const a of viewer.announces(ac.signal)) announces.push(a.sessionId);
@@ -137,13 +137,13 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     const sid = await worker.register("rc box");
     worker.start(sid);
 
-    const driver = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const driver = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const driverMsgs: Message[] = [];
     tailInto(driver, sid, driverMsgs, ac.signal);
     await driver.sendPrompt(sid, "remember me");
     await waitFor(() => driverMsgs.some((m) => m.kind === "result"));
 
-    const late = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const late = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const lateMsgs: Message[] = [];
     tailInto(late, sid, lateMsgs, ac.signal);
     await late.requestHistory(sid, 0);
@@ -193,7 +193,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       { type: "result", subtype: "success", is_error: false, result: "ok" },
     ]);
 
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const got: Message[] = [];
     tailInto(viewer, sid, got, ac.signal);
     await viewer.sendPrompt(sid, "do a big task");
@@ -274,7 +274,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       { type: "result", subtype: "success", is_error: false, result: "ok" },
     ]);
 
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const got: Message[] = [];
     tailInto(viewer, sid, got, ac.signal);
     await viewer.sendPrompt(sid, "run it");
@@ -334,7 +334,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       { type: "result", subtype: "success", is_error: false, result: "ok" },
     ]);
 
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const got: Message[] = [];
     tailInto(viewer, sid, got, ac.signal);
     await viewer.sendPrompt(sid, "think hard");
@@ -374,7 +374,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       },
     ]);
 
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const got: Message[] = [];
     tailInto(viewer, sid, got, ac.signal);
     await viewer.sendPrompt(sid, "run a tool");
@@ -407,7 +407,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       return [{ type: "result", subtype: "success", result: "ok" }];
     });
 
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     // The first control frame creates the session run; the relay's inbound pump picks them all up.
     await viewer.interrupt(sid);
     await viewer.setModel(sid, "claude-opus-4-8");
@@ -436,8 +436,8 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     worker.onControlRequest((subtype, req) => verbs.push({ subtype, req }));
     worker.start(sid);
 
-    const driver = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
-    const observer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const driver = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
+    const observer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const seen: Announce[] = [];
     void (async () => {
       for await (const a of observer.announces(ac.signal)) if (a.sessionId === sid) seen.push(a);
@@ -483,7 +483,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       sentAt: number;
     }> = [];
     const busClient = new BrokerClient({
-      baseUrl: "http://broker",
+      baseUrl: "https://broker",
       provider: securityProvider("sealed", id),
       fetchFn: brokerFetch,
     });
@@ -552,7 +552,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       },
     ]);
 
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const got: Message[] = [];
     tailInto(viewer, sid, got, ac.signal);
 
@@ -612,7 +612,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
 
     // ── B (continued): fresh viewer's catch_up must replay permission_resolved. It is unordered but
     //    still replay-logged by the non-durable relay, so #replay() sends it again with the same msg_id.
-    const late = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const late = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const lateMsgs: Message[] = [];
     tailInto(late, sid, lateMsgs, ac.signal);
     await late.requestHistory(sid, 0);
@@ -632,8 +632,8 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     const sid = await worker.register("rc box");
     worker.start(sid);
 
-    const phone = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
-    const laptop = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const phone = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
+    const laptop = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const phoneMsgs: Message[] = [];
     const laptopMsgs: Message[] = [];
     tailInto(phone, sid, phoneMsgs, ac.signal);
@@ -673,7 +673,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     const sid = await worker.register("rc box");
 
     const seen: Announce[] = [];
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     void (async () => {
       for await (const a of viewer.announces(ac.signal)) if (a.sessionId === sid) seen.push(a);
     })().catch(() => {});
@@ -716,7 +716,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     );
 
     // (B) Cold reload: a fresh viewer replays history and folds permission_resolved exactly as the UI.
-    const late = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const late = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const lateMsgs: Message[] = [];
     tailInto(late, sid, lateMsgs, ac.signal);
     await late.requestHistory(sid, 0);
@@ -774,7 +774,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
       },
     ]);
 
-    const viewer = await Viewer.fromPass(await formatPass(id), "http://broker", brokerFetch);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
     const got: Message[] = [];
     tailInto(viewer, sid, got, ac.signal);
     await viewer.sendPrompt(sid, "pick a name");
