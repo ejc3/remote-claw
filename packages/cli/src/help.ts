@@ -120,10 +120,12 @@ Pinned Codex companion (--rc-driver=codex):
   --rc-codex-thread <id>   required exact existing Codex UUIDv7 (or set RC_CODEX_THREAD).
                      Attach-only: the companion never starts or stops the app-server and never
                      discovers, selects, creates, deletes, or stops a thread. It resumes/joins only the
-                     exact supplied thread. Browser input is non-empty, non-slash text plus interrupt;
+                     exact supplied thread. Browser input is non-empty, non-slash text plus interrupt
+                     and images with an optional non-slash caption. Images use encrypted composer groups
+                     and host-prepared inline bytes, never browser URLs or file paths;
                      native status and completed shell commands/results are read-only. Interrupt binds
                      one active turn ID without retargeting or retrying; background commands may continue.
-                     Approvals, questions, model/mode changes, files, and attachments remain in the
+                     Approvals, questions, model/mode changes, general files, and end remain in the
                      local Codex client and are disabled in the viewer. Keep a local Codex TUI attached
                      to that exact thread for the companion lifetime; it is the sole owner of approvals
                      and questions. Supported tuple: Linux arm64 and exact Codex app-server 0.151.0

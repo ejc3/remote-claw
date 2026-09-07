@@ -59,19 +59,24 @@ managed Unix/legacy history or alongside official Remote, stable projection iden
 controls were outside that recovery run. The current code accepts exact Codex 0.151.0 and 0.153.4 on
 Linux arm64
 and also projects completed `commandExecution` as read-only `Shell` calls and bounded results,
-including failed/declined/nonzero-exit outcomes. Browser mutations are non-empty non-slash text plus
-interrupt. Interrupt binds the latest active native turn once and never retargets or retries; queued
+including failed/declined/nonzero-exit outcomes. Browser mutations are non-empty non-slash text,
+images with an optional non-slash caption, and interrupt. Images use the existing encrypted composer
+payload and host-constructed inline data URLs, never viewer URLs or file paths. Full ordered native
+input is digest-correlated; only sanitized names/caption or an image-count placeholder is projected.
+Raw pending images are bounded and released after native submission settles or the session closes.
+Interrupt binds the latest active native turn once and never retargets or retries; queued
 text still waits for native idle, not interrupt RPC acceptance. Native background commands may outlive
-the interrupted model turn. Other controls, attachments, approval responses, streaming partials, file
+the interrupted model turn. Other controls, general files, approval responses, streaming partials, file
 changes, and task lifecycle remain unsupported. The [release roadmap](docs/release-finish-line.md)
-owns current-version/activity/interrupt acceptance; the historical results above remain exact 0.151.0
+owns current-version/activity/interrupt/image acceptance; the historical results above remain exact 0.151.0
 evidence. The attachment path
 accepts literal `unix://` only as Codex's same-user managed control socket
 (`$CODEX_HOME/app-server-control/app-server-control.sock`, falling back to `~/.codex`), while retaining
 the historical explicit-port loopback WebSocket form and rejecting arbitrary Unix paths. Resume's
 reported `historyMode` selects bounded ascending `thread/items/list` for `paginated` or
 `thread/turns/list` with `itemsView:"full"` for `legacy`; both readers retain user/assistant text and
-`commandExecution`. The projection filters unsupported or unfinished shapes before the shared 10,000
+`commandExecution`. Each page requests one item/turn to avoid combining large inline-image groups;
+the raw scan is capped at 100,000 pages. The projection filters unsupported or unfinished shapes before the shared 10,000
 projected-native-item cap. Codex coordinates are `(turnId,itemId)`, and changed
 projected bytes at an already-seen coordinate fence the projection. The supported durable broker is
 SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Design lives in

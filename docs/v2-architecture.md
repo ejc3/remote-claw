@@ -450,7 +450,9 @@ the caller to keep a local TUI attached for the companion lifetime.
 
 The driver subscribes before history. Resume's <code>historyMode</code> selects bounded ascending
 <code>thread/items/list</code> for <code>paginated</code> or bounded ascending
-<code>thread/turns/list</code> with <code>itemsView:"full"</code> for <code>legacy</code>. Both paths
+<code>thread/turns/list</code> with <code>itemsView:"full"</code> for <code>legacy</code>. Each requests
+one item/turn per page so inline-image groups do not combine into oversized frames; the raw scan is
+capped at 100,000 pages. Both paths
 validate native envelopes and retain user/assistant text plus <code>commandExecution</code>. The
 projection validates supported completed shapes before its shared 10,000 native-item cap, then drains
 buffered notifications before readiness. Projected items are keyed by immutable
@@ -462,11 +464,19 @@ Browser text first
 gets seq-less pending admission; its final acknowledgement waits for the exact native user item carrying
 the host client ID and text. A 15-second correlation deadline and bounded history/dedup fence ambiguous
 or contradictory outcomes. Native active/idle status is advertised. Browser mutations are non-empty
-non-slash text plus interrupt; other controls, attachments, and structured permission/question answers
+non-slash text, image groups with an optional non-slash caption, and interrupt; other controls, general
+files, and structured permission/question answers
 remain disabled. A bounded local text FIFO keeps interrupt reachable while text waits for native idle.
 Interrupt targets one validated active turn on the exact thread and never retargets or retries a stale
 request. Its RPC acceptance does not release queued text; native status does. Background commands may
 outlive the model turn. See [control semantics](protocol.md#11-compatibility-control-verbs).
+
+Images reuse the encrypted composer group, with host validation and internally constructed inline
+data URLs; no upload files, browser-provided URLs/paths, or native image fetches are used. Canonical
+native text contains sanitized image names/caption, and full ordered-input digests correlate the native
+receipt without retaining raw image bytes in mutation/dedup maps. Session pending URLs are bounded
+across queued turns and released after submission settles or closure. Native image-bearing user
+items project text or an image-count placeholder, not previews. See [image limits and lifetime](protocol.md#10-attachments).
 
 For current app-server approval/question requests, the first result or error wins globally. The
 companion client has no response method, so it can send neither and the attached TUI remains sole owner.
@@ -491,7 +501,7 @@ have narrower, truthfully labeled guarantees.
 | Claude native companion | Structured text projection and read-only tool activity over ordinary Anthropic RC; current code adds one-shot session-scoped Interrupt, separately from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; no other controls, remote permission/question responses, attachments, or status |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
-| Codex | Current code accepts exact 0.151.0 and 0.153.4/Linux arm64 with text/interrupt/status and read-only completed command activity; historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0 | One explicit thread and attached local-TUI precondition; current-version/activity/interrupt acceptance is tracked in the release roadmap; managed-Unix/legacy recovery, per-device unsubscribe, and other browser controls remain unclaimed |
+| Codex | Current code accepts exact 0.151.0 and 0.153.4/Linux arm64 with text/images/interrupt/status and read-only completed command activity; historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0 | One explicit thread and attached local-TUI precondition; current-version/activity/interrupt/image acceptance is tracked in the release roadmap; general files, managed-Unix/legacy recovery, per-device unsubscribe, and other browser controls remain unclaimed |
 | Bedrock inference | Maintained exact-tuple MITM connector | Replaces Anthropic inference while preserving the private local RC facade; other tuples remain unqualified |
 | Accountless mode | Maintained for the exact M5 Bedrock tuple | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
 

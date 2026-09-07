@@ -12,11 +12,15 @@ or simultaneous official Remote. The earlier `0.146.0` observations below remain
 **Current implementation:** the version gate accepts exact `0.151.0` and `0.153.4` on Linux arm64.
 Besides native text/status, completed `commandExecution` items now become read-only `Shell` calls and
 bounded results, including failed/declined/nonzero-exit outcomes. Browser mutations are ordinary
-non-empty non-slash text plus interrupt; the client still has no approval-response API. Interrupt
+non-empty non-slash text, image groups with an optional non-slash caption, and interrupt; the client
+still has no approval-response API. Images reuse the encrypted composer payload and host-constructed
+inline data URLs, with full ordered input digests and bounded transient retention. Native image URLs
+and paths are never fetched; the viewer shows names/caption or an image-count placeholder.
+Interrupt
 targets one observed active native turn without retargeting or retrying, and remains reachable while
 text waits for native idle. Background commands may outlive the interrupted model turn. Other controls,
-attachments, streaming partials, file changes, other tool families, and task lifecycle are unsupported.
-Current-version/activity/interrupt acceptance lives in the [release roadmap](release-finish-line.md),
+general files, streaming partials, file changes, other tool families, and task lifecycle are unsupported.
+Current-version/activity/interrupt/image acceptance lives in the [release roadmap](release-finish-line.md),
 separately from the historical results below.
 
 ## M3a product result
@@ -152,7 +156,9 @@ socket path. Explicit-port literal loopback WebSocket origins remain available.
 
 The resumed thread's native `historyMode` now chooses the bounded reader rather than assuming one API:
 `paginated` pages `thread/items/list` ascending; `legacy` pages `thread/turns/list` ascending with
-`itemsView:"full"`. The historical M3b readers retained only user/assistant text. Current readers also
+`itemsView:"full"`. Current readers request one item/turn per page, with a 100,000-page raw scan cap,
+so retained inline-image groups do not combine into an oversized frame. The historical M3b readers
+retained only user/assistant text. Current readers also
 retain `commandExecution`; the projection validates supported completed shapes before counting the
 shared 10,000 native-item cap. Other tool families, reasoning, and unfinished commands are not projected.
 The immutable projection coordinate is `(turnId,itemId)`, because Codex may reuse one item ID in

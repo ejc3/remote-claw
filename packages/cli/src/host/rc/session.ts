@@ -129,8 +129,20 @@ export interface NativeUpstreamAdmission {
   duplicate: boolean;
 }
 
+/** Images prepared by the authenticated host relay, never browser-provided URLs or paths. */
+export interface HostImage {
+  name: string;
+  url: string;
+}
+
+/** Bound image bytes waiting for native submission across all queued browser turns. */
+export const MAX_PENDING_IMAGE_BYTES = 48 * 1024 * 1024;
+
 /** One event on a session's log — the shape sent to the worker over SSE (`wire()`). */
 export class RcEvent {
+  /** Transient host-only input. Deliberately omitted from payload/wire and released after submission. */
+  images?: readonly HostImage[];
+
   constructor(
     readonly eventId: string,
     readonly sequenceNum: number,
@@ -194,6 +206,8 @@ export class Session {
   readonly #gate = new Gate();
   readonly #downstream: RcEvent[] = [];
   readonly #upstream: RcEvent[] = [];
+  readonly #pendingImages = new Map<RcEvent, number>();
+  #pendingImageBytes = 0;
   #dsSeq = 0;
   #usSeq = 0;
   /** event_ids the worker has acked, so a reconnecting worker stream doesn't re-deliver them. */
@@ -245,7 +259,19 @@ export class Session {
   /** Push a `user` prompt downstream to the worker (the client→claude direction). A provider-native
    * companion keeps the authenticated browser coordinate alongside the immutable UUID/timestamp so the
    * later canonical provider event can reconcile the viewer's optimistic echo without pre-ordering it. */
-  pushUserInput(content: string, options: { clientMsgId?: string } = {}): RcEvent {
+  pushUserInput(
+    content: string,
+    options: { clientMsgId?: string; images?: readonly HostImage[] } = {},
+  ): RcEvent {
+    let imageBytes = 0;
+    for (const image of options.images ?? []) {
+      imageBytes += Buffer.byteLength(image.url, "utf8");
+      if (this.#pendingImageBytes + imageBytes > MAX_PENDING_IMAGE_BYTES) {
+        throw new Error("pending image input exceeded its byte bound");
+      }
+    }
+    // Copy descriptors so the producer cannot mutate a retained URL after its bytes were counted.
+    const images = options.images?.map(({ name, url }) => ({ name, url }));
     const payload: Record<string, unknown> = {
       type: "user",
       // Claude 2.1.237 demotes an unclassified client event to peer/cross-session origin, whose kill
@@ -259,7 +285,22 @@ export class Session {
       parent_tool_use_id: null,
     };
     if (options.clientMsgId !== undefined) payload.client_msg_id = options.clientMsgId;
-    return this.#pushDownstream("user", payload);
+    const event = this.#pushDownstream("user", payload);
+    if (images !== undefined && images.length > 0) {
+      event.images = images;
+      this.#pendingImages.set(event, imageBytes);
+      this.#pendingImageBytes += imageBytes;
+    }
+    return event;
+  }
+
+  /** Drop raw image input without removing the immutable event/correlation coordinate. */
+  releaseImages(event: RcEvent): void {
+    const bytes = this.#pendingImages.get(event);
+    if (bytes === undefined) return;
+    this.#pendingImages.delete(event);
+    this.#pendingImageBytes -= bytes;
+    delete event.images;
   }
 
   /** Append the `initialize` control_request — guaranteed first downstream event. Idempotent. */
@@ -570,6 +611,7 @@ export class Session {
     if (this.closed) return;
     this.closeReason = reason;
     this.closed = true;
+    for (const event of this.#pendingImages.keys()) this.releaseImages(event);
     this.#gate.wake();
     for (const listener of this.#closeListeners) {
       try {

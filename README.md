@@ -30,7 +30,8 @@ credentials.
 > stable projection identity, and richer controls were outside that recovery run.
 > The current Codex implementation accepts exact 0.151.0 and 0.153.4 on Linux arm64 and also displays
 > completed shell commands and bounded results as read-only activity. Browser mutations are ordinary
-> non-empty non-slash text plus interrupt; other controls and attachments remain disabled. These
+> non-empty non-slash text, images with an optional caption, and interrupt; other controls and general
+> files remain disabled. These
 > additions do not rewrite the historical 0.151.0 acceptance; see the release roadmap for their current
 > acceptance result.
 > M4 is also complete for the lower-fidelity tmux fallback: a packed CLI with exact Claude 2.1.237 on
@@ -92,7 +93,7 @@ The implemented native modes are:
 | `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text plus one-shot session-scoped Interrupt; permissions, questions, model/mode changes, attachments, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
 | `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The mutable surface remains non-empty non-slash text plus interrupt. Read-only MAIN-session running/idle status is advertised; native/local UI still owns permissions, questions, model/mode, attachments, and end. |
-| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0 or 0.153.4 on Linux arm64. Browser mutations are non-empty non-slash text plus interrupt; native status and completed shell commands/results are read-only. The attached local TUI solely owns approvals and questions, and every other browser control is disabled. |
+| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0 or 0.153.4 on Linux arm64. Browser mutations are non-empty non-slash text, image groups with an optional caption, and interrupt; native status and completed shell commands/results are read-only. The attached local TUI solely owns approvals and questions, and every other browser control is disabled. |
 | `--rc-app <origin> --rc-driver=tmux [claude args]` | Runs plain Claude in a recoverable private tmux pane while the lower-fidelity adapter projects transcript and serializes browser injection against active native turns. It fail-fast requires Linux arm64 and exact Claude 2.1.237 before identity, broker, or pane startup. Browser input is ordinary non-empty non-slash text plus attachments; interrupt, model, mode, and end are disabled. Permissions, questions, and folder trust stay in that local pane unless the caller explicitly bypasses Claude policy. Idle editor/config UI concurrency and independent peer ordering are not isolated. M4's maintained Bedrock tuple is green; provider-native and official-client coexistence are not advertised for this mode. |
 
 The launch form waits for the exact successful bridge request from its Claude child. The attach form
@@ -311,8 +312,12 @@ node dist/remote-claw.js --rc-app https://your-app.example \
 
 Use the real UUIDv7 supplied by Codex. remote-claw resumes/joins only that thread; it never starts or
 stops app-server, discovers/selects/creates/deletes/stops a thread, or owns the TUI. Browser mutations
-are non-empty non-slash text plus interrupt. Approvals and questions stay in the local Codex TUI.
-Model/mode, files, attachments, and end are disabled. A durable SQLite/libSQL broker is required.
+are non-empty non-slash text, images with an optional non-slash caption, and interrupt. Approvals and
+questions stay in the local Codex TUI. Model/mode, general files, and end are disabled. A durable
+SQLite/libSQL broker is required. The existing composer sends an encrypted image group; the host passes
+validated inline image bytes to Codex without creating upload files or fetching URLs. Native transcript
+rows retain sanitized image names/caption (or an image count for native image-only input), not image
+previews. Bounds and delivery semantics live in [Attachments](docs/protocol.md#10-attachments).
 Interrupt targets one observed active turn without retrying or switching to a newer turn. It remains
 available while browser text is queued; that text waits for native idle before starting. Interrupting
 the model turn does not guarantee cancellation of native background commands.
@@ -329,12 +334,14 @@ For the Codex-managed daemon used by the current Remote topology, keep the exact
 
 After `thread/resume`, Codex's returned `historyMode` selects the bounded history API. `paginated`
 uses ascending `thread/items/list`; `legacy` uses ascending `thread/turns/list` with
-`itemsView:"full"`. Both readers retain user/assistant text and `commandExecution`; the projection
+`itemsView:"full"`. Both request one item/turn per page so inline image groups do not combine into an
+oversized history frame, with a 100,000-page raw scan cap. Both retain user/assistant text, native
+image-bearing user input, and `commandExecution`; the projection
 validates supported completed shapes before counting the shared 10,000 native-item limit. Other tool
 families, reasoning, and unfinished commands are not projected. Projected identity is the immutable
 `(turnId,itemId)` pair: replay of the same pair and bytes deduplicates, while changed projected bytes
 at the same pair fence the companion.
-The current-version/activity/interrupt acceptance is tracked in the [release roadmap](docs/release-finish-line.md),
+The current-version/activity/interrupt/image acceptance is tracked in the [release roadmap](docs/release-finish-line.md),
 separately from the historical 0.151.0 results below.
 
 The bounded M3b gate used an exact official Remote thread on Codex 0.151.0/Linux arm64 with literal
