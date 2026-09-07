@@ -20,6 +20,29 @@ hit, with the evidence that proves it, not an impression. Findings are added as 
 
 ## Status
 
+### Daily-use readability and responsive parity — September 2026
+
+The bounded outcome is readable assistant text and code on desktop and phone, with the same activity
+details remaining reachable when the viewport changes. The real-browser audit found three defects:
+
+- Paragraphs rendered at 14px/20px despite the viewer requesting 16.5px/26.73px. Markdown's own
+  `--text-body-size` and `--text-body-leading` now carry the intended values. Prose uses the existing
+  Inter/system sans-serif stack; code remains monospace. No font download or CSP change is needed.
+- Fenced code rendered at 11.76px, and its language/copy header covered the first source line. The old
+  `:not(pre) > code` rule also matched fenced code nested inside divs, overriding the component's
+  padding. Inline-code styling now excludes every descendant of `pre`; CodeBlock owns its layout,
+  and fenced source text has a 14px floor. Syntax highlighting and signed diff washes remain intact.
+- A desktop activity popover stayed at x=360px after resizing to a 390px phone viewport, leaving most
+  controls off-screen. The existing sheet now recomputes placement on resize using its original
+  opener, preserving expanded output and focus across both layouts.
+
+The cheapest faithful regressions are computed styles and geometry in the existing browser suite:
+source CSS and static markup could not expose the cascade or viewport defects. One rich-text seed
+adds code, diff, and table coverage to the existing screenshot harness. No provider capability,
+broker, permission, lifecycle, or visual-framework change belongs to this milestone. Before/after
+artifacts in both themes and viewports stay private under
+`~/remote-claw-ui-artifacts/native-parity-2026-09-07`, outside Git.
+
 **A note on an earlier overclaim:** a previous revision called the migration "complete" after the
 buttons, prose and dot. That was premature — a whole class of surfaces hadn't been assessed, and the
 sheet/session rows were written off as "bespoke" without the work. Every remaining surface has since been
@@ -625,10 +648,10 @@ is not a finding, but `padding: 8px 12px` on a 32px primary CTA is.
    layers present, the theme's `@scope` attribute matching, and no remote `url()`/`@font-face`.
 3. `playwright test -c app-e2e.config.ts` — the existing browser suite, driving a real Chromium against a
    real Next server, a real broker and a real host process.
-4. `playwright test -c app-e2e.shots.config.ts` — 17 artifacts per project × {phone, desktop} ×
-   {light, dark} = 68 generated images, captured privately and compared (both colour modes since the
+4. `playwright test -c app-e2e.shots.config.ts` — 19 artifacts per project × {phone, desktop} ×
+   {light, dark} = 76 generated images, captured privately and compared (both colour modes since the
    light-mode work; artifacts are not committed). The set includes collapsed activity, its responsive
-   detail sheet, and expanded output.
+   detail sheet, expanded output, and rich prose with code, diff highlights, and a table.
 5. `codex exec` as an independent reviewer on the diff.
 
 Each guard is **bite-validated**: we break the thing on purpose and confirm the test fails before trusting

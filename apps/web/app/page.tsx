@@ -2168,34 +2168,53 @@ function Sheet({
   const [anchorStyle, setAnchorStyle] = useState<CSSProperties | null>(null);
   useLayoutEffect(() => {
     const trigger = document.activeElement as HTMLElement | null;
-    // Skip (→ keep the bottom sheet) unless we have a real, sized trigger on a desktop viewport. Guards the
-    // Safari quirk where clicking a <button> doesn't focus it, so activeElement is <body>: anchoring to the
-    // full-viewport body rect would shove the panel off-screen — a centered bottom sheet is the safe fallback.
-    if (!trigger || trigger === document.body || !window.matchMedia?.("(min-width: 761px)").matches)
-      return;
-    const t = trigger.getBoundingClientRect();
-    if (t.width === 0 && t.height === 0) return;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const gap = 6;
-    const edge = 12;
-    const roomBelow = vh - t.bottom - gap - edge;
-    const roomAbove = t.top - gap - edge;
-    const available = Math.max(roomBelow, roomAbove);
-    // On an unusually short desktop viewport neither anchored side can keep even the header useful.
-    // Fall back to the ordinary bottom sheet, whose viewport-relative cap is the safer presentation.
-    if (available < 120) return;
-    const s: CSSProperties = {};
-    if (roomBelow >= roomAbove)
-      s.top = Math.round(t.bottom + gap); // more room below → drop below it
-    else s.bottom = Math.round(vh - t.top + gap); // more room above → open upward
-    // Inline cap is the actual chosen-side room (and never wider than the generic desktop 520px cap).
-    // `.sheet` already owns overflow-y:auto, so a long activity run remains fully reachable.
-    s.maxHeight = Math.min(520, Math.floor(available));
-    if (t.left < vw / 2)
-      s.left = Math.round(t.left); // left-side trigger → align left edges
-    else s.right = Math.round(vw - t.right); // right-side trigger → align right edges
-    setAnchorStyle(s);
+    const place = () => {
+      // Skip (→ keep the bottom sheet) unless we have a real, sized trigger on a desktop viewport. Guards the
+      // Safari quirk where clicking a <button> doesn't focus it, so activeElement is <body>: anchoring to the
+      // full-viewport body rect would shove the panel off-screen — a centered bottom sheet is the safe fallback.
+      if (
+        !trigger ||
+        trigger === document.body ||
+        !window.matchMedia?.("(min-width: 761px)").matches
+      ) {
+        setAnchorStyle(null);
+        return;
+      }
+      const t = trigger.getBoundingClientRect();
+      if (t.width === 0 && t.height === 0) {
+        setAnchorStyle(null);
+        return;
+      }
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const gap = 6;
+      const edge = 12;
+      const roomBelow = vh - t.bottom - gap - edge;
+      const roomAbove = t.top - gap - edge;
+      const available = Math.max(roomBelow, roomAbove);
+      // On an unusually short desktop viewport neither anchored side can keep even the header useful.
+      // Fall back to the ordinary bottom sheet, whose viewport-relative cap is the safer presentation.
+      if (available < 120) {
+        setAnchorStyle(null);
+        return;
+      }
+      const s: CSSProperties = {};
+      if (roomBelow >= roomAbove)
+        s.top = Math.round(t.bottom + gap); // more room below → drop below it
+      else s.bottom = Math.round(vh - t.top + gap); // more room above → open upward
+      // Inline cap is the actual chosen-side room (and never wider than the generic desktop 520px cap).
+      // `.sheet` already owns overflow-y:auto, so a long activity run remains fully reachable.
+      s.maxHeight = Math.min(520, Math.floor(available));
+      if (t.left < vw / 2)
+        s.left = Math.round(t.left); // left-side trigger → align left edges
+      else s.right = Math.round(vw - t.right); // right-side trigger → align right edges
+      setAnchorStyle(s);
+    };
+    place();
+    // Preserve the opener, not the sheet's now-focused close button, when rotating a phone or resizing
+    // a desktop window. Otherwise the old inline offset can leave the dialog entirely off-screen.
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
   }, []);
   useEffect(() => {
     const trigger = document.activeElement as HTMLElement | null; // the button that opened the sheet

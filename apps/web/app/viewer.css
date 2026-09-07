@@ -625,7 +625,7 @@ summary:focus-visible,
   display: flex;
   flex-direction: column;
   gap: 5px;
-  /* Cap the reading measure on wide screens so serif prose reads as a document, not a full-bleed
+  /* Cap the reading measure on wide screens so prose reads as a document, not a full-bleed
      log; centered within the pane. On mobile the pane is already narrower, so this never bites.
      Capping the container (not its children) keeps every child's own margins — sub-thread and
      sub-agent-row indents stay intact. */
@@ -719,29 +719,26 @@ summary:focus-visible,
   font-size: 12px;
 }
 
-/* ASSISTANT prose — full width, no bubble; serif body to read as a document. Rendered as GitHub-
+/* ASSISTANT prose — full width, no bubble. Rendered as GitHub-
  * Flavored Markdown (Astryx's <Markdown>), so block elements carry their own spacing — no `white-space:
  * pre-wrap` (which would double the markdown's own line breaks).
  *
- * The serif family/size/line-height here is the transcript's identity and INHERITS into every element
- * Astryx renders, so the document look survives the component swap. Block spacing, table chrome and code
- * blocks are the component's now — we deleted the `.prose p/ul/table/pre/...` rules that used to do that,
- * because in @layer remote-claw (declared last) they would have overridden it. */
+ * Set Astryx's body tokens here: its Markdown root owns font-size/line-height, so styling only the
+ * wrapper silently left the actual paragraphs at 14px/20px. Keep the theme's Inter/system font stack
+ * across devices instead of requesting unavailable serif faces. Headings and code retain their own
+ * component typography; block spacing and table chrome remain the component's. */
 .prose {
-  /* Scope the design system's OWN body-font token to this region instead of overriding font-family on
-     the component. Astryx's markdown elements resolve `font-family: var(--font-family-body)`, so
-     redefining the token here makes the serif flow through the system rather than fight it — a direct
-     `font-family` on .prose would lose anyway, because a rule on the child beats inheritance. */
-  --font-family-body: Charter, "Bitstream Charter", Georgia, "Times New Roman", ui-serif, serif;
+  --text-body-size: 16.5px;
+  --text-body-leading: 1.62;
   font-family: var(--font-family-body);
-  font-size: 16.5px;
-  line-height: 1.62;
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-leading);
   word-break: break-word;
   margin: 6px 0 12px;
   color: var(--text);
 }
 .prose.assistant-sub {
-  font-size: 15px;
+  --text-body-size: 15px;
 }
 /* Collapse the outer margins of the first/last block so the prose block keeps its own 6/12px frame. */
 .prose > :first-child {
@@ -761,7 +758,7 @@ summary:focus-visible,
 
 /* Inline code (markdown `code`) — but NOT inside a fenced block, where the <pre> owns the styling. */
 .inline-code,
-.prose :not(pre) > code {
+.prose code:not(pre code) {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.88em;
   padding: 1px 4px;
@@ -769,16 +766,12 @@ summary:focus-visible,
   background: var(--code-bg);
   word-break: break-word;
 }
-.prose pre {
-  margin: 0 0 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--code-bg);
-  overflow-x: auto;
-}
+/* CodeBlock owns the fenced block's padding, header, and scroll container. Its <code> is nested inside
+   divs, not directly inside <pre>; the old :not(pre) > code selector treated it as inline code and
+   removed the padding that separates the first source line from the sticky language/copy header. */
 .prose pre code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.84em;
+  font-size: 14px;
   line-height: 1.5;
 }
 

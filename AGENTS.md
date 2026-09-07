@@ -263,7 +263,7 @@ new hardcoded colour to `viewer.css`, wrap it in `light-dark()` or the guard in
 
 Because the accent-inversion trap is invisible to the test suite, **look at a screenshot before merging
 any viewer change** — in BOTH modes: `cd tests/web && pnpm exec playwright test -c app-e2e.shots.config.ts`
-writes 17 artifacts per project × `{phone,desktop}` × `{light,dark}` (68 images) to
+writes 19 artifacts per project × `{phone,desktop}` × `{light,dark}` (76 images) to
 `tests/web/shots/<project>/`. Take a set before and after and actually open them.
 
 ## Tranche scope and gate discipline

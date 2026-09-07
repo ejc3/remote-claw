@@ -7,6 +7,58 @@ import { expect, test } from "./fixtures";
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 
+// A computed-style check is the cheapest faithful boundary for the Markdown inheritance regression:
+// component markup and source CSS both looked right, but the built cascade rendered paragraphs at 14px.
+test("assistant prose, code, and diff highlights stay readable on phone and desktop", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ richText: true });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  const prose = page.locator(".prose.assistant", { hasText: "Build is green" });
+  await expect(prose.locator("pre")).toHaveCount(2);
+
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    const styles = await prose.evaluate((element) => {
+      const paragraph = element.querySelector('[role="paragraph"]')!;
+      const code = element.querySelector("pre code")!;
+      const p = getComputedStyle(paragraph);
+      const c = getComputedStyle(code);
+      return {
+        fontSize: Number.parseFloat(p.fontSize),
+        lineHeight: Number.parseFloat(p.lineHeight),
+        fontFamily: p.fontFamily,
+        codeSize: Number.parseFloat(c.fontSize),
+        codeFamily: c.fontFamily,
+        pageFits: document.documentElement.scrollWidth <= window.innerWidth,
+        codeHeadersClear: Array.from(element.querySelectorAll("pre")).every((pre) => {
+          const header = pre.firstElementChild!.getBoundingClientRect();
+          const firstLine = pre.querySelector("[data-line]")!.getBoundingClientRect();
+          return header.bottom <= firstLine.top + 1;
+        }),
+      };
+    });
+    expect(styles.fontSize).toBeGreaterThanOrEqual(16);
+    expect(styles.lineHeight / styles.fontSize).toBeGreaterThanOrEqual(1.5);
+    expect(styles.fontFamily).toContain("sans-serif");
+    expect(styles.codeSize).toBeGreaterThanOrEqual(14);
+    expect(styles.codeFamily).toContain("monospace");
+    expect(styles.pageFits).toBe(true);
+    expect(styles.codeHeadersClear).toBe(true);
+    await expect(prose.getByRole("table")).toContainText("Mobile");
+    // Diff signs remain text as well as colour; neither platform loses the semantic distinction.
+    await expect(prose.locator('[data-line-type="remove"]')).toHaveAttribute(
+      "data-diff-marker",
+      "−",
+    );
+    await expect(prose.locator('[data-line-type="add"]')).toHaveAttribute("data-diff-marker", "+");
+    await expect(page.getByRole("textbox", { name: "Message" })).toBeInViewport();
+  }
+});
+
 // #design-pass: the gate is a single-field page — it must autofocus so a pasted pass lands immediately
 // without a click. Caught in the pass: every connect started with an extra tab/click into the field.
 test("the connect gate autofocuses its pass field", async ({ page }) => {
@@ -902,6 +954,34 @@ test.describe("desktop layout (≥761px)", () => {
     const lastEvent = sheet.locator(".activity-item").last();
     await lastEvent.scrollIntoViewIfNeeded();
     await expect(lastEvent).toBeInViewport();
+  });
+
+  test("an open activity sheet follows desktop-to-phone resizing without losing its controls", async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass } = await seedHost();
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+    const trigger = page.getByRole("button", { name: /^Activity:/ }).first();
+    await trigger.click();
+    const sheet = page.getByRole("dialog", { name: "Activity details" });
+    await expect(sheet).toHaveClass(/sheet--anchored/);
+    const output = sheet.locator('details.tool-result[data-error="false"]').first();
+    await output.locator("summary").click();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(sheet).not.toHaveClass(/sheet--anchored/);
+    await expect(sheet).toBeInViewport({ ratio: 1 });
+    await expect(output.locator("pre")).toBeVisible();
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect(sheet).toHaveClass(/sheet--anchored/);
+    await expect(sheet).toBeInViewport({ ratio: 1 });
+    await expect(output.locator("pre")).toBeVisible();
+    await sheet.getByRole("button", { name: "Close Activity details" }).click();
+    await expect(trigger).toBeFocused();
   });
 });
 

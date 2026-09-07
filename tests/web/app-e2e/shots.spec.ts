@@ -106,6 +106,15 @@ test("stable Claude: local-permission disclosure and text-only composer", async 
   await page.locator("section.chat").screenshot({ path: `${OUT()}/04a-stable-claude.png` });
 });
 
+test("assistant typography: code, diff highlights, and a table", async ({ page, seedHost }) => {
+  const { pass } = await seedHost({ richText: true });
+  await connect(page, pass);
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  const prose = page.locator(".prose.assistant", { hasText: "Build is green" });
+  await expect(prose.locator("pre")).toHaveCount(2);
+  await prose.screenshot({ path: `${OUT()}/03b-rich-prose.png` });
+});
+
 test("Codex: first-class badge, local-input disclosure, and disabled controls", async ({
   page,
   seedHost,
