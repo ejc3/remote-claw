@@ -68,6 +68,86 @@ class FakeSocket {
 }
 
 describe("Codex app-server boundary", () => {
+  it("reads bounded latest-turn metadata without loading items or selecting another thread", async () => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    let data: unknown[] = [{ id: "active-turn", status: "inProgress" }];
+    socket.send = (raw: string): void => {
+      const message = JSON.parse(raw);
+      if (message.method !== "thread/turns/list") {
+        originalSend(raw);
+        return;
+      }
+      socket.sent.push(message);
+      socket.respond(message.id, { data, nextCursor: "older-turns" });
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    await expect(client.activeTurn(THREAD_ID, signal)).resolves.toBe("active-turn");
+    expect(socket.sent.at(-1)).toMatchObject({
+      method: "thread/turns/list",
+      params: { threadId: THREAD_ID, limit: 1, sortDirection: "desc", itemsView: "notLoaded" },
+    });
+    for (const status of ["completed", "interrupted", "failed"]) {
+      data = [{ id: "finished-turn", status }];
+      await expect(client.activeTurn(THREAD_ID, signal)).resolves.toBeNull();
+    }
+    data = [];
+    await expect(client.activeTurn(THREAD_ID, signal)).resolves.toBeNull();
+    for (const malformed of [
+      [null],
+      [{ id: "", status: "inProgress" }],
+      [{ id: "turn", status: "unknown" }],
+      [{ id: "turn", status: { toString: "inProgress" } }],
+      [
+        { id: "turn-1", status: "inProgress" },
+        { id: "turn-2", status: "inProgress" },
+      ],
+    ]) {
+      data = malformed;
+      await expect(client.activeTurn(THREAD_ID, signal)).rejects.toThrow(/invalid active-turn/);
+    }
+    client.close();
+  });
+
+  it("interrupts one exact target once and treats native stale-target rejection as a no-op", async () => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    let reply: Record<string, unknown> = { result: {} };
+    socket.send = (raw: string): void => {
+      originalSend(raw);
+      const message = JSON.parse(raw);
+      if (message.method === "turn/interrupt") {
+        queueMicrotask(() => socket.emit({ id: message.id, ...reply }));
+      }
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    await client.interruptTurn(THREAD_ID, "active-turn", signal);
+    expect(socket.sent.at(-1)).toMatchObject({
+      method: "turn/interrupt",
+      params: { threadId: THREAD_ID, turnId: "active-turn" },
+    });
+    reply = { error: { code: -32600, message: "native stale target details stay private" } };
+    await expect(client.interruptTurn(THREAD_ID, "stale-turn", signal)).resolves.toBeUndefined();
+    expect(socket.sent.filter((sent) => sent.method === "turn/interrupt")).toHaveLength(2);
+    expect(socket.sent.some((sent) => sent.method === "thread/turns/list")).toBe(false);
+
+    reply = { error: { code: -32603, message: "private native failure details" } };
+    await expect(client.interruptTurn(THREAD_ID, "unknown-turn", signal)).rejects.toThrow(
+      "Codex turn/interrupt failed",
+    );
+    for (const malformed of [null, [], { success: true }]) {
+      reply = { result: malformed };
+      await expect(client.interruptTurn(THREAD_ID, "bad-response", signal)).rejects.toThrow(
+        /invalid interrupt response/,
+      );
+    }
+    client.close();
+  });
+
   it("accepts only the managed socket or explicit loopback WebSockets and canonical threads", () => {
     expect(normalizeCodexAppServerUrl("ws://127.0.0.1:4500")).toBe("ws://127.0.0.1:4500");
     expect(normalizeCodexAppServerUrl("ws://[::1]:4500/")).toBe("ws://[::1]:4500");

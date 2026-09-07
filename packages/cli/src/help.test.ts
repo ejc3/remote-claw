@@ -130,13 +130,15 @@ describe("RC_HELP banner", () => {
 
   it("documents the frozen attach-only Codex tuple and local interaction ownership", () => {
     expect(RC_HELP).toContain("Pinned Codex companion (--rc-driver=codex)");
-    expect(RC_HELP).toMatch(/Linux arm64\s+and exact Codex app-server 0\.151\.0/);
+    expect(RC_HELP).toMatch(/Linux arm64\s+and exact Codex app-server 0\.151\.0\s+or 0\.153\.4/);
     expect(RC_HELP).toMatch(/literal `unix:\/\/` for Codex's same-user managed\s+control socket/);
     expect(RC_HELP).toMatch(/caller-owned explicit-port loopback `ws:\/\/` origin/);
     expect(RC_HELP).toMatch(/Arbitrary\s+Unix paths.+are rejected/);
     expect(RC_HELP).toMatch(/never starts or stops the app-server/);
     expect(RC_HELP).toMatch(/resumes\/joins only the\s+exact supplied thread/);
-    expect(RC_HELP).toMatch(/Approvals,\s+questions, interrupts, model\/mode changes/);
+    expect(RC_HELP).toMatch(/Browser input is non-empty, non-slash text plus interrupt/);
+    expect(RC_HELP).toMatch(/one active turn ID without retargeting or retrying/);
+    expect(RC_HELP).toMatch(/Approvals, questions, model\/mode changes/);
     expect(RC_HELP).toMatch(/Keep a local Codex TUI attached/);
     expect(RC_HELP).toMatch(/sole owner of approvals\s+and questions/);
     expect(RC_HELP).toMatch(/No forwarded arguments/);

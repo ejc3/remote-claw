@@ -115,7 +115,7 @@ test("assistant typography: code, diff highlights, and a table", async ({ page, 
   await prose.screenshot({ path: `${OUT()}/03b-rich-prose.png` });
 });
 
-test("Codex: first-class badge, local-input disclosure, and disabled controls", async ({
+test("Codex: first-class badge, local-input disclosure, and native-only approvals/settings", async ({
   page,
   seedHost,
 }) => {

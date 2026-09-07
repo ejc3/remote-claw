@@ -187,7 +187,7 @@ home-folder UI artifacts, outside Git.
 | --- | --- | --- |
 | Native work visibility, Claude first | Claude tools and Codex completed commands implemented and live-accepted | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
 | Desktop/mobile daily-use finish | Auditing | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
-| Remote interrupt and continue | Queued | One native adapter's running turn can be interrupted from a browser and continued while local/provider clients remain coherent |
+| Remote interrupt and continue | Codex implemented and live-accepted | One native adapter's running turn can be interrupted from a browser and continued while local/provider clients remain coherent |
 | Codex official-Remote recovery | Queued | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers |
 | Screenshot/file input | Queued | One structured adapter accepts encrypted attachments with truthful delivery and bounded input handling |
 | Remote approvals and questions | Queued | Browser decisions reconcile with native/local/provider decisions without weakening permission policy |
@@ -260,6 +260,39 @@ the current managed/paginated text/status/completed-command tuple, not official 
 coexistence, companion restart/broker-loss on this newer tuple, or other tool families. ChatGPT's
 authenticated web UI did not expose a Remote entry during this run; it is not counted as a native
 Remote client merely because it was logged in.
+
+**Next control tranche — Codex interrupt:** enable the existing encrypted Interrupt action for the
+exact 0.151.0/0.153.4 Linux arm64 companion. Read one latest native turn with
+`thread/turns/list {limit:1, sortDirection:"desc", itemsView:"notLoaded"}`, bind its active ID once,
+then send `turn/interrupt {threadId,turnId}`. Never retarget or retry an old request. Both exact native
+versions have been observed rejecting a stale target with JSON-RPC `-32600` without interrupting the
+successor, accepting the correct target, reporting `interrupted`, and completing a subsequent local
+turn. The bounded observations live in home-folder `codex-stop-seam-2026-09-07` artifacts, not Git.
+
+One owner edits `codex/{client,driver}.ts`, their tests, the capability constant and its existing relay
+wiring regression. A bounded local text FIFO keeps Interrupt reachable while subsequent text waits
+for native idle. Invalid/stale targets are no-ops; other unknown outcomes fence only the companion.
+Native status remains authoritative, and background commands may outlive an interrupted model turn.
+No new wire/storage format, coordinator, permission response, model/mode control, attachment support,
+Claude-native control capability, or restart/recovery claim belongs here. Acceptance is the actual
+native TUI plus phone/desktop stop-to-idle and continued text, including queued text not blocking Stop;
+focused RPC/queue/fence tests precede one settled common gate, doc sync, review, and CI.
+
+The 2026-09-07 actual 0.153.4/Linux arm64 managed-Unix/paginated acceptance passed: each of the phone
+and desktop viewers interrupted a running native turn while the other viewer had already submitted
+queued text. The native observer reported the targeted turn `interrupted`; queued continuation then
+completed in the local TUI and both viewers, exactly once after reload. Existing native permission
+ownership was unchanged. Light/dark continuation and enabled-control screenshots were inspected under
+`/home/ubuntu/remote-claw-ui-artifacts/codex-interrupt-current-2026-09-07/`. The observer used no interrupt
+RPC: both interruptions came from the real viewer button through the encrypted broker and companion.
+This does not claim an official Codex Remote browser, a process-kill control, or newer recovery coverage.
+
+In parallel, one official Claude browser Stop and fresh continuation were observed on exact 2.1.237.
+A separate one-shot host-origin control using ordinary OAuth also received the matching canonical
+worker success response, interrupted that native session, and allowed fresh text to complete. The
+control shape, ordered native responses, and limits are retained in home-folder
+`claude-stop-seam-2026-09-07` artifacts. This is protocol evidence only: status semantics and the
+stop/successor boundary still need acceptance before enabling the companion's control capability.
 
 ### Execution contract
 

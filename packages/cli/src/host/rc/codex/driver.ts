@@ -124,6 +124,28 @@ class IdleGate {
   }
 }
 
+/** Keep controls live while ordinary text waits for Codex's one native runner. */
+class BrowserTurnQueue {
+  readonly #items: RcEvent[] = [];
+  #wake = Promise.withResolvers<void>();
+
+  push(event: RcEvent): void {
+    if (this.#items.length >= CODEX_HISTORY_ITEM_LIMIT) {
+      throw new CodexProjectionError("Codex browser-turn queue exceeded its bound");
+    }
+    this.#items.push(event);
+    const wake = this.#wake;
+    this.#wake = Promise.withResolvers<void>();
+    wake.resolve();
+  }
+
+  async shift(signal: AbortSignal): Promise<RcEvent | undefined> {
+    while (this.#items.length === 0) await withAbort(this.#wake.promise, signal);
+    throwIfAborted(signal);
+    return this.#items.shift();
+  }
+}
+
 class CodexReconciler {
   readonly #session: Session;
   readonly #mutations: Map<string, BrowserMutation>;
@@ -259,6 +281,8 @@ export class CodexDriver implements Driver {
   readonly #client: CodexClient;
   readonly #trace: Tracer;
   readonly #mutations = new Map<string, BrowserMutation>();
+  readonly #browserTurns = new BrowserTurnQueue();
+  #lastInterruptedTurn: string | null = null;
 
   constructor(ctx: DriverContext, options: CodexDriverOptions) {
     this.#ctx = ctx;
@@ -322,7 +346,8 @@ export class CodexDriver implements Driver {
       await withAbort(
         Promise.race([
           this.#capturePump(session, reconciler, gate, signal),
-          this.#injectPump(session, gate, signal),
+          this.#injectPump(session, signal),
+          this.#browserTurnPump(session, gate, signal),
           handle.served,
         ]),
         signal,
@@ -425,21 +450,39 @@ export class CodexDriver implements Driver {
     }
   }
 
-  async #injectPump(session: Session, gate: IdleGate, signal: AbortSignal): Promise<void> {
-    const generation = session.claimWorkerStream();
-    for await (const event of session.followDownstream(generation, () => signal.aborted)) {
-      if (event === null || signal.aborted || session.closed) continue;
-      if (event.eventType === "control_request") {
-        // initialize and every browser-disabled control are local no-ops at this text-only boundary.
-        session.ack(event.eventId);
-        continue;
-      }
-      if (event.eventType !== "user") {
-        session.ack(event.eventId);
-        continue;
-      }
+  async #browserTurnPump(session: Session, gate: IdleGate, signal: AbortSignal): Promise<void> {
+    while (!signal.aborted && !session.closed) {
+      const event = await this.#browserTurns.shift(signal);
+      if (event === undefined || signal.aborted || session.closed) return;
       await this.#injectText(session, event, gate, signal);
     }
+  }
+
+  async #injectPump(session: Session, signal: AbortSignal): Promise<void> {
+    const generation = session.claimWorkerStream();
+    for await (const event of session.followDownstream(generation, () => signal.aborted)) {
+      if (signal.aborted || session.closed) return;
+      if (event === null) continue;
+      if (event.eventType === "user") {
+        this.#browserTurns.push(event);
+        continue;
+      }
+      if (event.eventType === "control_request") {
+        const request = record(event.payload.request);
+        if (request?.subtype === "interrupt") await this.#interruptCurrent(session, signal);
+        // Initialize and every other control remain local no-ops. Approval responses stay native.
+      }
+      session.ack(event.eventId);
+    }
+  }
+
+  async #interruptCurrent(session: Session, signal: AbortSignal): Promise<void> {
+    const turnId = await this.#client.activeTurn(this.#options.threadId, signal);
+    if (signal.aborted || session.closed || turnId === null || turnId === this.#lastInterruptedTurn)
+      return;
+    this.#lastInterruptedTurn = turnId;
+    await this.#client.interruptTurn(this.#options.threadId, turnId, signal);
+    // RPC acceptance is not completion. Only native status can release queued text or show idle.
   }
 
   async #injectText(
