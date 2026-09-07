@@ -104,6 +104,26 @@ describe("OAuthAnthropicRcTransport", () => {
     expect(oauth.calls).toEqual([{ forceRefresh: false }]);
   });
 
+  it("returns a one-shot control's 401 without waiting for rotation or retrying", async () => {
+    const oauth = new ScriptedOAuth(["old-token", "new-token"]);
+    const rejected = new Response("unauthorized", { status: 401 });
+    const fetchFn = vi.fn(async () => rejected) as unknown as typeof fetch;
+    const transport = new OAuthAnthropicRcTransport({ oauth, fetchFn });
+
+    await expect(
+      transport.request({
+        operation: "postInterrupt",
+        method: "POST",
+        path: "/v1/code/sessions/cse_1/events",
+        accept: "application/json",
+        body: '{"events":[]}',
+        retryAfter401: false,
+      }),
+    ).resolves.toBe(rejected);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(oauth.calls).toEqual([{ forceRefresh: false }]);
+  });
+
   it("does not wait for a rejected Response body cleanup before a rotated-token retry", async () => {
     const oauth = new ScriptedOAuth(["old-token", "new-token"]);
     let cancelStarted: () => void = () => undefined;
@@ -202,7 +222,10 @@ describe("OAuthAnthropicRcTransport", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
-  it("never retries an ambiguous network failure and does not retain its secret-bearing error", async () => {
+  it.each([
+    { operation: "postEvent" },
+    { operation: "postInterrupt", retryAfter401: false },
+  ])("never retries or exposes an ambiguous $operation network failure", async (write) => {
     const oauth = new ScriptedOAuth(["oauth-canary"]);
     const fetchFn = vi.fn(async () => {
       throw new Error("network failed with oauth-canary and private-prompt");
@@ -210,7 +233,7 @@ describe("OAuthAnthropicRcTransport", () => {
     const transport = new OAuthAnthropicRcTransport({ oauth, fetchFn });
 
     const failure = transport.request({
-      operation: "postEvent",
+      ...write,
       method: "POST",
       path: "/v1/code/sessions/cse_1/events",
       accept: "application/json",
@@ -219,7 +242,7 @@ describe("OAuthAnthropicRcTransport", () => {
 
     await expect(failure).rejects.toMatchObject({
       kind: "network",
-      operation: "postEvent",
+      operation: write.operation,
       retryable: false,
       outcomeUnknown: true,
     });

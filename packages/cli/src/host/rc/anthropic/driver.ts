@@ -19,6 +19,7 @@ import {
   AnthropicRcClient,
   type AnthropicRcEvent,
   type RcEventPage,
+  type RcInterruptEventInput,
   type RcPostAck,
   type RcSseItem,
   type RcUserEventInput,
@@ -31,6 +32,7 @@ const PROJECTION_COORDINATE_CAP = 100_000;
 const RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 150;
 const TEARDOWN_WAIT_MS = 2_000;
+const INTERRUPT_RESPONSE_TIMEOUT_MS = 30_000;
 
 /** The small client surface the companion owns; injectable without weakening production origin/auth. */
 export interface ClaudeNativeClient {
@@ -45,6 +47,11 @@ export interface ClaudeNativeClient {
   postEvent(
     sessionId: string,
     event: RcUserEventInput,
+    options?: { signal?: AbortSignal },
+  ): Promise<RcPostAck>;
+  postInterrupt(
+    sessionId: string,
+    event: RcInterruptEventInput,
     options?: { signal?: AbortSignal },
   ): Promise<RcPostAck>;
 }
@@ -85,6 +92,11 @@ interface BrowserMutation {
   readonly clientMsgId?: string;
   ackEventId: string | null;
   observedEventId: string | null;
+}
+
+interface PendingInterrupt {
+  readonly requestId: string;
+  readonly response: PromiseWithResolvers<void>;
 }
 
 interface UserObservation {
@@ -154,6 +166,7 @@ class NativeReconciler {
   readonly #mutations: Map<string, BrowserMutation>;
   readonly #budget: ProjectionBudget;
   readonly #trace: Tracer;
+  readonly #onControlResponse: (event: AnthropicRcEvent) => void;
   readonly #seenEvents = new Map<string, AnthropicRcEvent>();
   readonly #usersByUuid = new Map<string, UserObservation>();
   #lastSequence: bigint | null = null;
@@ -164,12 +177,14 @@ class NativeReconciler {
     mutations: Map<string, BrowserMutation>,
     budget: ProjectionBudget,
     trace: Tracer,
+    onControlResponse: (event: AnthropicRcEvent) => void,
   ) {
     this.#session = session;
     this.#nativeId = nativeId;
     this.#mutations = mutations;
     this.#budget = budget;
     this.#trace = trace;
+    this.#onControlResponse = onControlResponse;
   }
 
   accept(event: AnthropicRcEvent): void {
@@ -309,7 +324,12 @@ class NativeReconciler {
       return;
     }
 
-    // Permissions, controls, attachments, and protocol-evolution frames remain native.
+    if (event.eventType === "control_response" && event.source === "worker") {
+      this.#onControlResponse(event);
+      return;
+    }
+
+    // Permissions, other controls, attachments, and protocol-evolution frames remain native.
     this.#trace.debug("native event retained outside text projection", {
       event: event.eventType,
       source: event.source,
@@ -327,6 +347,7 @@ export class ClaudeNativeDriver implements Driver {
   readonly #mutations = new Map<string, BrowserMutation>();
   readonly #writeGate = new WriteGate();
   readonly #projectionCoordinateCap: number;
+  #pendingInterrupt: PendingInterrupt | null = null;
 
   constructor(ctx: DriverContext, options: ClaudeNativeDriverOptions) {
     this.#ctx = ctx;
@@ -468,6 +489,7 @@ export class ClaudeNativeDriver implements Driver {
       this.#mutations,
       budget,
       this.#trace,
+      (event) => this.#observeInterruptResponse(event),
     );
 
     // Subscribe first, then read all bounded ascending history. This closes the snapshot gap: live
@@ -630,7 +652,12 @@ export class ClaudeNativeDriver implements Driver {
     for await (const event of session.followDownstream(generation, () => signal.aborted)) {
       if (signal.aborted || session.closed) return;
       if (event === null) continue;
-      if (event.eventType === "control_request" && initializeSubtype(event)) {
+      if (event.eventType === "control_request" && controlSubtype(event) === "initialize") {
+        session.ack(event.eventId);
+        continue;
+      }
+      if (event.eventType === "control_request" && controlSubtype(event) === "interrupt") {
+        await this.#interrupt(session, nativeId, event, signal);
         session.ack(event.eventId);
         continue;
       }
@@ -683,6 +710,56 @@ export class ClaudeNativeDriver implements Driver {
         sequence: acknowledgement.sequenceNum,
       });
     }
+  }
+
+  async #interrupt(
+    session: Session,
+    nativeId: string,
+    event: RcEvent,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await this.#writeGate.wait(signal);
+    if (signal.aborted || session.closed) throw abortError();
+    const requestId = event.payload.request_id;
+    if (typeof requestId !== "string" || requestId === "") {
+      throw new NativeProjectionError("native interrupt lacks a request identity");
+    }
+    const pending: PendingInterrupt = {
+      requestId,
+      response: Promise.withResolvers<void>(),
+    };
+    // The worker response may reach SSE before the POST response. Register first and observe early
+    // rejection while the writer is still awaiting HTTP; the serial writer owns only this one slot.
+    this.#pendingInterrupt = pending;
+    void pending.response.promise.catch(() => undefined);
+    try {
+      await this.#client.postInterrupt(nativeId, { uuid: event.eventId, requestId }, { signal });
+      if (signal.aborted || session.closed) throw abortError();
+      await waitForInterruptResponse(pending.response.promise, signal);
+      // This is a session-scoped Stop acknowledgement, not an idle/turn-status observation. Only our
+      // subsequent serial text is released; other native/provider peers keep their own ordering.
+    } finally {
+      this.#pendingInterrupt = null;
+    }
+  }
+
+  #observeInterruptResponse(event: AnthropicRcEvent): void {
+    const pending = this.#pendingInterrupt;
+    const response = event.payload.response;
+    if (
+      pending === null ||
+      typeof response !== "object" ||
+      response === null ||
+      Array.isArray(response)
+    )
+      return;
+    const reply = response as Record<string, unknown>;
+    if (reply.request_id !== pending.requestId) return;
+    if (event.payload.type !== "control_response" || reply.subtype !== "success") {
+      pending.response.reject(new NativeProjectionError("native interrupt was not confirmed"));
+      return;
+    }
+    pending.response.resolve();
   }
 }
 
@@ -934,14 +1011,35 @@ function downstreamInput(event: RcEvent): RcUserEventInput {
   };
 }
 
-function initializeSubtype(event: RcEvent): boolean {
+function controlSubtype(event: RcEvent): unknown {
   const request = event.payload.request;
-  return (
-    typeof request === "object" &&
-    request !== null &&
-    !Array.isArray(request) &&
-    (request as { subtype?: unknown }).subtype === "initialize"
-  );
+  return typeof request === "object" && request !== null && !Array.isArray(request)
+    ? (request as { subtype?: unknown }).subtype
+    : undefined;
+}
+
+async function waitForInterruptResponse(
+  response: Promise<void>,
+  signal: AbortSignal,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort = () => {};
+  const stopped = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new NativeProjectionError("native interrupt response timed out")),
+      INTERRUPT_RESPONSE_TIMEOUT_MS,
+    );
+    timer.unref();
+    onAbort = () => reject(abortError());
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+  });
+  try {
+    await Promise.race([response, stopped]);
+  } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", onAbort);
+  }
 }
 
 function safeError(error: unknown): string {

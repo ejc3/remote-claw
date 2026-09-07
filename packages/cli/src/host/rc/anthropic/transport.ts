@@ -29,6 +29,8 @@ export interface AnthropicRcTransportRequest {
   accept: "application/json" | "text/event-stream";
   body?: string;
   signal?: AbortSignal;
+  /** Session-scoped controls must not be replayed after waiting for credential rotation. */
+  retryAfter401?: boolean;
 }
 
 export interface AnthropicRcTransport {
@@ -43,7 +45,8 @@ export interface OAuthAnthropicRcTransportOptions {
 /**
  * Authenticated transport for the fixed production RC origin. It reloads the OAuth bearer on every
  * request. On a 401 it asks the provider for a rotated token and retries the exact request at most once,
- * and only when the bearer actually changed. It never retries an ambiguous network failure.
+ * and only when the bearer actually changed, unless the request explicitly disables this retry.
+ * It never retries an ambiguous network failure.
  */
 export class OAuthAnthropicRcTransport implements AnthropicRcTransport {
   readonly #oauth: RcOAuthProvider;
@@ -58,7 +61,7 @@ export class OAuthAnthropicRcTransport implements AnthropicRcTransport {
     const url = rcUrl(request.path);
     const firstToken = await this.#accessToken(request, false);
     const first = await this.#fetchOnce(url, request, firstToken);
-    if (responseStatus(first, request) !== 401) return first;
+    if (responseStatus(first, request) !== 401 || request.retryAfter401 === false) return first;
 
     // Do not leave a rejected body unread while waiting for Claude to rotate its shared credential.
     discardResponseBody(first);

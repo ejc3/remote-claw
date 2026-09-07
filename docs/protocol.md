@@ -182,7 +182,7 @@ event.
 `--rc-trace` uses the same interception machinery as a transparent inspector. It forwards RC to
 Anthropic and records redacted protocol shapes; it creates no broker bridge.
 
-### 4.2 Provider-native text companion
+### 4.2 Provider-native text and session-Interrupt companion
 
 The launch form, `--rc-driver=claude-native --remote-control`, runs ordinary Claude through that
 transparent proxy and binds only after the spawned child completes a successful canonical
@@ -220,8 +220,10 @@ browser prompt UUID still fences the projection. Browser text uses one UUID and 
 broker admission and provider POST. A seq-less
 `{native_pending:true}` acceptance means only that the host admitted the command. Provider history/SSE
 then publishes the canonical accepted coordinate and user row in provider order. One serialized writer
-issues no automatic retry; a rejected or outcome-unknown POST fences the projection before any
-successor. Accepted provider events and browser mutations share a fixed lifetime ceiling; exhausting it
+fences the projection after a rejected or outcome-unknown POST, before any successor. It also accepts
+the allowlisted session-scoped Interrupt described in [control verbs](#11-compatibility-control-verbs),
+without enabling status or other control families. Accepted provider events and browser mutations share
+a fixed lifetime ceiling; exhausting it
 fails only the projection instead of growing companion state without bound. Projection or broker
 failure closes only that remote-claw projection. In launch form the transparent proxy and healthy
 Claude child remain running; in attach-only form the companion exits nonzero while the independently
@@ -435,7 +437,7 @@ cannot bypass a disabled button:
 | Driver | Structured permissions | Status | Interrupt | Set model | Set mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
-| Claude native companion | no | no | no | no | no | no | no |
+| Claude native companion | no | no | yes; session-scoped | no | no | no | no |
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
@@ -526,6 +528,17 @@ actions when stale and maps supported controls to driver events:
 - `interrupt` → Claude `interrupt`, OpenCode abort, or Codex exact-turn `turn/interrupt`;
 - `set_model` → Claude `set_model`; and
 - `set_mode` → Claude `set_permission_mode` only where advertised.
+
+The Claude-native companion sends one session-scoped `control_request` containing the existing
+event UUID, request ID, and `request:{subtype:"interrupt"}` to the exact bound session's events
+endpoint. The provider supplies no exact-turn target: delayed Stop may affect newer native/peer work.
+One pending serial slot is registered before POST so an early SSE response cannot be missed. Only a
+canonical worker `control_response` with the exact pending request ID and nested `subtype:"success"`
+releases subsequent browser text. HTTP admission and generic successful `result` events do not prove
+idle or confirm Stop. The response wait times out 30 seconds after HTTP success; rejection, timeout,
+or unknown outcome fences only the companion. Interrupt disables the transport's 401 rotation retry
+and never automatically retries. This neither kills the process nor changes permission ownership;
+status stays unadvertised, and other native/provider peers retain their own ordering.
 
 Codex reads only the latest turn metadata using `thread/turns/list` with `limit:1`,
 `sortDirection:"desc"`, and `itemsView:"notLoaded"`. A validated `inProgress` turn ID is bound once

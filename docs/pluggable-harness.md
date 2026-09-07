@@ -8,7 +8,7 @@ Five drivers exist:
 
 - `mitm` — the default Claude Code Remote Control adapter;
 - `claude-native` — the Linux/exact-2.1.237 structured companion for ordinary Anthropic Remote
-  Control, with text-only mutations and read-only worker tool calls/textual results;
+  Control, with ordinary text plus one-shot session-scoped Interrupt and read-only worker tool activity;
 - `tmux` — the maintained lower-fidelity plain-Claude compatibility adapter;
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
 - `codex` — the exact 0.151.0 or 0.153.4/Linux arm64 app-server companion: text-and-interrupt browser
@@ -235,6 +235,13 @@ replay but are not durable exactly-once claims.
 The Claude-native companion sends non-empty, non-slash text through one serialized provider writer with
 a stable UUID. It waits for the canonical provider history/SSE event before publishing the ordered user
 row. Any rejected or outcome-unknown POST permanently fences the projection and is not retried.
+The same serial writer supports one-shot session-scoped Interrupt. It registers one pending slot
+before POST and waits for the exact canonical worker success before later browser text. HTTP admission
+or a generic result is not idle. Interrupt has no turn ID, so delayed Stop may affect newer native/peer
+work; it never retries, even after a 401. Missing confirmation after 30 seconds from HTTP success or a
+rejected/unknown outcome fences only the companion. Status remains false; see
+[control semantics](protocol.md#11-compatibility-control-verbs) and the separate current acceptance
+in the [release roadmap](release-finish-line.md).
 
 The Codex companion waits for native idle, rechecks that its projection is still open, starts one turn
 with the broker event ID as
@@ -306,7 +313,7 @@ The exact advertised viewer capabilities are:
 | Driver | Permissions | Status | Interrupt | Model | Mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable `mitm` | no | yes | no | no | no | no | no |
-| `claude-native` | no | no | no | no | no | no | no |
+| `claude-native` | no | no | yes; session-scoped | no | no | no | no |
 | `tmux` | no; posture says native/local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
 | `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |

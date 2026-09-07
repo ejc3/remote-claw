@@ -187,7 +187,7 @@ home-folder UI artifacts, outside Git.
 | --- | --- | --- |
 | Native work visibility, Claude first | Claude tools and Codex completed commands implemented and live-accepted | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
 | Desktop/mobile daily-use finish | Auditing | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
-| Remote interrupt and continue | Codex implemented and live-accepted | One native adapter's running turn can be interrupted from a browser and continued while local/provider clients remain coherent |
+| Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | Queued | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers |
 | Screenshot/file input | Queued | One structured adapter accepts encrypted attachments with truthful delivery and bounded input handling |
 | Remote approvals and questions | Queued | Browser decisions reconcile with native/local/provider decisions without weakening permission policy |
@@ -291,8 +291,31 @@ In parallel, one official Claude browser Stop and fresh continuation were observ
 A separate one-shot host-origin control using ordinary OAuth also received the matching canonical
 worker success response, interrupted that native session, and allowed fresh text to complete. The
 control shape, ordered native responses, and limits are retained in home-folder
-`claude-stop-seam-2026-09-07` artifacts. This is protocol evidence only: status semantics and the
-stop/successor boundary still need acceptance before enabling the companion's control capability.
+`claude-stop-seam-2026-09-07` artifacts. These observations established Claude's session-scoped control
+surface, not a native turn-ID boundary or running/idle status signal.
+
+**Claude-native interrupt — implemented and live-accepted:** exact Claude 2.1.237/Linux arm64 now
+accepts the existing encrypted Interrupt action through one typed, fixed-session native POST. The
+native protocol supplies no turn ID: a delayed Stop may affect newer local/provider work. The serial
+writer waits for its matching canonical worker success before posting subsequent browser text; HTTP
+admission or a generic result is not that confirmation. There is one pending slot and a 30-second
+post-admission response timeout, no automatic retry (including 401 rotation), and no new coordinator
+or wire/storage format. Rejection, timeout, and unknown outcomes retire only the companion. Native
+status, permissions/questions, settings, attachments, and process termination are outside this slice.
+The owning files are `anthropic/{client,driver,transport}.ts`, their focused regressions, capability
+wiring, existing viewer gate, help, and current documentation.
+
+On 2026-09-07 each actual phone (390×844) and desktop (1440×1000) viewer used Interrupt during a fresh
+harmless bounded turn started from the official Claude browser. The other viewer submitted ordinary
+continuation immediately afterward. Canonical worker success preceded the companion's continuation
+POST in both runs (control/ack/continuation sequences 62/64/66 and 70/72/74). Native interrupted state
+was observed, both continuations completed in the local TUI, official logged-in Claude browser, and
+both remote-claw viewers, and reload showed each assistant marker once. The observer performed only
+reads; the real encrypted viewer buttons issued both controls. Light/dark screenshots were inspected,
+and `viewer-result.json` plus diagnostic sources live in the same home-folder artifact directory.
+No permission policy, native TUI, official browser, managed Codex daemon, or tunnel was restarted.
+This accepts session-scoped Stop and continuation, not exact-turn/successor isolation, in-flight shell
+cancellation, remote approval decisions, or status inference.
 
 ### Execution contract
 
