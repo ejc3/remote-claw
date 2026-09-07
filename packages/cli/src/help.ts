@@ -66,8 +66,9 @@ Claude native companion (--rc-driver=claude-native):
   exact native session through the sealed broker. Browser input is non-empty, non-slash text plus
   session-scoped Interrupt. Stop is sent once and waits for the matching native acknowledgement before
   later browser text; it has no exact-turn target and a delayed Stop may affect newer work. No native
-  running/idle status is inferred. Permissions, questions, model/mode changes, attachments, and end remain native/local and disabled in
-  the viewer. --rc-inference, --rc-bedrock-*, and --rc-accountless are rejected for this driver.
+  running/idle status is inferred. Permissions, questions, model/mode changes, attachments, and end
+  remain native/local and disabled in the viewer. --rc-inference, --rc-bedrock-*, and --rc-accountless
+  are rejected for this driver.
   --rc-native-session <cse_…>  attach a fresh remote-claw projection to this exact already-running
                      Anthropic RC session. This form starts no interactive Claude session or proxy and
                      accepts no forwarded Claude arguments; the required version probe still runs.
@@ -119,11 +120,14 @@ Pinned Codex companion (--rc-driver=codex):
   --rc-codex-thread <id>   required exact existing Codex UUIDv7 (or set RC_CODEX_THREAD).
                      Attach-only: the companion never starts or stops the app-server and never
                      discovers, selects, creates, deletes, or stops a thread. It resumes/joins only the
-                     exact supplied thread. Only non-empty, non-slash text is projected. Approvals,
-                     questions, interrupts, model/mode changes, files, and attachments remain in the
+                     exact supplied thread. Browser input is non-empty, non-slash text plus interrupt;
+                     native status and completed shell commands/results are read-only. Interrupt binds
+                     one active turn ID without retargeting or retrying; background commands may continue.
+                     Approvals, questions, model/mode changes, files, and attachments remain in the
                      local Codex client and are disabled in the viewer. Keep a local Codex TUI attached
                      to that exact thread for the companion lifetime; it is the sole owner of approvals
-                     and questions. Supported tuple: Linux arm64 and exact Codex app-server 0.151.0.
+                     and questions. Supported tuple: Linux arm64 and exact Codex app-server 0.151.0
+                     or 0.153.4.
                      No forwarded arguments.
 
 Diagnostics:

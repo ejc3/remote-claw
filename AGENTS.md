@@ -56,12 +56,16 @@ version/platform through explicit-port loopback WebSocket with paginated history
 attached local TUI, and two browsers survived fresh-projection restart/backfill without replaying
 native mutations; broker loss retired only the companion while local work completed. Recovery through
 managed Unix/legacy history or alongside official Remote, stable projection identity, and richer
-controls remain unclaimed. The current code accepts exact Codex 0.151.0 and 0.153.4 on Linux arm64
+controls were outside that recovery run. The current code accepts exact Codex 0.151.0 and 0.153.4 on
+Linux arm64
 and also projects completed `commandExecution` as read-only `Shell` calls and bounded results,
-including failed/declined/nonzero-exit outcomes. Browser mutations remain non-empty non-slash text;
-status is unchanged, and no approval response API, streaming partials, file changes, or task lifecycle
-is added. The [release roadmap](docs/release-finish-line.md) owns current-version/activity acceptance;
-the historical results above remain exact 0.151.0 evidence. The attachment path
+including failed/declined/nonzero-exit outcomes. Browser mutations are non-empty non-slash text plus
+interrupt. Interrupt binds the latest active native turn once and never retargets or retries; queued
+text still waits for native idle, not interrupt RPC acceptance. Native background commands may outlive
+the interrupted model turn. Other controls, attachments, approval responses, streaming partials, file
+changes, and task lifecycle remain unsupported. The [release roadmap](docs/release-finish-line.md)
+owns current-version/activity/interrupt acceptance; the historical results above remain exact 0.151.0
+evidence. The attachment path
 accepts literal `unix://` only as Codex's same-user managed control socket
 (`$CODEX_HOME/app-server-control/app-server-control.sock`, falling back to `~/.codex`), while retaining
 the historical explicit-port loopback WebSocket form and rejecting arbitrary Unix paths. Resume's

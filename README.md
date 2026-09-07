@@ -27,10 +27,12 @@ credentials.
 > [Codex recovery follow-on](docs/release-finish-line.md#codex-recovery--complete) now proves
 > fresh-projection restart/backfill and broker-loss isolation on explicit-port loopback WebSocket
 > with paginated history. Recovery through managed Unix/legacy history or alongside official Remote,
-> stable projection identity, and richer controls remain unclaimed.
+> stable projection identity, and richer controls were outside that recovery run.
 > The current Codex implementation accepts exact 0.151.0 and 0.153.4 on Linux arm64 and also displays
-> completed shell commands and bounded results as read-only activity. Those additions do not rewrite
-> the historical 0.151.0 acceptance; see the release roadmap for their current acceptance result.
+> completed shell commands and bounded results as read-only activity. Browser mutations are ordinary
+> non-empty non-slash text plus interrupt; other controls and attachments remain disabled. These
+> additions do not rewrite the historical 0.151.0 acceptance; see the release roadmap for their current
+> acceptance result.
 > M4 is also complete for the lower-fidelity tmux fallback: a packed CLI with exact Claude 2.1.237 on
 > Linux arm64 and Bedrock Sonnet 4.6 kept a local pane and two browsers coherent across reload, browser
 > departure, a locally approved permission prompt, broker loss, and a later local turn. A browser prompt
@@ -90,7 +92,7 @@ The implemented native modes are:
 | `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text plus one-shot session-scoped Interrupt; permissions, questions, model/mode changes, attachments, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
 | `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The mutable surface remains non-empty non-slash text plus interrupt. Read-only MAIN-session running/idle status is advertised; native/local UI still owns permissions, questions, model/mode, attachments, and end. |
-| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0 or 0.153.4 on Linux arm64. Browser input remains non-empty non-slash text; native status and completed shell commands/results are read-only. The attached local TUI solely owns approvals and questions, and every other browser control is disabled. |
+| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0 or 0.153.4 on Linux arm64. Browser mutations are non-empty non-slash text plus interrupt; native status and completed shell commands/results are read-only. The attached local TUI solely owns approvals and questions, and every other browser control is disabled. |
 | `--rc-app <origin> --rc-driver=tmux [claude args]` | Runs plain Claude in a recoverable private tmux pane while the lower-fidelity adapter projects transcript and serializes browser injection against active native turns. It fail-fast requires Linux arm64 and exact Claude 2.1.237 before identity, broker, or pane startup. Browser input is ordinary non-empty non-slash text plus attachments; interrupt, model, mode, and end are disabled. Permissions, questions, and folder trust stay in that local pane unless the caller explicitly bypasses Claude policy. Idle editor/config UI concurrency and independent peer ordering are not isolated. M4's maintained Bedrock tuple is green; provider-native and official-client coexistence are not advertised for this mode. |
 
 The launch form waits for the exact successful bridge request from its Claude child. The attach form
@@ -144,7 +146,8 @@ Other supported and experimental paths have narrower current claims:
   approvals/questions. M3b's exact official-Remote/TUI/two-browser coexistence and provider-transport
   isolation gate is complete. The separate
   [Codex recovery result](docs/release-finish-line.md#codex-recovery--complete) covers only explicit-port
-  loopback WebSocket with paginated history; richer controls remain disabled.
+  loopback WebSocket with paginated history. The current text-and-interrupt surface is tracked
+  separately in the [release roadmap](docs/release-finish-line.md); other controls remain disabled.
 - tmux captures transcripts and injects ordinary non-empty non-slash text plus attachments when no
   higher-fidelity native seam is available. Node loads a private tmux buffer before a fixed helper
   takes a shared Linux `flock`, claims the content-free gate, and holds the lock through paste, settle,
@@ -307,9 +310,12 @@ node dist/remote-claw.js --rc-app https://your-app.example \
 ```
 
 Use the real UUIDv7 supplied by Codex. remote-claw resumes/joins only that thread; it never starts or
-stops app-server, discovers/selects/creates/deletes/stops a thread, or owns the TUI. Only non-empty,
-non-slash browser text is accepted. Approvals and questions stay in the local Codex TUI. Interrupt,
-model/mode, files, attachments, and end are disabled. A durable SQLite/libSQL broker is required.
+stops app-server, discovers/selects/creates/deletes/stops a thread, or owns the TUI. Browser mutations
+are non-empty non-slash text plus interrupt. Approvals and questions stay in the local Codex TUI.
+Model/mode, files, attachments, and end are disabled. A durable SQLite/libSQL broker is required.
+Interrupt targets one observed active turn without retrying or switching to a newer turn. It remains
+available while browser text is queued; that text waits for native idle before starting. Interrupting
+the model turn does not guarantee cancellation of native background commands.
 Completed native `commandExecution` items appear as read-only `Shell` calls and bounded results,
 including failed, declined, and nonzero-exit outcomes. This does not add command execution controls,
 approval responses, streaming partials, file-change projection, or task lifecycle tracking.
@@ -328,7 +334,7 @@ validates supported completed shapes before counting the shared 10,000 native-it
 families, reasoning, and unfinished commands are not projected. Projected identity is the immutable
 `(turnId,itemId)` pair: replay of the same pair and bytes deduplicates, while changed projected bytes
 at the same pair fence the companion.
-The current-version/activity acceptance is tracked in the [release roadmap](docs/release-finish-line.md),
+The current-version/activity/interrupt acceptance is tracked in the [release roadmap](docs/release-finish-line.md),
 separately from the historical 0.151.0 results below.
 
 The bounded M3b gate used an exact official Remote thread on Codex 0.151.0/Linux arm64 with literal

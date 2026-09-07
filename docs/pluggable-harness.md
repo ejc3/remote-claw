@@ -11,8 +11,8 @@ Five drivers exist:
   Control, with ordinary text plus one-shot session-scoped Interrupt and read-only worker tool activity;
 - `tmux` — the maintained lower-fidelity plain-Claude compatibility adapter;
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
-- `codex` — the exact 0.151.0 or 0.153.4/Linux arm64 app-server companion: text-only browser mutations,
-  native status, and read-only completed shell commands/results.
+- `codex` — the exact 0.151.0 or 0.153.4/Linux arm64 app-server companion: text-and-interrupt browser
+  mutations, native status, and read-only completed shell commands/results.
 
 The private MITM remains the supported Claude beta. The native companion has passed its structured
 API-path, local Graduate, literal official web UI coexistence, and separate exact-SHA
@@ -37,8 +37,9 @@ daemon, TUI, companion, and browsers stayed live before provider transport resto
 is provider-transport isolation, not per-device unsubscribe. The separate
 [Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) passed clean companion
 restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy.
-Those historical Codex results remain exact 0.151.0 evidence; current 0.153.4 and command-activity
-acceptance is tracked in the [release roadmap](release-finish-line.md). Richer controls remain disabled.
+Those historical Codex results remain exact 0.151.0 evidence; current-version, command-activity, and
+interrupt acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
+remain disabled.
 Every current `Session` binding remains process-local.
 
 This adapter choice is independent of inference routing. Anthropic, OpenAI, or Bedrock selects where
@@ -245,6 +246,10 @@ in the [release roadmap](release-finish-line.md).
 The Codex companion waits for native idle, rechecks that its projection is still open, starts one turn
 with the broker event ID as
 `clientUserMessageId`, and acknowledges only after the matching completed native user item appears.
+A bounded process-local text FIFO leaves interrupt reachable while text waits. Interrupt binds one
+observed active native turn; stale-target rejection is a no-op, never a retry against a newer turn.
+Only native status releases queued text, not interrupt RPC acceptance. Background commands may outlive
+the interrupted model turn; see [control semantics](protocol.md#11-compatibility-control-verbs).
 The immutable projection coordinate is `(turnId,itemId)`, because Codex item IDs are only turn-scoped.
 An exact replay deduplicates; changed projected bytes at the same pair fence the projection.
 Completed `commandExecution` shares that identity fence and produces read-only `Shell` calls and bounded
@@ -292,7 +297,7 @@ attached for the projection lifetime.
 
 ## 5. Current adapters
 
-| Property | Claude `mitm` | Claude `claude-native` | Maintained lower-fidelity `tmux` | Pinned OpenCode current | Pinned Codex M3a/M3b |
+| Property | Claude `mitm` | Claude `claude-native` | Maintained lower-fidelity `tmux` | Pinned OpenCode current | Pinned Codex current |
 | --- | --- | --- | --- | --- | --- |
 | Native connection | Claude RC HTTP/SSE through local MITM | transparent bridge observer or explicit-ID attach, plus Anthropic history/SSE client | private tmux pane + transcript files | OpenCode HTTP + server-wide SSE | explicit-port loopback app-server WebSocket, or literal `unix://` to Codex's same-user managed socket |
 | Native session choice | Claude creates a fresh `cse_*` in the local RC service | exact `cse_*` from the spawned child's successful bridge request or explicit `--rc-native-session` | fresh UUID unless user supplied resume/session flags | required exact existing root `ses_*`; never list, discover, or create that root; follow announced children | required exact existing UUIDv7; resume/join only, never discover, select, create, delete, or stop |
@@ -312,7 +317,7 @@ The exact advertised viewer capabilities are:
 | `tmux` | no; posture says native/local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
 | `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |
-| Pinned `codex` | no | yes | no | no | no | no | no |
+| Pinned `codex` | no | yes | yes | no | no | no | no |
 
 See [tmux-driver.md](tmux-driver.md) and [opencode-driver.md](opencode-driver.md) for adapter-specific
 limitations.

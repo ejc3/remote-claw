@@ -588,7 +588,7 @@ test.describe("capability gating (#149)", () => {
     await expect(page.locator(".send-err")).toHaveCount(0);
   });
 
-  test("the Codex app-server companion keeps approvals and questions native and exposes only text", async ({
+  test("the Codex companion keeps approvals native and exposes text plus interrupt", async ({
     page,
     seedHost,
   }) => {
@@ -630,7 +630,11 @@ test.describe("capability gating (#149)", () => {
     await expect(sheet).toContainText("Approvals and questions stay in Codex");
     await expect(sheet).toContainText("can’t switch model");
     await expect(sheet.locator(".mode-row", { hasText: "Opus" })).toHaveCount(0);
-    await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
+    const interrupt = sheet.locator(".mode-row-danger", { hasText: "Interrupt" });
+    await expect(interrupt).toBeEnabled();
+    await interrupt.click();
+    await expect(sheet).not.toBeVisible();
+    await expect(page.locator(".send-err")).toHaveCount(0);
   });
 
   test("an exact tmux host keeps permissions local and raw controls out of the pane", async ({

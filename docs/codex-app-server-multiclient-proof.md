@@ -11,10 +11,13 @@ or simultaneous official Remote. The earlier `0.146.0` observations below remain
 
 **Current implementation:** the version gate accepts exact `0.151.0` and `0.153.4` on Linux arm64.
 Besides native text/status, completed `commandExecution` items now become read-only `Shell` calls and
-bounded results, including failed/declined/nonzero-exit outcomes. Browser mutations remain ordinary
-non-empty non-slash text; the client still has no approval-response API. Streaming partials, file
-changes, other tool families, and task lifecycle are not projected. Current-version/activity acceptance
-lives in the [release roadmap](release-finish-line.md), separately from the historical results below.
+bounded results, including failed/declined/nonzero-exit outcomes. Browser mutations are ordinary
+non-empty non-slash text plus interrupt; the client still has no approval-response API. Interrupt
+targets one observed active native turn without retargeting or retrying, and remains reachable while
+text waits for native idle. Background commands may outlive the interrupted model turn. Other controls,
+attachments, streaming partials, file changes, other tool families, and task lifecycle are unsupported.
+Current-version/activity/interrupt acceptance lives in the [release roadmap](release-finish-line.md),
+separately from the historical results below.
 
 ## M3a product result
 

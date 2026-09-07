@@ -104,6 +104,11 @@ class FakeCodexClient implements CodexClient {
     text: string;
   }> = [];
   closeCalls = 0;
+  readonly activeTurnCalls: string[] = [];
+  readonly interruptCalls: Array<{ threadId: string; turnId: string }> = [];
+  activeTurnId: string | null = null;
+  activeTurnBarrier: Promise<void> | null = null;
+  interruptError: Error | null = null;
   externalThreadRunning = true;
   resumeResult: CodexResumeResult = {
     thread: {
@@ -158,6 +163,17 @@ class FakeCodexClient implements CodexClient {
 
   async startTurn(threadId: string, clientUserMessageId: string, text: string): Promise<void> {
     this.startCalls.push({ threadId, clientUserMessageId, text });
+  }
+
+  async activeTurn(threadId: string): Promise<string | null> {
+    this.activeTurnCalls.push(threadId);
+    if (this.activeTurnBarrier !== null) await this.activeTurnBarrier;
+    return this.activeTurnId;
+  }
+
+  async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    this.interruptCalls.push({ threadId, turnId });
+    if (this.interruptError !== null) throw this.interruptError;
   }
 
   drainInbound(): CodexInbound[] {
@@ -362,6 +378,14 @@ function upstream(session: Session, type: string): Array<Record<string, unknown>
     .snapshotUpstream()
     .filter((event) => event.eventType === type)
     .map((event) => event.payload);
+}
+
+function interruptFrame(identityId: Uint8Array, sessionId: string, msgId: string): Frame {
+  return {
+    ...browserFrame(identityId, sessionId, JSON.stringify({ expiry: Date.now() + 10_000 }), msgId),
+    recordKind: "interrupt",
+    msgId,
+  };
 }
 
 function accepted(broker: FakeDurableBroker): Array<Record<string, unknown>> {
@@ -865,6 +889,139 @@ describe("Codex M3a companion", () => {
 
     await stop(launched.ac, launched.run);
     controllers.splice(controllers.indexOf(launched.ac), 1);
+  });
+
+  it("lets Interrupt pass parked text, deduplicates it, and waits for native idle before continuing", async () => {
+    const client = new FakeCodexClient();
+    client.resumeResult.thread.status = { type: "active" };
+    client.activeTurnId = "native-active-turn";
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    const clientMsgId = "queued-after-stop";
+    launched.broker.pushInbound(
+      browserFrame(
+        launched.identityId,
+        launched.broker.sessionId,
+        "continue after stop",
+        clientMsgId,
+      ),
+    );
+    await waitFor(() => accepted(launched.broker).length === 1);
+    expect(client.startCalls).toEqual([]);
+
+    const interrupt = interruptFrame(launched.identityId, launched.broker.sessionId, "stop-once");
+    launched.broker.pushInbound(interrupt);
+    await waitFor(() => client.interruptCalls.length === 1);
+    expect(client.interruptCalls).toEqual([{ threadId: THREAD_ID, turnId: "native-active-turn" }]);
+    // The RPC has returned, but no native completion was observed: accepted Stop is not idle.
+    expect(client.startCalls).toEqual([]);
+    expect(launched.session.workerStatus).toBe("running");
+
+    launched.broker.pushInbound(interrupt);
+    launched.broker.pushInbound(
+      interruptFrame(launched.identityId, launched.broker.sessionId, "same-turn-another-viewer"),
+    );
+    await waitFor(() => client.activeTurnCalls.length === 2);
+    expect(client.interruptCalls).toHaveLength(1);
+
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "thread/status/changed",
+        params: { threadId: OTHER_THREAD_ID, status: { type: "idle" } },
+      },
+    });
+    client.emit(completed(assistantItem("foreign-idle-barrier", "still active")));
+    await waitFor(() => upstream(launched.session, "assistant").length === 1);
+    expect(client.startCalls).toEqual([]);
+    expect(launched.session.workerStatus).toBe("running");
+
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "thread/status/changed",
+        params: { threadId: THREAD_ID, status: { type: "idle" } },
+      },
+    });
+    await waitFor(() => client.startCalls.length === 1);
+    const call = client.startCalls[0];
+    if (call === undefined) throw new Error("expected queued text to start after native idle");
+    expect(call).toMatchObject({ threadId: THREAD_ID, text: "continue after stop" });
+    client.emit(completed(userItem("continued-user", call.text, call.clientUserMessageId)));
+    await waitFor(() =>
+      accepted(launched.broker).some(
+        (receipt) => receipt.client_msg_id === clientMsgId && typeof receipt.seq === "number",
+      ),
+    );
+    expect(client.activeTurnCalls).toEqual([THREAD_ID, THREAD_ID]);
+    expect(client.interruptCalls).toHaveLength(1);
+    await stop(launched.ac, launched.run);
+  });
+
+  it("acknowledges an idle Interrupt without a native write and permits a later active turn", async () => {
+    const launched = await start();
+    controllers.push(launched.ac);
+    const ack = vi.spyOn(launched.session, "ack");
+    const event = launched.session.pushControlRequest("interrupt");
+    await waitFor(() => ack.mock.calls.some(([id]) => id === event.eventId));
+    expect(launched.client.activeTurnCalls).toEqual([THREAD_ID]);
+    expect(launched.client.interruptCalls).toEqual([]);
+    expect(launched.session.closed).toBe(false);
+    expect(launched.session.workerStatus).toBe("idle");
+
+    launched.client.activeTurnId = "later-active-turn";
+    launched.session.pushControlRequest("interrupt");
+    await waitFor(() => launched.client.interruptCalls.length === 1);
+    expect(launched.client.interruptCalls).toEqual([
+      { threadId: THREAD_ID, turnId: "later-active-turn" },
+    ]);
+    await stop(launched.ac, launched.run);
+  });
+
+  it("does not interrupt after projection closure while native turn metadata is pending", async () => {
+    const barrier = deferred();
+    const client = new FakeCodexClient();
+    client.activeTurnId = "active-before-close";
+    client.activeTurnBarrier = barrier.promise;
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    launched.session.pushControlRequest("interrupt");
+    await waitFor(() => client.activeTurnCalls.length === 1);
+
+    launched.session.close("injected broker closure during turn lookup");
+    barrier.resolve();
+    await expect(within(launched.run)).resolves.toBe(1);
+    expect(client.interruptCalls).toEqual([]);
+    expect(client.startCalls).toEqual([]);
+    expect(client.closeCalls).toBe(1);
+    expect(client.externalThreadRunning).toBe(true);
+  });
+
+  it("fences only the companion on an unknown Interrupt outcome without retry or queued text", async () => {
+    const client = new FakeCodexClient();
+    client.resumeResult.thread.status = { type: "active" };
+    client.activeTurnId = "outcome-unknown-turn";
+    client.interruptError = new CodexAppServerError("injected unknown interrupt outcome");
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    launched.broker.pushInbound(
+      browserFrame(launched.identityId, launched.broker.sessionId, "must remain queued", "queued"),
+    );
+    await waitFor(() => accepted(launched.broker).length === 1);
+    launched.session.pushControlRequest("interrupt");
+    launched.session.pushControlRequest("interrupt");
+
+    await expect(within(launched.run)).resolves.toBe(1);
+    expect(client.activeTurnCalls).toEqual([THREAD_ID]);
+    expect(client.interruptCalls).toEqual([
+      { threadId: THREAD_ID, turnId: "outcome-unknown-turn" },
+    ]);
+    expect(client.startCalls).toEqual([]);
+    expect(client.closeCalls).toBe(1);
+    expect(client.externalThreadRunning).toBe(true);
+    expect(launched.session.closed).toBe(true);
+    expect(accepted(launched.broker)).toEqual([{ client_msg_id: "queued", native_pending: true }]);
+    expect(launched.broker.posts.some((post) => post.recordKind === "session_terminal")).toBe(true);
   });
 
   it("fences only the encrypted projection when the app-server connection drops", async () => {

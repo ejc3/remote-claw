@@ -959,7 +959,7 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
     ]);
   });
 
-  it("Codex admits only native-ordered text and suppresses browser-owned interaction controls", async () => {
+  it("Codex admits native-ordered text and interrupt while suppressing permission and settings controls", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     client.reportedDurable = true;
@@ -973,6 +973,11 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
     await waitFor(() => client.streamStarts.length === 1);
     client.pushInbound(inFrame("user", "codex-slash", "  /review", "slash-client"));
     client.pushInbound(inFrame("interrupt", "codex-interrupt", JSON.stringify({})));
+    for (const kind of ["set_model", "set_mode", "end"]) {
+      client.pushInbound(
+        inFrame(kind, `codex-${kind}`, JSON.stringify({ model: "other", mode: "plan" })),
+      );
+    }
     client.pushInbound(
       inFrame(
         "permission",
@@ -984,9 +989,9 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
     client.pushInbound(inFrame("user", "codex-text", text, "codex-client"));
 
     await waitFor(() => pushUser.mock.calls.length === 1);
-    await waitFor(() => client.opened.length === 4);
+    await waitFor(() => client.opened.length === 7);
     expect(pushUser).toHaveBeenCalledWith(text, { clientMsgId: "codex-client" });
-    expect(pushControl).not.toHaveBeenCalled();
+    expect(pushControl).toHaveBeenCalledExactlyOnceWith("interrupt");
     expect(pushResponse).not.toHaveBeenCalled();
     expect(client.content).toEqual([]);
     expect(
