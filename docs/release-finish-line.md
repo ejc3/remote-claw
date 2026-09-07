@@ -174,6 +174,60 @@ Cartesian-product marathon, and the viewer-parity lane may continue without reop
 | M4 — complete | Maintained, honest tmux fallback | Exact accepted tuple is green without widening the structured critical path or claiming provider-native coexistence |
 | M5 — complete for current ledger | Advertised inference/account tuples | Exact current claims are qualified; later tuples extend the ledger incrementally |
 
+### Approved follow-on queue — 2026-09-07
+
+The user approved working through all seven candidates below. Each closes independently through a
+reviewed, green PR; completing one is not completion of the whole queue. Desktop and mobile must expose
+the same supported actions, content, and honest states, with responsive presentation rather than
+pixel-identical layout. Browser changes are checked on both sizes, in light and dark, with Chromium
+and WebKit where engine behavior matters. Reference images and run screenshots stay under the user's
+home-folder UI artifacts, outside Git.
+
+| Follow-on | Status | Bounded user outcome |
+| --- | --- | --- |
+| Native work visibility, Claude first | Claude implemented and live-accepted; Codex next | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
+| Desktop/mobile daily-use finish | Auditing | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
+| Remote interrupt and continue | Queued | One native adapter's running turn can be interrupted from a browser and continued while local/provider clients remain coherent |
+| Codex official-Remote recovery | Queued | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers |
+| Screenshot/file input | Queued | One structured adapter accepts encrypted attachments with truthful delivery and bounded input handling |
+| Remote approvals and questions | Queued | Browser decisions reconcile with native/local/provider decisions without weakening permission policy |
+| Practical compatibility expansion | Queued | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
+
+Future CLI harnesses (for example Grok) should require a native adapter, validated CLI configuration,
+and one explicit metadata/capability entry, reusing broker, encryption, and viewer renderers. A parallel
+small harness-contract change will separate ordering/admission/input semantics from optional feature
+toggles and remove duplicated descriptor metadata. Dispatch stays explicit; no dynamic plugin loader,
+speculative provider protocol, new coordinator, or storage schema is part of this work. Grok itself is
+not claimed supported until a real native seam has been implemented and exercised.
+
+**Current visibility tranche:** `anthropic/driver.ts` and its focused tests own projection of validated
+worker `tool_use`/`tool_result` records through the existing `Session` content contract. Existing native
+event identity, source/session binding, browser UUID correlation, history/SSE deduplication, and changed-
+event fencing remain authoritative. Shared relay output bounds and renderers are reused. Controls,
+permissions, attachments, status inference, and broker/storage formats are unchanged. Acceptance is one
+harmless real tool task plus a harmless tool failure, observed by the local TUI, official Claude client,
+and desktop/mobile remote-claw browsers, including reload without duplicate activity. Detailed malformed-
+shape and replay regressions stay in the driver; the live run owns only cross-process/provider wiring.
+
+The fresh official-web turn exposed an existing compatibility failure: its client payload carries
+`session_<same suffix>`, while the canonical API binding and worker use `cse_<same suffix>`. The
+companion correctly stopped without affecting native Claude, but rejected a legitimate same-session
+observation. This tranche accepts only that exact client-side alias and retains regressions rejecting
+different suffixes and worker aliases; it adds no discovery or mutation-target rewriting. This shape
+regression now runs cheaply in the driver instead of requiring another live reproduction.
+
+On 2026-09-07 the corrected exact-2.1.237/Linux arm64 companion backfilled the same real session and
+observed a fresh harmless two-Read turn sent from the authenticated official Claude web UI. The native
+TUI and independent desktop (1440×1000) and phone (390×844) viewers showed its completion; both viewers
+showed two calls, one normal output, and one visible missing-file error, then reloaded without duplicate
+activity. Light/dark artifacts and the sanitized result are under
+`/home/ubuntu/remote-claw-ui-artifacts/native-activity-current-2026-09-07/`, outside Git. This run does not
+claim Codex tool parity, remote approvals, attachments, interrupts, or native task lifecycle support.
+
+The same visual inspection found two daily-use follow-ups: hover can leave the selected desktop row
+low-contrast in dark mode, and long unbroken assistant text can overflow the phone transcript. Neither
+is hidden by the passing activity assertions; both belong to the next bounded UI correction.
+
 ### Execution contract
 
 Every implementation tranche starts from current <code>origin/main</code> and freezes five things before

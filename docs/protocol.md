@@ -204,9 +204,20 @@ the same provider user UUID and normalized text are one logical prompt whichever
 optional worker identity enrichment is validated but need not be byte-identical. Attachment-bearing
 user replicas remain non-projectable even if a later worker echo rewrites their text.
 
-Top-level text user events, worker assistant text, and worker text results are projected. Nested/nontext
-user records and unknown controls stay native; invalid pinned identity fields fail closed. Browser text
-uses one UUID and timestamp through broker admission and provider POST. A seq-less
+The exact history/stream endpoint supplies native session binding. An optional user payload
+`session_id` must match that canonical `cse_*`; only client observations may instead use the official
+web app's `session_*` spelling with the identical suffix. Different suffixes and worker aliases fail
+closed. No browser mutation target is selected or rewritten from these observational fields.
+
+Top-level text user events, worker assistant text, and worker text results are projected. Validated
+worker assistant `tool_use` blocks retain their position among text blocks; worker user `tool_result`
+blocks with string or text-block-array output are read-only activity, including explicit errors.
+Optional parent tool IDs retain nested classification. These observations reuse the existing sealed
+tool events and output bounds, not browser/local prompt admission or a new task/status model.
+Client-origin tool records, attachment-bearing user records, unsupported nontext content, and unknown
+controls stay native; invalid pinned user identity fields fail closed. A tool result reusing an admitted
+browser prompt UUID still fences the projection. Browser text uses one UUID and timestamp through
+broker admission and provider POST. A seq-less
 `{native_pending:true}` acceptance means only that the host admitted the command. Provider history/SSE
 then publishes the canonical accepted coordinate and user row in provider order. One serialized writer
 issues no automatic retry; a rejected or outcome-unknown POST fences the projection before any

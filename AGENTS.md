@@ -28,8 +28,8 @@ timestamped native records update presence `mode`, including local changes. This
 observation, not a settings parser, permission hook, or request/decision bridge.
 Tmux makes no provider-native/official-client coexistence claim. The OpenCode status implementation is
 complete and advertised; its separate real-TUI/two-browser status acceptance passed on 2026-08-31. The
-Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text to
-remote-claw while
+Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text and read-only worker
+tool calls/textual results to remote-claw while
 ordinary Anthropic Remote Control remains active. Its packed-install restart, broker-loss, and
 credential/log checks passed. The literal logged-in official Claude web UI on the user's phone, the
 local TUI, and two remote-claw browsers then completed the bounded coexistence run, including liveness
@@ -82,8 +82,8 @@ Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-
   `worker_jwt`), so the **official Claude app / mobile app drives it** while we capture every frame.
 - **`--rc-app <origin> --rc-driver=claude-native --remote-control`**
   (`runClaudeNativeDriverPath`, `run.ts`) — transparently forwards ordinary Anthropic Remote Control,
-  binds only the spawned child's successful bridge request, and projects provider-ordered text through
-  our encrypted broker. The local TUI and provider RC API remain live; remote-claw permissions,
+  binds only the spawned child's successful bridge request, and projects provider-ordered text plus
+  read-only worker tool activity through our encrypted broker. The local TUI and provider RC API remain live; remote-claw permissions,
   questions, controls, attachments, and status are disabled. Linux and exact Claude 2.1.237 only.
 - **`--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>`** — attaches a fresh
   remote-claw projection to that exact already-running native session. Apart from the required pinned-

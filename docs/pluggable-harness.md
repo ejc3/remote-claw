@@ -7,8 +7,8 @@ details out of the wire protocol.
 Five drivers exist:
 
 - `mitm` — the default Claude Code Remote Control adapter;
-- `claude-native` — the Linux/exact-2.1.237 structured text companion for ordinary Anthropic Remote
-  Control;
+- `claude-native` — the Linux/exact-2.1.237 structured companion for ordinary Anthropic Remote
+  Control, with text-only mutations and read-only worker tool calls/textual results;
 - `tmux` — the maintained lower-fidelity plain-Claude compatibility adapter;
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
 - `codex` — the pinned Codex 0.151.0/Linux arm64 app-server text/status companion.
