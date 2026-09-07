@@ -288,10 +288,11 @@ RPC: both interruptions came from the real viewer button through the encrypted b
 This does not claim an official Codex Remote browser, a process-kill control, or newer recovery coverage.
 
 In parallel, one official Claude browser Stop and fresh continuation were observed on exact 2.1.237.
-The control shape, ordered native response, and limits are retained in home-folder
-`claude-stop-seam-2026-09-07` artifacts. That is protocol evidence only: the companion's direct
-host-origin control authorization, status semantics, and stop/successor boundary still need acceptance
-before enabling its control capability.
+A separate one-shot host-origin control using ordinary OAuth also received the matching canonical
+worker success response, interrupted that native session, and allowed fresh text to complete. The
+control shape, ordered native responses, and limits are retained in home-folder
+`claude-stop-seam-2026-09-07` artifacts. This is protocol evidence only: status semantics and the
+stop/successor boundary still need acceptance before enabling the companion's control capability.
 
 ### Execution contract
 
