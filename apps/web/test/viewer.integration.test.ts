@@ -119,9 +119,16 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
     );
     // The viewer must surface it as ONE message (FrameOrderer holds the seq until all parts land,
     // then openMessage reassembles) — not as fragments or a dropped tail.
-    const [msg] = await takeGen(viewer.transcript(sid, never), 1);
-    expect(msg?.kind).toBe("assistant");
-    expect(msg?.text).toBe(big);
+    // Workflow POST acknowledges queueing before every chunk reaches its readable stream. A slow
+    // emit may legitimately cross the viewer's 250ms partial-gap warning; that advisory record is not
+    // content or reassembly failure. Keep reading and assert the exact first canonical message.
+    for await (const msg of viewer.transcript(sid, never)) {
+      if (msg.kind === "gap") continue;
+      expect(msg.kind).toBe("assistant");
+      expect(msg.text).toBe(big);
+      return;
+    }
+    throw new Error("transcript ended before the complete assistant message");
   });
 
   it("authenticates before ordering so a forged seq cannot hide the genuine frame", async () => {

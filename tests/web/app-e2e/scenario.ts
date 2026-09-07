@@ -7,6 +7,7 @@ export function scenario(
   withPerm: boolean,
   withAskq = false,
   askqMulti = false,
+  richText = false,
 ): Array<Record<string, unknown>> {
   const events: Array<Record<string, unknown>> = [
     {
@@ -130,7 +131,9 @@ export function scenario(
         content: [
           {
             type: "text",
-            text: "Build is green and the sub-agent couldn't reproduce the flake in 20 runs.",
+            text: richText
+              ? 'Build is green. Run `pnpm test` to verify the change.\n\n```javascript\nconst status = "ready";\nconsole.log(status);\n```\n\n```diff\n-const retries = 1;\n+const retries = 2;\n```\n\n| Surface | Result |\n| --- | --- |\n| Desktop | Ready |\n| Mobile | Ready |'
+              : "Build is green and the sub-agent couldn't reproduce the flake in 20 runs.",
           },
         ],
       },

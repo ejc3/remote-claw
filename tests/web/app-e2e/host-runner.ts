@@ -161,7 +161,9 @@ try {
     ahead: 2,
     behind: 0,
   });
-  for (const payload of smoke ? smokeScenario() : scenario(withPerm, withAskq, askqMulti)) {
+  for (const payload of smoke
+    ? smokeScenario()
+    : scenario(withPerm, withAskq, askqMulti, process.env.RC_E2E_RICH_TEXT === "1")) {
     session.pushUpstream(payload);
   }
 } catch (e) {
