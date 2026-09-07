@@ -15,7 +15,7 @@ import {
   parseCodexStatus,
 } from "./client.js";
 
-// A paginated thread may contain far more raw tool/reasoning items than projected text. Keep the raw
+// A paginated thread may contain far more raw items than projected text/commands. Keep the raw
 // pager bounded while allowing roughly 100k native items at app-server's 100-item page size.
 const HISTORY_PAGE_LIMIT = 1_000;
 const CORRELATION_TIMEOUT_MS = 15_000;
@@ -166,6 +166,68 @@ class CodexReconciler {
         type: "assistant",
         uuid: coordinate,
         message: { role: "assistant", content: [{ type: "text", text: item.text }] },
+      });
+      return;
+    }
+
+    if (item.type === "commandExecution") {
+      // Completed native observations only: no execution, approval response, or inferred running
+      // lifecycle. History can include in-progress items, which must not consume their final identity.
+      if (
+        (item.status !== "completed" && item.status !== "failed" && item.status !== "declined") ||
+        typeof item.command !== "string" ||
+        item.command === "" ||
+        typeof item.cwd !== "string" ||
+        (item.aggregatedOutput !== null && typeof item.aggregatedOutput !== "string") ||
+        (item.exitCode !== null && !Number.isSafeInteger(item.exitCode))
+      )
+        return;
+      const output = item.aggregatedOutput ?? "";
+      const failed = item.status !== "completed" || (item.exitCode !== null && item.exitCode !== 0);
+      const fingerprint = JSON.stringify([
+        item.type,
+        item.command,
+        item.cwd,
+        item.status,
+        item.exitCode,
+        output,
+      ]);
+      if (!this.#admit(coordinate, fingerprint)) return;
+      this.#session.pushUpstream({
+        type: "assistant",
+        uuid: JSON.stringify([turnId, item.id, "call"]),
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "tool_use",
+              id: coordinate,
+              name: "Shell",
+              input: { command: item.command, cwd: item.cwd },
+            },
+          ],
+        },
+      });
+      this.#session.pushUpstream({
+        type: "user",
+        uuid: JSON.stringify([turnId, item.id, "output"]),
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: coordinate,
+              is_error: failed,
+              content:
+                output ||
+                (item.status === "declined"
+                  ? "Command declined in native Codex."
+                  : failed
+                    ? `Command failed in native Codex${item.exitCode === null ? "." : ` (exit ${item.exitCode}).`}`
+                    : ""),
+            },
+          ],
+        },
       });
     }
   }

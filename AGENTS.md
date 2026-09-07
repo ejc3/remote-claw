@@ -51,13 +51,19 @@ version/platform through explicit-port loopback WebSocket with paginated history
 attached local TUI, and two browsers survived fresh-projection restart/backfill without replaying
 native mutations; broker loss retired only the companion while local work completed. Recovery through
 managed Unix/legacy history or alongside official Remote, stable projection identity, and richer
-controls remain unclaimed. The attachment path
+controls remain unclaimed. The current code accepts exact Codex 0.151.0 and 0.153.4 on Linux arm64
+and also projects completed `commandExecution` as read-only `Shell` calls and bounded results,
+including failed/declined/nonzero-exit outcomes. Browser mutations remain non-empty non-slash text;
+status is unchanged, and no approval response API, streaming partials, file changes, or task lifecycle
+is added. The [release roadmap](docs/release-finish-line.md) owns current-version/activity acceptance;
+the historical results above remain exact 0.151.0 evidence. The attachment path
 accepts literal `unix://` only as Codex's same-user managed control socket
 (`$CODEX_HOME/app-server-control/app-server-control.sock`, falling back to `~/.codex`), while retaining
 the historical explicit-port loopback WebSocket form and rejecting arbitrary Unix paths. Resume's
 reported `historyMode` selects bounded ascending `thread/items/list` for `paginated` or
-`thread/turns/list` with `itemsView:"full"` for `legacy`; unsupported tool/reasoning items are filtered
-before the 10,000 projected-text-item cap. Codex coordinates are `(turnId,itemId)`, and changed
+`thread/turns/list` with `itemsView:"full"` for `legacy`; both readers retain user/assistant text and
+`commandExecution`. The projection filters unsupported or unfinished shapes before the shared 10,000
+projected-native-item cap. Codex coordinates are `(turnId,itemId)`, and changed
 projected bytes at an already-seen coordinate fence the projection. The supported durable broker is
 SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Design lives in
 `docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI is `packages/cli`.

@@ -9,9 +9,16 @@ hydration. The separate 2026-09-07
 restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy
 or simultaneous official Remote. The earlier `0.146.0` observations below remain historical seam evidence.
 
+**Current implementation:** the version gate accepts exact `0.151.0` and `0.153.4` on Linux arm64.
+Besides native text/status, completed `commandExecution` items now become read-only `Shell` calls and
+bounded results, including failed/declined/nonzero-exit outcomes. Browser mutations remain ordinary
+non-empty non-slash text; the client still has no approval-response API. Streaming partials, file
+changes, other tool families, and task lifecycle are not projected. Current-version/activity acceptance
+lives in the [release roadmap](release-finish-line.md), separately from the historical results below.
+
 ## M3a product result
 
-The shipped `--rc-driver=codex` companion resumes/joins one exact UUIDv7 on a caller-owned explicit-
+The M3a `--rc-driver=codex` companion resumes/joins one exact UUIDv7 on a caller-owned explicit-
 port loopback WebSocket app-server. It subscribes before bounded ascending history, drains buffered
 events before announcing readiness, projects completed native user/assistant text at Codex item
 coordinates, and advertises real native thread status. Browser text is serialized behind native idle;
@@ -21,7 +28,7 @@ unavailable in the browser.
 
 The companion never starts or stops app-server, discovers/selects/creates/deletes/stops a thread, or
 owns the Codex TUI. The supported topology requires a local TUI attached to the same exact thread for
-the companion lifetime. For current 0.151 approval/question requests, the first result or error wins
+the companion lifetime. For the measured 0.151 approval/question requests, the first result or error wins
 globally, but app-server exposes no atomic TUI-attachment proof. The companion's client therefore has
 no request-response method: it observes those server requests without answering or erroring them, and
 the local TUI is their sole owner.
@@ -33,7 +40,7 @@ did not perform its side effect. A separate native question appeared in the TUI,
 and completed normally. Both app-server subscribers observed each request resolve while the companion
 remained silent and live. Stopping the companion left app-server, the TUI, and the native thread live.
 
-### Supported tuple
+### Accepted M3a tuple
 
 - Binary: `codex-cli 0.151.0`, `aarch64-unknown-linux-musl`.
 - Native binary SHA-256: `56f026015ccc3ebc12895282200d89c216892bf6fa15fa7f228e6e0c6ad6ce76`.
@@ -142,8 +149,9 @@ socket path. Explicit-port literal loopback WebSocket origins remain available.
 
 The resumed thread's native `historyMode` now chooses the bounded reader rather than assuming one API:
 `paginated` pages `thread/items/list` ascending; `legacy` pages `thread/turns/list` ascending with
-`itemsView:"full"`. Each reader validates its native shape and filters away tool, reasoning, and every
-other unsupported family before the shared 10,000 projected user/assistant text-item cap is counted.
+`itemsView:"full"`. The historical M3b readers retained only user/assistant text. Current readers also
+retain `commandExecution`; the projection validates supported completed shapes before counting the
+shared 10,000 native-item cap. Other tool families, reasoning, and unfinished commands are not projected.
 The immutable projection coordinate is `(turnId,itemId)`, because Codex may reuse one item ID in
 different turns. Same-coordinate, same-byte history/live overlap deduplicates; changed projected bytes
 at the same coordinate fence the companion.

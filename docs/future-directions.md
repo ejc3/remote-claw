@@ -81,9 +81,12 @@ phone or desktop client unsubscribed. The separate 2026-09-07
 [recovery acceptance](release-finish-line.md#codex-recovery--complete) establishes fresh-projection
 restart/backfill and broker-loss isolation for the pinned version/platform with explicit-port loopback
 WebSocket, paginated history, a packed CLI, local SQLite, one TUI, and two browsers. Recovery through
-managed Unix/legacy history or alongside official Remote, stable projection identity, richer content
-and controls, and other Codex versions/platforms remain later adapter-local gates; they do not reopen
-M3a or M3b.
+managed Unix/legacy history or alongside official Remote, stable projection identity, and richer controls
+remain later adapter-local gates; they do not reopen M3a or M3b. Current code also accepts exact
+0.153.4/Linux arm64 and displays completed shell commands/results as read-only activity. That follow-on's
+acceptance is tracked in the [release roadmap](release-finish-line.md), without rewriting the historical
+0.151.0 results. Streaming partials, file changes, task lifecycle, and other versions/platforms remain
+outside this implementation.
 
 ### tmux compatibility
 

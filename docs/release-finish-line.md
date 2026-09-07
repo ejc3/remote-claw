@@ -185,13 +185,13 @@ home-folder UI artifacts, outside Git.
 
 | Follow-on | Status | Bounded user outcome |
 | --- | --- | --- |
-| Native work visibility, Claude first | Claude implemented and live-accepted; Codex next | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
+| Native work visibility, Claude first | Claude tools and Codex completed commands implemented and live-accepted | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
 | Desktop/mobile daily-use finish | Auditing | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Queued | One native adapter's running turn can be interrupted from a browser and continued while local/provider clients remain coherent |
 | Codex official-Remote recovery | Queued | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers |
 | Screenshot/file input | Queued | One structured adapter accepts encrypted attachments with truthful delivery and bounded input handling |
 | Remote approvals and questions | Queued | Browser decisions reconcile with native/local/provider decisions without weakening permission policy |
-| Practical compatibility expansion | Queued | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
+| Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
 Future CLI harnesses (for example Grok) should require a native adapter, validated CLI configuration,
 and one explicit metadata/capability entry, reusing broker, encryption, and viewer renderers. A parallel
@@ -224,9 +224,42 @@ activity. Light/dark artifacts and the sanitized result are under
 `/home/ubuntu/remote-claw-ui-artifacts/native-activity-current-2026-09-07/`, outside Git. This run does not
 claim Codex tool parity, remote approvals, attachments, interrupts, or native task lifecycle support.
 
-The same visual inspection found two daily-use follow-ups: hover can leave the selected desktop row
-low-contrast in dark mode, and long unbroken assistant text can overflow the phone transcript. Neither
-is hidden by the passing activity assertions; both belong to the next bounded UI correction.
+The same screenshots raised two suspected layout defects, but a bounded reproduction ruled both out:
+the pale hovered row was captured during the existing 120 ms theme transition; the last digit of the
+phone's marker wrapped below the visible transcript after its error expanded, rather than overflowing
+horizontally. Settled screenshots and measured bounds are retained under
+`/home/ubuntu/remote-claw-ui-artifacts/daily-use-2026-09-07/`. No speculative CSS change or new UI gate
+was added. Future captures should settle animations and scroll the inspected content into view.
+
+**Next visibility tranche — current Codex:** the running host daemon reports exact 0.153.4/Linux arm64,
+while the retained adapter accepts 0.151.0. Extend only the explicit accepted-version set and project
+completed `commandExecution` observations through the existing tool-call/result UI. The owning files
+are `codex/{client,driver}.ts`, their focused tests, and current capability docs. Command identity stays
+the native `(turnId,itemId)` tuple; one admitted completed item produces one call and one bounded result.
+Unfinished, unsupported, and malformed tool shapes grant no authority. Approvals/questions, interrupt,
+file/image input, file-change projection, streaming partial output, and all storage/wire formats are
+outside this tranche. Do not restart the user's managed daemon or claim official Remote web acceptance
+merely because ChatGPT is logged in. Acceptance is a harmless native success/failure plus browser text
+and reload in two viewers on the actual running version; deterministic shape/dedup/fence regressions
+belong in the driver. The earlier exact-0.151.0 results remain historical evidence, not rewritten runs.
+
+On 2026-09-07 this slice passed against the already-running exact-0.153.4/Linux arm64 managed daemon
+with paginated history and a dedicated, read-only native TUI. One local turn and one phone-viewer turn
+each read a harmless fixture and a deliberately missing file. The local TUI plus independent desktop
+(1440×1000) and phone (390×844) viewers showed both completions, two Shell calls per turn, the normal
+output, and an explicit failed-command result. Both viewers reloaded without duplicate activity;
+light/dark transcript and expanded-activity screenshots were inspected after transitions settled.
+The initial browser assertion matched all three code blocks instead of the output block; narrowing
+that diagnostic selector completed the same run without submitting another native turn.
+
+Artifacts and sanitized results are under
+`/home/ubuntu/remote-claw-ui-artifacts/codex-activity-current-2026-09-07/`, outside Git. The daemon was
+not restarted, and no approval or hook configuration was changed. The native environment displayed
+existing failing customization hooks; both requested read-only turns still completed. This accepts
+the current managed/paginated text/status/completed-command tuple, not official Remote browser
+coexistence, companion restart/broker-loss on this newer tuple, or other tool families. ChatGPT's
+authenticated web UI did not expose a Remote entry during this run; it is not counted as a native
+Remote client merely because it was logged in.
 
 ### Execution contract
 

@@ -7,7 +7,8 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const CODEX_UNIX_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
 
 export const CODEX_APP_SERVER_VERSION = "0.151.0";
-export const CODEX_APP_SERVER_REQUIREMENT = `Codex app-server ${CODEX_APP_SERVER_VERSION} on Linux arm64`;
+export const CODEX_APP_SERVER_VERSIONS = [CODEX_APP_SERVER_VERSION, "0.153.4"] as const;
+export const CODEX_APP_SERVER_REQUIREMENT = `Codex app-server ${CODEX_APP_SERVER_VERSIONS.join(" or ")} on Linux arm64`;
 export const DEFAULT_CODEX_APP_SERVER_URL = "ws://127.0.0.1:4500";
 export const CODEX_HISTORY_ITEM_LIMIT = 10_000;
 export const CODEX_LEGACY_TURN_PAGE_LIMIT = 10;
@@ -317,7 +318,11 @@ export class CodexAppServerClient implements CodexClient {
       ) {
         throw new CodexAppServerError("Codex returned an invalid thread item");
       }
-      if (item.type === "userMessage" || item.type === "agentMessage") {
+      if (
+        item.type === "userMessage" ||
+        item.type === "agentMessage" ||
+        item.type === "commandExecution"
+      ) {
         data.push({ turnId: entry.turnId, item: item as CodexThreadItem });
       }
     }
@@ -359,7 +364,11 @@ export class CodexAppServerClient implements CodexClient {
         if (typeof item?.type !== "string" || typeof item.id !== "string") {
           throw new CodexAppServerError("Codex returned an invalid full turn item");
         }
-        if (item.type === "userMessage" || item.type === "agentMessage") {
+        if (
+          item.type === "userMessage" ||
+          item.type === "agentMessage" ||
+          item.type === "commandExecution"
+        ) {
           data.push({ turnId: turn.id, item: item as CodexThreadItem });
         }
       }
@@ -525,7 +534,7 @@ export function assertCodexCompatibility(
     runtime.arch !== "arm64" ||
     result.platformFamily !== "unix" ||
     result.platformOs !== "linux" ||
-    serverVersion !== CODEX_APP_SERVER_VERSION
+    !CODEX_APP_SERVER_VERSIONS.some((version) => version === serverVersion)
   ) {
     throw new CodexAppServerError(`requires ${CODEX_APP_SERVER_REQUIREMENT}`);
   }

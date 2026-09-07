@@ -74,7 +74,7 @@ export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {
   attachments: false,
 };
 
-/** The Codex app-server companion projects completed plain text and real thread status. Approval and
+/** The Codex app-server companion projects completed text/command activity and real thread status. Approval and
  * question requests remain first-response-sensitive native UI interactions, so every browser mutation
  * family except text stays disabled. */
 export const CODEX_CAPABILITIES: DriverCapabilities = {
