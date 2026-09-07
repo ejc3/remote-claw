@@ -82,6 +82,8 @@ export interface CodexClient {
     text: string,
     signal: AbortSignal,
   ): Promise<void>;
+  activeTurn(threadId: string, signal: AbortSignal): Promise<string | null>;
+  interruptTurn(threadId: string, turnId: string, signal: AbortSignal): Promise<void>;
   drainInbound(): CodexInbound[];
   inbound(signal: AbortSignal): AsyncGenerator<CodexInbound>;
   close(): void;
@@ -123,7 +125,10 @@ function createSocket(url: string): SocketLike {
 }
 
 export class CodexAppServerError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly rpcCode?: number,
+  ) {
     super(message);
     this.name = "CodexAppServerError";
   }
@@ -398,6 +403,48 @@ export class CodexAppServerClient implements CodexClient {
     }
   }
 
+  /** Read only the latest turn's metadata, including an already-running turn when we attached. */
+  async activeTurn(threadId: string, signal: AbortSignal): Promise<string | null> {
+    const result = record(
+      await this.#request(
+        "thread/turns/list",
+        { threadId, limit: 1, sortDirection: "desc", itemsView: "notLoaded" },
+        signal,
+      ),
+    );
+    if (!Array.isArray(result?.data) || result.data.length > 1) {
+      throw new CodexAppServerError("Codex returned invalid active-turn metadata");
+    }
+    if (result.data.length === 0) return null;
+    const turn = record(result.data[0]);
+    if (
+      typeof turn?.id !== "string" ||
+      turn.id === "" ||
+      typeof turn.status !== "string" ||
+      !["inProgress", "completed", "interrupted", "failed"].includes(turn.status)
+    ) {
+      throw new CodexAppServerError("Codex returned invalid active-turn metadata");
+    }
+    return turn.status === "inProgress" ? turn.id : null;
+  }
+
+  /** The pinned native servers reject stale turn IDs atomically. Never retarget or retry. */
+  async interruptTurn(threadId: string, turnId: string, signal: AbortSignal): Promise<void> {
+    let result: unknown;
+    try {
+      result = await this.#request("turn/interrupt", { threadId, turnId }, signal);
+    } catch (error) {
+      // Measured on both pinned versions: no active turn / mismatched target is Invalid Request.
+      // This explicit rejection is a no-op, not permission to interrupt a newer turn.
+      if (error instanceof CodexAppServerError && error.rpcCode === -32600) return;
+      throw error;
+    }
+    const response = record(result);
+    if (response === null || Object.keys(response).length !== 0) {
+      throw new CodexAppServerError("Codex returned an invalid interrupt response");
+    }
+  }
+
   async *inbound(signal: AbortSignal): AsyncGenerator<CodexInbound> {
     for (;;) {
       while (this.#queue.length > 0) {
@@ -474,7 +521,13 @@ export class CodexAppServerClient implements CodexClient {
       this.#pending.delete(message.id);
       clearTimeout(pending.timer);
       if (message.error !== undefined) {
-        pending.reject(new CodexAppServerError(`Codex ${pending.method} failed`));
+        const code = record(message.error)?.code;
+        pending.reject(
+          new CodexAppServerError(
+            `Codex ${pending.method} failed`,
+            typeof code === "number" && Number.isSafeInteger(code) ? code : undefined,
+          ),
+        );
       } else {
         pending.resolve(message.result);
       }

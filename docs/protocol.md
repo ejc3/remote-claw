@@ -439,9 +439,9 @@ cannot bypass a disabled button:
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
-| Pinned Codex M3a | no | yes | no | no | no | no | no |
+| Pinned Codex current | no | yes | yes | no | no | no | no |
 
-The stable Claude, pinned Codex, and maintained tmux surfaces accept only non-empty, non-slash text.
+Text input on the stable Claude, pinned Codex, and maintained tmux surfaces must be non-empty and non-slash.
 Tmux also accepts attachments as ordinary relay-owned user turns. Internal compatibility plumbing may
 understand more features, but those mutations are not advertised or accepted on the supported
 boundary. Tmux protects an already active model turn and its native permission/question modal; it does
@@ -523,9 +523,17 @@ is false.
 The viewer stamps `interrupt`, `set_model`, `set_mode`, and `end` with an expiry. The relay drops those
 actions when stale and maps supported controls to driver events:
 
-- `interrupt` → Claude `interrupt` or OpenCode abort;
+- `interrupt` → Claude `interrupt`, OpenCode abort, or Codex exact-turn `turn/interrupt`;
 - `set_model` → Claude `set_model`; and
 - `set_mode` → Claude `set_permission_mode` only where advertised.
+
+Codex reads only the latest turn metadata using `thread/turns/list` with `limit:1`,
+`sortDirection:"desc"`, and `itemsView:"notLoaded"`. A validated `inProgress` turn ID is bound once
+to `turn/interrupt` on the same exact thread. No active turn or a native `-32600` stale-target rejection
+is a no-op; the companion never retargets or retries. Other unknown failures fence the companion.
+A bounded process-local text FIFO keeps interrupt reachable while text waits for native idle. RPC
+acceptance is not completion: only native status releases the next text turn. Native background
+commands may continue after the model turn is interrupted. Approvals/questions remain TUI-owned.
 
 Tmux advertises every raw control false. The relay rejects those frames, and its injection boundary
 acknowledges a stale or direct control without sending any pane keys. The same viewer/relay/injection
