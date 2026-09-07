@@ -385,7 +385,9 @@ Anthropic Remote Control unchanged. Its transparent proxy observes the spawned c
 <code>POST /v1/code/sessions/{cse_*}/bridge</code> and uses that exact ID; it never chooses by title or
 recency. The host opens and validates provider SSE before reading bounded ascending history, then one
 ordering owner reconciles history and live events by provider coordinates. It projects supported text
-to a fresh random remote-claw session ID distinct from the native <code>cse_*</code>.
+and validated worker tool calls/textual results to a fresh random remote-claw session ID distinct from
+the native <code>cse_*</code>. Tool activity is read-only observation through the existing bounded
+renderers, including failures and nested parent classification; it grants no mutation or status capability.
 
 <code>--rc-app &lt;origin&gt; --rc-driver=claude-native --rc-native-session &lt;cse_…&gt;</code> is the
 attach-only restart form. It requires one explicit canonical native ID, accepts no forwarded Claude

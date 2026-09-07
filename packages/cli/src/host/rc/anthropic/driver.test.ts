@@ -418,8 +418,12 @@ async function bindReady(harness: Harness, nativeId = "cse_provider"): Promise<v
   );
 }
 
-function assistant(eventId: string, sequenceNum: string, text: string): AnthropicRcEvent {
-  const payload = { type: "assistant", message: { role: "assistant", content: text } };
+function assistant(
+  eventId: string,
+  sequenceNum: string,
+  content: string | unknown[],
+): AnthropicRcEvent {
+  const payload = { type: "assistant", message: { role: "assistant", content } };
   return {
     eventId,
     eventType: "assistant",
@@ -489,6 +493,7 @@ function workerToolResult(
   eventId: string,
   sequenceNum: string,
   nativeId: string,
+  overrides: Record<string, unknown> = {},
 ): AnthropicRcEvent {
   const payload = {
     type: "user",
@@ -500,6 +505,7 @@ function workerToolResult(
       role: "user",
       content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "local output" }],
     },
+    ...overrides,
   };
   return {
     eventId,
@@ -726,18 +732,19 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       "cse_overlap",
       "worker",
     );
-    const unsupported = workerToolResult("evt_tool_result", "3", "cse_overlap");
+    const toolResult = workerToolResult("evt_tool_result", "3", "cse_overlap");
     const overlap = assistant("evt_overlap", "4", "overlap string");
 
     try {
       harness.proxy.bridge("cse_overlap");
       await historyStarted.promise;
+      harness.native.streams[0]?.push(toolResult);
       harness.native.streams[0]?.push(overlap);
-      history.resolve({ data: [overlap, unsupported, localUser, first], nextCursor: null });
-      await waitFor(() => harness.broker.content.length === 3);
-      harness.native.streams[0]?.push(assistant("evt_live", "5", "live after overlap"));
+      history.resolve({ data: [overlap, toolResult, localUser, first], nextCursor: null });
       await waitFor(() => harness.broker.content.length === 4);
-      harness.session.pushUserInput("write after unsupported user");
+      harness.native.streams[0]?.push(assistant("evt_live", "5", "live after overlap"));
+      await waitFor(() => harness.broker.content.length === 5);
+      harness.session.pushUserInput("write after tool result");
       await waitFor(() => harness.native.postCalls.length === 1);
 
       expect(harness.native.order.slice(0, 2)).toEqual([
@@ -749,14 +756,211 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       ).toEqual([
         [0, "assistant", "first string"],
         [1, "user", "typed locally"],
-        [2, "assistant", "overlap string"],
-        [3, "assistant", "live after overlap"],
+        [
+          2,
+          "tool_result",
+          JSON.stringify({
+            tool_use_id: "toolu_1",
+            is_error: false,
+            output: "local output",
+            sub: false,
+          }),
+        ],
+        [3, "assistant", "overlap string"],
+        [4, "assistant", "live after overlap"],
       ]);
-      expect(harness.session.snapshotUpstream()).toHaveLength(4);
-      expect(harness.native.postCalls[0]?.input.message.content).toBe(
-        "write after unsupported user",
-      );
+      expect(harness.session.snapshotUpstream()).toHaveLength(5);
+      expect(harness.native.postCalls[0]?.input.message.content).toBe("write after tool result");
       expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("projects native tool calls and results in block order using the shared bounded relay", async () => {
+    const harness = await startHarness();
+    const call = assistant("evt_tools", "1", [
+      { type: "text", text: "Checking files" },
+      { type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "/example.ts" } },
+      { type: "text", text: "Then running a command" },
+      { type: "tool_use", id: "toolu_bash", name: "Bash", input: { command: "false" } },
+    ]);
+    const result = workerToolResult("evt_results", "2", "cse_tools", {
+      parent_tool_use_id: "parent-task",
+      message: {
+        role: "user",
+        content: [
+          { type: "tool_result", tool_use_id: "toolu_read", content: "x".repeat(4_001) },
+          {
+            type: "tool_result",
+            tool_use_id: "toolu_bash",
+            content: [{ type: "text", text: "Command exited with status 1" }],
+            is_error: true,
+          },
+        ],
+      },
+    });
+    harness.native.historyImpl = async () => ({ data: [call, result], nextCursor: null });
+    try {
+      await bindReady(harness, "cse_tools");
+      harness.native.streams[0]?.push(call);
+      harness.native.streams[0]?.push(result);
+      harness.native.streams[0]?.push(assistant("evt_tools_barrier", "3", "Done"));
+      await waitFor(() => harness.broker.content.length === 7);
+      expect(harness.broker.content.map(({ header }) => header.recordKind)).toEqual([
+        "assistant",
+        "tool_use",
+        "assistant",
+        "tool_use",
+        "tool_result",
+        "tool_result",
+        "assistant",
+      ]);
+      expect(JSON.parse(harness.broker.content[1]?.text ?? "")).toEqual({
+        name: "Read",
+        input: { file_path: "/example.ts" },
+        sub: false,
+      });
+      expect(JSON.parse(harness.broker.content[4]?.text ?? "")).toEqual({
+        tool_use_id: "toolu_read",
+        is_error: false,
+        output: `${"x".repeat(4_000)}…[truncated]`,
+        sub: true,
+      });
+      expect(JSON.parse(harness.broker.content[5]?.text ?? "")).toEqual({
+        tool_use_id: "toolu_bash",
+        is_error: true,
+        output: "Command exited with status 1",
+        sub: true,
+      });
+      expect(harness.native.postCalls).toEqual([]);
+      expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("ignores client tool arrays, attachments, malformed blocks, and unsupported output shapes", async () => {
+    const harness = await startHarness();
+    const client = {
+      ...workerToolResult("evt_client_tool", "1", "cse_filtered"),
+      source: "client" as const,
+    };
+    const attachment = workerToolResult("evt_attachment_tool", "2", "cse_filtered", {
+      file_attachments: [],
+    });
+    const call = assistant("evt_unknown_tools", "3", [
+      null,
+      { type: "image", source: "not relayed" },
+      { type: "thinking", thinking: "not relayed" },
+      { type: "tool_use", name: "Bash", input: {} },
+      { type: "tool_use", id: "bad-input", name: "Bash", input: "false" },
+    ]);
+    const result = workerToolResult("evt_unknown_results", "4", "cse_filtered", {
+      message: {
+        role: "user",
+        content: [
+          null,
+          { type: "tool_result", content: "missing id" },
+          {
+            type: "tool_result",
+            tool_use_id: "bad-error",
+            is_error: "true",
+            content: "wrong type",
+          },
+          {
+            type: "tool_result",
+            tool_use_id: "image",
+            content: [{ type: "image", source: "not relayed" }],
+          },
+        ],
+      },
+    });
+    try {
+      await bindReady(harness, "cse_filtered");
+      for (const event of [
+        client,
+        attachment,
+        call,
+        result,
+        assistant("evt_filter_barrier", "5", "Visible"),
+      ]) {
+        harness.native.streams[0]?.push(event);
+      }
+      await waitFor(() => harness.broker.content.length === 1);
+      expect(harness.broker.content[0]?.text).toBe("Visible");
+      expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("fences a tool result reusing a pending browser prompt UUID before projecting it", async () => {
+    const harness = await startHarness();
+    try {
+      await bindReady(harness, "cse_tool_collision");
+      harness.broker.push(
+        inbound(harness, "user", "collision", "hello native", "client-collision"),
+      );
+      await waitFor(() => harness.native.postCalls.length === 1);
+      const result = workerToolResult("evt_collision", "1", "cse_tool_collision", {
+        uuid: harness.native.postCalls[0]?.input.uuid,
+      });
+      harness.native.streams[0]?.push(result);
+      await waitFor(() => harness.session.closed);
+      expect(harness.broker.content).toEqual([]);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("accepts the official web client's exact session alias and deduplicates its worker echo", async () => {
+    const harness = await startHarness();
+    const client = userEvent("evt_web", "1", "uuid_web", "from official web", "session_web");
+    const { timestamp: _timestamp, ...payload } = client.payload;
+    const web = { ...client, payload: { ...payload, client_platform: "web" } };
+    const echo = userEvent(
+      "evt_web_echo",
+      "2",
+      "uuid_web",
+      "from official web",
+      "cse_web",
+      "worker",
+    );
+    harness.native.historyImpl = async () => ({ data: [web], nextCursor: null });
+    try {
+      await bindReady(harness, "cse_web");
+      harness.native.streams[0]?.push(web);
+      harness.native.streams[0]?.push(echo);
+      harness.native.streams[0]?.push(assistant("evt_web_reply", "3", "web reply"));
+      await waitFor(() => harness.broker.content.length === 2);
+      expect(harness.broker.content.map(({ text }) => text)).toEqual([
+        "from official web",
+        "web reply",
+      ]);
+      expect(harness.native.postCalls).toEqual([]);
+      expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it.each([
+    ["client", "session_other"],
+    ["client", "cse_other"],
+    ["client", "session_web_extra"],
+    ["worker", "session_web"],
+  ] as const)("rejects a %s user observation bound to %s", async (source, sessionId) => {
+    const harness = await startHarness();
+    try {
+      await bindReady(harness, "cse_web");
+      harness.native.streams[0]?.push(
+        userEvent("evt_wrong", "1", "uuid_wrong", "wrong", sessionId, source),
+      );
+      await waitFor(() => harness.session.closed);
+      expect(harness.broker.content).toEqual([]);
+      expect(harness.native.postCalls).toEqual([]);
     } finally {
       await harness.stop();
     }
@@ -1197,6 +1401,40 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
         "before reconnect",
         "missed during reconnect",
       ]);
+    } finally {
+      reconciliation.resolve({ data: [], nextCursor: null });
+      await harness.stop();
+    }
+  });
+
+  it("does not send queued text when reconnect history completes after session closure", async () => {
+    const harness = await startHarness();
+    const reconciliation = Promise.withResolvers<RcEventPage>();
+    const reconciliationStarted = Promise.withResolvers<void>();
+    try {
+      await bindReady(harness, "cse_closed_reconnect");
+      harness.native.streams.push(new NativeStream());
+      harness.native.historyImpl = async () => {
+        reconciliationStarted.resolve();
+        return reconciliation.promise;
+      };
+      harness.native.streams[0]?.end();
+      await reconciliationStarted.promise;
+      harness.broker.push(inbound(harness, "user", "queued", "must not send", "closed-client"));
+      await waitFor(() => acceptedBodies(harness).some((body) => body.native_pending === true));
+      await tick();
+      expect(harness.native.postCalls).toEqual([]);
+
+      // Broker failure closes the Session before asynchronous bridge teardown aborts the driver.
+      // Completing empty reconciliation must not release this already-admitted native write.
+      harness.session.close("broker lost during reconnect");
+      reconciliation.resolve({ data: [], nextCursor: null });
+      await tick();
+
+      expect(harness.native.postCalls).toEqual([]);
+      expect(harness.broker.content).toEqual([]);
+      expect(harness.isRunSettled()).toBe(false);
+      expect(harness.proxy.closed).toBe(false);
     } finally {
       reconciliation.resolve({ data: [], nextCursor: null });
       await harness.stop();

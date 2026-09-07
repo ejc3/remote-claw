@@ -88,7 +88,8 @@ export const STABLE_MITM_CAPABILITIES: DriverCapabilities = {
   attachments: false,
 };
 
-/** The Anthropic app-client companion exposes provider-ordered text only. The client-side RC seam does
+/** The Anthropic app-client companion exposes provider-ordered text and read-only tool activity.
+ * Mutations remain text-only. The client-side RC seam does
  * not currently prove worker phase transitions, so `status` is deliberately false rather than inferred
  * from transcript traffic. Permission prompts and every non-text mutation remain native/local. */
 export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {

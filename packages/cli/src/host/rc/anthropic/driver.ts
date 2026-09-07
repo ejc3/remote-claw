@@ -6,8 +6,10 @@ import { ensureCerts } from "../certs.js";
 import {
   CLAUDE_NATIVE_CAPABILITIES,
   CLAUDE_NATIVE_HARNESS,
+  type ContentBlock,
   type Driver,
   type DriverContext,
+  type ToolResultBlock,
 } from "../driver.js";
 import { ReadyBridge } from "../drivers/ready-bridge.js";
 import type { SpawnClaudeEnv } from "../launch.js";
@@ -259,6 +261,17 @@ class NativeReconciler {
         payload: event.payload,
       });
       if (user.text === null) {
+        const results =
+          event.source === "worker" && !user.attachment ? providerToolResults(event) : [];
+        if (results.length > 0) {
+          this.#session.pushUpstream({
+            type: "user",
+            uuid: event.eventId,
+            ...providerParent(event),
+            message: { role: "user", content: results },
+          });
+          return;
+        }
         this.#trace.debug("native user event retained outside text projection", {
           source: event.source,
           sequence: event.sequenceNum,
@@ -276,12 +289,13 @@ class NativeReconciler {
     }
 
     if (event.eventType === "assistant" && event.source === "worker") {
-      const text = providerAssistantText(event);
-      if (text === "") return;
+      const content = providerAssistantContent(event);
+      if (content.length === 0) return;
       this.#session.pushUpstream({
         type: "assistant",
         uuid: event.eventId,
-        message: { role: "assistant", content: [{ type: "text", text }] },
+        ...providerParent(event),
+        message: { role: "assistant", content },
       });
       return;
     }
@@ -295,7 +309,7 @@ class NativeReconciler {
       return;
     }
 
-    // Permissions, controls, attachments, tool records, and protocol-evolution frames remain native.
+    // Permissions, controls, attachments, and protocol-evolution frames remain native.
     this.#trace.debug("native event retained outside text projection", {
       event: event.eventType,
       source: event.source,
@@ -627,6 +641,9 @@ export class ClaudeNativeDriver implements Driver {
       }
 
       await this.#writeGate.wait(signal);
+      // Session closure precedes asynchronous bridge teardown. Reconciliation may finish first, so
+      // recheck the fence after its wait and immediately before the irreversible native write.
+      if (session.closed) return;
       const input = downstreamInput(event);
       const mutation: BrowserMutation = {
         uuid: input.uuid,
@@ -744,12 +761,15 @@ function providerUser(
   const timestamp = payload.timestamp;
   const parentToolUseId = payload.parent_tool_use_id;
   // The exact `/sessions/{nativeId}` history/stream endpoint supplies the binding. Official mobile
-  // events omit these redundant payload fields; when a field is present it must still agree/validate.
+  // events omit these redundant fields; the official web client uses `session_` for this same exact
+  // ID suffix. Only client observations may use that alias, never a different session or worker ID.
+  const webSessionAlias =
+    event.source === "client" && payload.session_id === `session_${nativeId.slice(4)}`;
   if (
     payload.type !== "user" ||
     typeof payload.uuid !== "string" ||
     payload.uuid === "" ||
-    (payload.session_id !== undefined && payload.session_id !== nativeId) ||
+    (payload.session_id !== undefined && payload.session_id !== nativeId && !webSessionAlias) ||
     (timestamp !== undefined && (typeof timestamp !== "string" || timestamp === "")) ||
     (parentToolUseId !== undefined &&
       parentToolUseId !== null &&
@@ -790,7 +810,12 @@ function providerUser(
   };
 }
 
-function providerAssistantText(event: AnthropicRcEvent): string {
+function providerParent(event: AnthropicRcEvent): { parent_tool_use_id?: string } {
+  const parent = event.payload.parent_tool_use_id;
+  return typeof parent === "string" && parent !== "" ? { parent_tool_use_id: parent } : {};
+}
+
+function providerAssistantContent(event: AnthropicRcEvent): ContentBlock[] {
   const payload = event.payload;
   const message = payload.message;
   if (
@@ -805,21 +830,80 @@ function providerAssistantText(event: AnthropicRcEvent): string {
   if (record.role !== "assistant") {
     throw new NativeProjectionError("provider assistant event is not the pinned text shape");
   }
-  if (typeof record.content === "string") return record.content;
+  if (typeof record.content === "string") {
+    return record.content === "" ? [] : [{ type: "text", text: record.content }];
+  }
   if (!Array.isArray(record.content)) {
     throw new NativeProjectionError("provider assistant event is not the pinned text shape");
   }
-  return record.content
-    .filter(
-      (block): block is { type: "text"; text: string } =>
-        typeof block === "object" &&
-        block !== null &&
-        !Array.isArray(block) &&
-        (block as { type?: unknown }).type === "text" &&
-        typeof (block as { text?: unknown }).text === "string",
-    )
-    .map((block) => block.text)
-    .join("");
+  const content: ContentBlock[] = [];
+  for (const block of record.content) {
+    if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
+    const b = block as Record<string, unknown>;
+    if (b.type === "text" && typeof b.text === "string" && b.text !== "") {
+      content.push({ type: "text", text: b.text });
+    } else if (
+      b.type === "tool_use" &&
+      typeof b.id === "string" &&
+      b.id !== "" &&
+      typeof b.name === "string" &&
+      b.name !== "" &&
+      typeof b.input === "object" &&
+      b.input !== null &&
+      !Array.isArray(b.input)
+    ) {
+      content.push({ type: "tool_use", id: b.id, name: b.name, input: b.input });
+    }
+  }
+  return content;
+}
+
+/** Worker-only display data. Never promote array content into a local/browser prompt. */
+function providerToolResults(event: AnthropicRcEvent): ToolResultBlock[] {
+  const message = event.payload.message;
+  if (typeof message !== "object" || message === null || Array.isArray(message)) return [];
+  const record = message as Record<string, unknown>;
+  if (record.role !== "user" || !Array.isArray(record.content)) return [];
+  const results: ToolResultBlock[] = [];
+  for (const block of record.content) {
+    if (typeof block !== "object" || block === null || Array.isArray(block)) continue;
+    const b = block as Record<string, unknown>;
+    if (
+      b.type !== "tool_result" ||
+      typeof b.tool_use_id !== "string" ||
+      b.tool_use_id === "" ||
+      (b.is_error !== undefined && typeof b.is_error !== "boolean")
+    ) {
+      continue;
+    }
+    const output = b.content;
+    if (
+      typeof output !== "string" &&
+      !(
+        Array.isArray(output) &&
+        output.every(
+          (part) =>
+            typeof part === "object" &&
+            part !== null &&
+            !Array.isArray(part) &&
+            part.type === "text" &&
+            typeof part.text === "string",
+        )
+      )
+    ) {
+      continue;
+    }
+    results.push({
+      type: "tool_result",
+      tool_use_id: b.tool_use_id,
+      content:
+        typeof output === "string"
+          ? output
+          : output.map((part) => ({ type: "text", text: part.text as string })),
+      is_error: b.is_error === true,
+    });
+  }
+  return results;
 }
 
 function downstreamInput(event: RcEvent): RcUserEventInput {
