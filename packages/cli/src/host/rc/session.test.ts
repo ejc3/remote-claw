@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assistantText,
+  MAX_PENDING_IMAGE_BYTES,
   NativeUpstreamAdmissionError,
   permissionModeFrom,
   type RcEvent,
@@ -122,6 +123,73 @@ describe("Session producers", () => {
     expect(
       s.ingestNativeUpstreamBatch(1, [{ payload: { ...ev.payload } }])[0]?.event.payload,
     ).toEqual(ev.payload);
+  });
+
+  it("keeps copied image inputs host-only and outside the native event wire", () => {
+    const s = new Session("cse_x", "t", {});
+    const image = { name: "screen.png", url: "data:image/png;base64,PRIVATE_IMAGE" };
+    const images = [image];
+    const ev = s.pushUserInput("describe this", { clientMsgId: "browser-image", images });
+
+    expect(ev.images).toEqual(images);
+    expect(ev.images).not.toBe(images);
+    expect(ev.payload.client_msg_id).toBe("browser-image");
+    expect(ev.payload).not.toHaveProperty("images");
+    expect(ev.wire()).not.toHaveProperty("images");
+    expect(JSON.stringify(ev.wire())).not.toContain("PRIVATE_IMAGE");
+    image.url = "changed after admission";
+    images.push({ name: "later.png", url: "another image" });
+    expect(ev.images).toEqual([{ name: "screen.png", url: "data:image/png;base64,PRIVATE_IMAGE" }]);
+    expect(s.pushUserInput("text only").images).toBeUndefined();
+    expect(s.pushUserInput("empty image list", { images: [] }).images).toBeUndefined();
+  });
+
+  it("bounds combined image URL UTF-8 bytes before event creation and releases budget once", () => {
+    const s = new Session("cse_x", "t", {});
+    // Each URL occupies half the budget in UTF-8, not one quarter as JS string.length suggests.
+    const image = { name: "large.png", url: "é".repeat(MAX_PENDING_IMAGE_BYTES / 4) };
+    const first = s.pushUserInput("first", { images: [image] });
+    const second = s.pushUserInput("second", { images: [image] });
+    expect(first.sequenceNum).toBe(1);
+    expect(second.sequenceNum).toBe(2);
+    const extra = [{ name: "extra.png", url: "x" }];
+    expect(() => s.pushUserInput("over budget", { images: extra })).toThrow(
+      "pending image input exceeded its byte bound",
+    );
+    expect(s.pushUserInput("text still works").sequenceNum).toBe(3);
+
+    s.releaseImages(first);
+    expect(first.images).toBeUndefined();
+    expect(first.payload.message).toEqual({ role: "user", content: "first" });
+    s.releaseImages(first);
+    expect(s.pushUserInput("reused budget", { images: [image] }).sequenceNum).toBe(4);
+    expect(() => s.pushUserInput("still at the bound", { images: extra })).toThrow(
+      "pending image input exceeded its byte bound",
+    );
+    s.close();
+  });
+
+  it("releases only owned image inputs and clears all remaining bytes before close listeners", () => {
+    const s = new Session("cse_x", "t", {});
+    const other = new Session("cse_y", "t", {});
+    const image = { name: "screen.png", url: "data:image/png;base64,PRIVATE_IMAGE" };
+    const first = s.pushUserInput("first", { images: [image] });
+    const second = s.pushUserInput("second", { images: [image] });
+    other.releaseImages(first);
+    expect(first.images).toEqual([image]);
+    let releasedBeforeListener = false;
+    s.onClose(() => {
+      releasedBeforeListener = first.images === undefined && second.images === undefined;
+    });
+
+    s.close();
+    expect(releasedBeforeListener).toBe(true);
+    expect(first.images).toBeUndefined();
+    expect(second.images).toBeUndefined();
+    s.releaseImages(first);
+    s.releaseImages(second);
+    s.close();
+    expect(() => s.pushUserInput("closed", { images: [image] })).toThrow("session closed");
   });
 
   it("pushInitialize is idempotent (once per session)", () => {

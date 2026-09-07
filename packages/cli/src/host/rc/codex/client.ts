@@ -2,6 +2,13 @@ import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import NodeWebSocket from "ws";
+import {
+  isLikelyBase64,
+  MAX_ATTACHMENT_B64,
+  MAX_ATTACHMENT_IMAGES,
+  MAX_ATTACHMENT_TOTAL_BYTES,
+} from "../relay.js";
+import type { HostImage } from "../session.js";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const CODEX_UNIX_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
@@ -11,7 +18,9 @@ export const CODEX_APP_SERVER_VERSIONS = [CODEX_APP_SERVER_VERSION, "0.153.4"] a
 export const CODEX_APP_SERVER_REQUIREMENT = `Codex app-server ${CODEX_APP_SERVER_VERSIONS.join(" or ")} on Linux arm64`;
 export const DEFAULT_CODEX_APP_SERVER_URL = "ws://127.0.0.1:4500";
 export const CODEX_HISTORY_ITEM_LIMIT = 10_000;
-export const CODEX_LEGACY_TURN_PAGE_LIMIT = 10;
+// Native history preserves inline image bytes. One item/turn avoids combining multiple accepted
+// image groups into a response larger than the managed socket's transport limit.
+export const CODEX_LEGACY_TURN_PAGE_LIMIT = 1;
 
 export interface CodexThreadStatus {
   type: "notLoaded" | "idle" | "systemError" | "active";
@@ -81,6 +90,7 @@ export interface CodexClient {
     clientUserMessageId: string,
     text: string,
     signal: AbortSignal,
+    images?: ReadonlyArray<HostImage>,
   ): Promise<void>;
   activeTurn(threadId: string, signal: AbortSignal): Promise<string | null>;
   interruptTurn(threadId: string, turnId: string, signal: AbortSignal): Promise<void>;
@@ -302,7 +312,7 @@ export class CodexAppServerClient implements CodexClient {
     const result = record(
       await this.#request(
         "thread/items/list",
-        { threadId, limit: 100, sortDirection: "asc", ...(cursor ? { cursor } : {}) },
+        { threadId, limit: 1, sortDirection: "asc", ...(cursor ? { cursor } : {}) },
         signal,
       ),
     );
@@ -386,14 +396,37 @@ export class CodexAppServerClient implements CodexClient {
     clientUserMessageId: string,
     text: string,
     signal: AbortSignal,
+    images: ReadonlyArray<HostImage> = [],
   ): Promise<void> {
+    if (!Array.isArray(images) || images.length > MAX_ATTACHMENT_IMAGES) {
+      throw new CodexAppServerError("Codex received invalid host-prepared images");
+    }
+    let imageBytes = 0;
+    const imageInput = images.map((image) => {
+      const url = image?.url;
+      const prefix =
+        typeof url === "string" ? /^data:image\/(?:png|jpeg|webp|gif);base64,/.exec(url) : null;
+      if (typeof url !== "string" || prefix === null) {
+        throw new CodexAppServerError("Codex received invalid host-prepared images");
+      }
+      imageBytes += url.length;
+      if (
+        imageBytes > MAX_ATTACHMENT_TOTAL_BYTES ||
+        url.length - prefix[0].length > MAX_ATTACHMENT_B64 ||
+        !isLikelyBase64(url.slice(prefix[0].length))
+      ) {
+        throw new CodexAppServerError("Codex received invalid host-prepared images");
+      }
+      // Only relay-prepared inline bytes cross this boundary, never paths, remote URLs or policy.
+      return { type: "image" as const, url };
+    });
     const result = record(
       await this.#request(
         "turn/start",
         {
           threadId,
           clientUserMessageId,
-          input: [{ type: "text", text, text_elements: [] }],
+          input: [{ type: "text", text, text_elements: [] }, ...imageInput],
         },
         signal,
       ),

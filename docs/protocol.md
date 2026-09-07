@@ -274,16 +274,21 @@ discovers/selects/creates/deletes/stops a thread, or owns the local TUI.
 
 `thread/resume` with `excludeTurns:true` subscribes and can load the exact stored thread. Its returned
 `historyMode` selects one of two bounded ascending readers: `paginated` uses `thread/items/list`, while
-`legacy` uses `thread/turns/list` with `itemsView:"full"`. Each reader validates the native envelope and
+`legacy` uses `thread/turns/list` with `itemsView:"full"`. Both request one item/turn per page, avoiding
+combined inline-image groups that exceed a transport frame; the raw scan is capped at 100,000 pages.
+Each reader validates the native envelope and
 retains `userMessage`, `agentMessage`, and `commandExecution`; the projection validates supported
 completed shapes before the shared 10,000 native-item cap. It drains notifications buffered during
 history before readiness. Page count and cursor-cycle bounds still fail closed. A missing half of the
 broker cursor pair fails the projection before it serves the
 session.
 
-Completed native `userMessage` and non-empty `agentMessage` items publish at their immutable
+Completed native `userMessage` items (text and supported image input) and non-empty `agentMessage` items publish at their immutable
 `(turnId,itemId)` coordinates; an item ID alone is only turn-scoped. Exact history/live replay at one
 coordinate deduplicates, while changed projected bytes at the same coordinate fence the projection.
+User-input identity hashes every ordered text/image/local-image block, including image URLs or paths,
+without retaining raw image bytes in the mutation/dedup maps. Observed native image URLs and local
+paths are never fetched or opened. Only caption text or an image-count placeholder reaches the viewer.
 Completed `commandExecution` items use the same coordinate/fingerprint fence and publish a read-only
 `Shell` call followed by its result. The call carries native command/cwd; result output uses the shared
 4,000-character cap plus a truncation marker when needed. Failed or declined status and nonzero exit
@@ -295,7 +300,8 @@ Browser text first receives only seq-less `{native_pending:true}` admission. One
 `turn/start`, using the host event UUID as `clientUserMessageId`. After waiting for idle, the writer
 rechecks session closure immediately before sending: native idle cannot release a parked prompt into
 an already-retired projection's native thread. The final downstream acknowledgement
-waits up to 15 seconds for the exact completed native user item with the same client ID and text. A
+waits up to 15 seconds for the exact completed native user item with the same client ID and full ordered
+input digest, including any images. A
 timeout, changed/reused coordinate, ambiguous write, cyclic/oversized history, disconnect, archive,
 revert, close, or delete fences only the projection instead of guessing success. Native `active` maps
 to viewer `running`, `idle` maps to `idle`, and `notLoaded` or `systemError` fails closed.
@@ -441,10 +447,11 @@ cannot bypass a disabled button:
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
-| Pinned Codex current | no | yes | yes | no | no | no | no |
+| Pinned Codex current | no | yes | yes | no | no | no | yes; images only |
 
 Text input on the stable Claude, pinned Codex, and maintained tmux surfaces must be non-empty and non-slash.
-Tmux also accepts attachments as ordinary relay-owned user turns. Internal compatibility plumbing may
+Tmux also accepts attachments as ordinary relay-owned user turns; Codex accepts image groups with an
+optional non-slash caption through native-ordered admission. Internal compatibility plumbing may
 understand more features, but those mutations are not advertised or accepted on the supported
 boundary. Tmux protects an already active model turn and its native permission/question modal; it does
 not isolate the idle local editor or idle slash/config UI from concurrent browser injection.
@@ -514,11 +521,27 @@ answer a gate.
 
 ## 10. Attachments
 
-The experimental attachment path carries image bytes inside an E2E `attachment` message, split into
-bounded chunks. After complete authentication, the host validates and writes unique files under the
-Claude uploads directory, publishes one transcript echo, then injects a normal prompt referencing the
-files. The broker never receives plaintext bytes. This path is disabled for drivers whose capability
-is false.
+The attachment path carries image bytes inside an E2E `attachment` message, split into bounded chunks.
+The existing composer prepares grouped JPEG images plus one optional caption. The broker never receives
+plaintext bytes, and drivers whose attachment capability is false reject the path.
+
+Codex accepts images only, not general files. Before native admission the host validates the whole
+group: 1–24 PNG/JPEG/WebP/GIF images, at most 16 MiB of base64 per image, a 48 MiB plaintext payload,
+and an optional non-slash caption. It sanitizes names and constructs inline `data:image/...;base64,`
+URLs itself; browser-provided URLs and filesystem paths are not inputs. The native text is `📎` names
+plus the caption, preserving a useful transcript on reload without a separate attachment-name store.
+A seq-less `native_pending` receipt means admission only; canonical native input correlation determines
+the final user row and receipt. Both native versions remain exactly 0.151.0/0.153.4 on Linux arm64.
+
+The host keeps transient image URLs outside the Session wire payload, with a combined 48 MiB pending
+URL bound across queued turns. The native client revalidates inline image inputs and their combined
+48 MiB URL bound. Raw Session slots are released after `turn/start` settles or on session closure;
+only ordered input digests remain in mutation/dedup maps. No upload files are created and no native
+image URL/path is fetched. This bounds remote-claw retention; native Codex may retain image bytes in
+its own history. Current image acceptance is tracked in the [release roadmap](release-finish-line.md).
+
+The relay-ordered compatibility/tmux path instead validates and writes unique files under the Claude
+uploads directory, publishes one transcript echo, then injects a normal prompt referencing those files.
 
 ## 11. Compatibility control verbs
 

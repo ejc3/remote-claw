@@ -2,7 +2,7 @@ import { deriveIdentity, type Frame, type FrameHeader } from "@remote-claw/claws
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
 import type { DriverContext } from "../driver.js";
-import type { Session } from "../session.js";
+import type { HostImage, Session } from "../session.js";
 import {
   CODEX_APP_SERVER_VERSION,
   CodexAppServerError,
@@ -102,6 +102,7 @@ class FakeCodexClient implements CodexClient {
     threadId: string;
     clientUserMessageId: string;
     text: string;
+    images?: readonly HostImage[];
   }> = [];
   closeCalls = 0;
   readonly activeTurnCalls: string[] = [];
@@ -161,8 +162,14 @@ class FakeCodexClient implements CodexClient {
     return structuredClone(page);
   }
 
-  async startTurn(threadId: string, clientUserMessageId: string, text: string): Promise<void> {
-    this.startCalls.push({ threadId, clientUserMessageId, text });
+  async startTurn(
+    threadId: string,
+    clientUserMessageId: string,
+    text: string,
+    _signal?: AbortSignal,
+    images?: readonly HostImage[],
+  ): Promise<void> {
+    this.startCalls.push({ threadId, clientUserMessageId, text, ...(images ? { images } : {}) });
   }
 
   async activeTurn(threadId: string): Promise<string | null> {
@@ -889,6 +896,92 @@ describe("Codex M3a companion", () => {
 
     await stop(launched.ac, launched.run);
     controllers.splice(controllers.indexOf(launched.ac), 1);
+  });
+
+  it.each([
+    false,
+    true,
+  ])("correlates full ordered image bytes before receipt (changed=%s)", async (changed) => {
+    const launched = await start();
+    controllers.push(launched.ac);
+    const text = "📎 first.png, 📎 second.png\nDescribe both";
+    const images = [
+      { name: "first.png", url: "data:image/png;base64,YWJj" },
+      { name: "second.png", url: "data:image/png;base64,ZGVm" },
+    ];
+    const event = launched.session.pushUserInput(text, { clientMsgId: "images", images });
+    await waitFor(() => launched.client.startCalls.length === 1);
+    expect(launched.client.startCalls[0]?.images).toEqual(images);
+    await waitFor(() => event.images === undefined);
+    expect(accepted(launched.broker)).toEqual([]);
+    const item = {
+      ...userItem("images-native", text, event.eventId),
+      content: [
+        { type: "text", text, text_elements: [] },
+        ...images.map((img, i) => ({
+          type: "image",
+          url: changed && i === 1 ? "data:image/png;base64,ZGVn" : img.url,
+          detail: null,
+        })),
+      ],
+    };
+    launched.client.emit(completed(item));
+    if (changed) {
+      await expect(launched.run).resolves.toBe(1);
+      expect(accepted(launched.broker)).toEqual([]);
+      expect(upstream(launched.session, "user")).toEqual([]);
+    } else {
+      await waitFor(() =>
+        accepted(launched.broker).some((v) => v.client_msg_id === "images" && v.seq === 0),
+      );
+      launched.client.emit(completed(item));
+      launched.client.emit(completed(assistantItem("image-barrier", "done")));
+      await waitFor(() => upstream(launched.session, "assistant").length === 1);
+      expect(upstream(launched.session, "user")).toHaveLength(1);
+      expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("data:image");
+      // Already-admitted bytes changing at the same native coordinate remain a fence.
+      launched.client.emit(
+        completed({
+          ...item,
+          content: [
+            { type: "text", text },
+            { type: "image", url: "data:image/png;base64,YWJk" },
+          ],
+        }),
+      );
+      await expect(launched.run).resolves.toBe(1);
+    }
+    expect(launched.client.externalThreadRunning).toBe(true);
+    expect(event.images).toBeUndefined();
+  });
+
+  it("projects native image history without retaining inline bytes or reading local paths", async () => {
+    const client = new FakeCodexClient();
+    client.pages = [
+      {
+        data: [
+          {
+            turnId: "old-turn",
+            item: {
+              ...userItem("old-image", "describe"),
+              content: [
+                { type: "text", text: "describe" },
+                { type: "image", url: `data:image/png;base64,${"A".repeat(1024 * 1024)}` },
+                { type: "localImage", path: "/not-readable.png" },
+              ],
+            },
+          },
+        ],
+        nextCursor: null,
+      },
+    ];
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    expect(upstream(launched.session, "user")).toMatchObject([
+      { message: { content: "describe" } },
+    ]);
+    expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("data:image");
+    await stop(launched.ac, launched.run);
   });
 
   it("lets Interrupt pass parked text, deduplicates it, and waits for native idle before continuing", async () => {

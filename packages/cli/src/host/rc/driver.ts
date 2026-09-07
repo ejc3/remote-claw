@@ -76,14 +76,14 @@ export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {
 
 /** The Codex app-server companion projects completed text/command activity and real thread status. Approval and
  * question requests remain first-response-sensitive native UI interactions, so every browser mutation
- * family except text and turn interruption stays disabled. */
+ * family except text, images and turn interruption stays disabled. */
 export const CODEX_CAPABILITIES: DriverCapabilities = {
   textInput: "plain",
   permissionPosture: "local",
   structuredPermissions: false,
   status: true,
   controls: { interrupt: true, setModel: false, setMode: false, end: false },
-  attachments: false,
+  attachments: true,
 };
 
 /**

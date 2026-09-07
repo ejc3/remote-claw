@@ -44,7 +44,13 @@ import {
   MITM_HARNESS,
 } from "./driver.js";
 import type { GitInfo } from "./gitinfo.js";
-import { assistantText, permissionModeFrom, type RcEvent, type Session } from "./session.js";
+import {
+  assistantText,
+  type HostImage,
+  permissionModeFrom,
+  type RcEvent,
+  type Session,
+} from "./session.js";
 
 /** Sanitize a viewer-supplied attachment filename to a safe basename (no path traversal, no separators).
  *  A blank/odd name falls back to a generic one; the extension is preserved when present. (#44) */
@@ -77,12 +83,14 @@ export function extForMime(mime: string): string {
 /** True if `s` is non-empty, well-formed standard base64 (so a malformed `data` is rejected outright
  *  rather than silently decoded to truncated/empty bytes by Buffer.from). (#44) */
 export function isLikelyBase64(s: string): boolean {
-  return s.length > 0 && s.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(s);
+  return s.length > 0 && s.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$(?![\s\S])/.test(s);
 }
 
 /** Defensive cap on ONE image's base64 length (~12 MB of bytes). The viewer downscales far below this;
  *  the cap just stops a buggy/hostile client from writing an arbitrarily large file. (#44) */
 export const MAX_ATTACHMENT_B64 = 16 * 1024 * 1024;
+export const MAX_ATTACHMENT_IMAGES = 24;
+export const MAX_ATTACHMENT_TOTAL_BYTES = 48 * 1024 * 1024;
 
 /** A grouped attachment message (#114) is sent as a chunked frame set (`postMessage`, one msgId, N AEAD
  *  parts), reassembled here. Bound the in-flight reassembly buffer so a hostile/buggy client streaming
@@ -1333,7 +1341,7 @@ export class HostRcRelay {
         const payload = await this.#collectAttachmentChunk(frame);
         if (payload === null) continue; // group not complete (or rejected) yet
         this.#seen.add(frame.msgId);
-        await this.#handleAttachmentPayload(payload, frame.clientMsgId ?? null);
+        await this.#handleAttachmentPayload(payload, frame);
         // A partial chunk is not a complete protocol admission. Reset only after the authenticated
         // message is complete and dedup-latched; otherwise bounded-buffer eviction plus replay could
         // make the same incomplete groups look like fresh progress on every failed subscription.
@@ -1480,7 +1488,7 @@ export class HostRcRelay {
           admitted();
           continue;
         }
-        await this.#handleAttachmentPayload(plaintext, frame.clientMsgId ?? null);
+        await this.#handleAttachmentPayload(plaintext, frame);
       } else if (CONTROL_VERBS.has(frame.recordKind)) {
         if (!supportsControl(this.#capabilities, frame.recordKind)) {
           this.#trace.warn("control verb suppressed by capability boundary", {
@@ -1549,6 +1557,57 @@ export class HostRcRelay {
     }
   }
 
+  /** Native adapters receive only host-prepared image bytes, never a viewer URL or filesystem path.
+   * The existing pending receipt proves broker admission, not native ingestion or transcript order. */
+  async #handleNativeImages(plaintext: Uint8Array, frame: Frame): Promise<void> {
+    if (plaintext.byteLength > MAX_ATTACHMENT_TOTAL_BYTES) return;
+    let images: HostImage[];
+    let text: string;
+    try {
+      const body = JSON.parse(new TextDecoder().decode(plaintext));
+      if (body === null || typeof body !== "object" || Array.isArray(body)) return;
+      const caption = body.caption ?? "";
+      if (typeof caption !== "string" || caption.trimStart().startsWith("/")) return;
+      const source: unknown[] = Array.isArray(body.images) ? body.images : [body];
+      if (source.length === 0 || source.length > MAX_ATTACHMENT_IMAGES) return;
+      images = [];
+      for (const value of source) {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) return;
+        const img = value as Record<string, unknown>;
+        if (
+          typeof img.mime !== "string" ||
+          extForMime(img.mime) === "" ||
+          typeof img.data !== "string" ||
+          img.data.length > MAX_ATTACHMENT_B64 ||
+          !isLikelyBase64(img.data)
+        )
+          return;
+        images.push({
+          name: safeAttachmentName(typeof img.name === "string" ? img.name : ""),
+          url: `data:${img.mime};base64,${img.data}`,
+        });
+      }
+      // Keep display names in the canonical native text too, so restart/backfill does not need an
+      // attachment-name store. Validate the caption BEFORE adding this non-slash prefix.
+      text = `${images.map((img) => `📎 ${img.name}`).join(", ")}${caption ? `\n${caption}` : ""}`;
+    } catch {
+      return;
+    }
+    await this.#publishUnit(async () => {
+      await this.#post(
+        "accepted",
+        null,
+        `admitted-${frame.msgId}`,
+        JSON.stringify({ client_msg_id: frame.clientMsgId ?? null, native_pending: true }),
+      );
+      this.#assertSessionOpen();
+      this.#session.pushUserInput(text, {
+        ...(frame.clientMsgId !== undefined ? { clientMsgId: frame.clientMsgId } : {}),
+        images,
+      });
+    });
+  }
+
   /**
    * Handle a (possibly multi-image) viewer attachment payload (#44/#114): write each E2E-decrypted image
    * into the host's uploads dir, then drive claude with ONE prompt referencing them all — `@"p1" @"p2"
@@ -1558,7 +1617,9 @@ export class HostRcRelay {
    * single `{ name, mime, data, caption }` shape. A parse/write failure is logged, not fatal — but the
    * echo is ordered before the inject (and fatal-on-throw) so claude never reads an image no viewer saw.
    */
-  async #handleAttachmentPayload(plaintext: Uint8Array, clientMsgId: string | null): Promise<void> {
+  async #handleAttachmentPayload(plaintext: Uint8Array, frame: Frame): Promise<void> {
+    if (this.#policy.ordering === "native") return this.#handleNativeImages(plaintext, frame);
+    const clientMsgId = frame.clientMsgId ?? null;
     const written: { name: string; path: string }[] = [];
     let caption = "";
     try {

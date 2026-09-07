@@ -869,6 +869,54 @@ describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
 
 describe("HostRcRelay provider-ordered text boundaries", () => {
   it.each([
+    false,
+    true,
+  ])("admits complete Codex image groups without canonical receipt or filesystem references (chunked=%s)", async (chunked) => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const push = vi.spyOn(session, "pushUserInput");
+    const ac = new AbortController();
+    const served = codexRelayOf(session, client).serve(ac.signal);
+    await waitFor(() => client.streamStarts.length === 1);
+    const img = { name: "../../a.png", mime: "image/png", data: "YWJj" };
+    for (const [i, payload] of [
+      { images: [img], caption: " /review" },
+      { images: Array.from({ length: 25 }, () => img) },
+      { images: [img, { ...img, data: "AAA\n" }] },
+      { images: [{ ...img, mime: "text/html" }] },
+      { images: [{ ...img, data: undefined, url: "https://example.com/private" }] },
+    ].entries())
+      client.pushInbound(
+        inFrame("attachment", `bad-image-${i}`, JSON.stringify(payload), `bad-${i}`),
+      );
+    const payload = JSON.stringify({ images: [img], caption: "Describe it" });
+    if (chunked) {
+      const mid = Math.floor(payload.length / 2);
+      client.pushInbound({
+        ...inChunk("attachment", "image-group", 0, 2, payload.slice(0, mid)),
+        clientMsgId: "browser-image",
+      });
+      client.pushInbound({
+        ...inChunk("attachment", "image-group", 1, 2, payload.slice(mid)),
+        clientMsgId: "browser-image",
+      });
+    } else client.pushInbound(inFrame("attachment", "image-group", payload, "browser-image"));
+    await waitFor(() => push.mock.calls.length === 1);
+    expect(push).toHaveBeenCalledWith("📎 a.png\nDescribe it", {
+      clientMsgId: "browser-image",
+      images: [{ name: "a.png", url: "data:image/png;base64,YWJj" }],
+    });
+    expect(client.content).toEqual([]);
+    expect(
+      client.posts.filter((p) => p.recordKind === "accepted").map((p) => JSON.parse(p.text)),
+    ).toEqual([{ client_msg_id: "browser-image", native_pending: true }]);
+    expect(JSON.stringify(push.mock.results[0]?.value.wire())).not.toContain("data:image");
+    ac.abort();
+    await served;
+  });
+
+  it.each([
     {
       surface: "Claude native",
       text: "browser prompt",

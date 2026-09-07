@@ -588,7 +588,7 @@ test.describe("capability gating (#149)", () => {
     await expect(page.locator(".send-err")).toHaveCount(0);
   });
 
-  test("the Codex companion keeps approvals native and exposes text plus interrupt", async ({
+  test("the Codex companion keeps approvals native and exposes images, text and interrupt", async ({
     page,
     seedHost,
   }) => {
@@ -613,7 +613,7 @@ test.describe("capability gating (#149)", () => {
     await expect(page.locator(".perm-actions, .q-options, .q-submit")).toHaveCount(0);
     await expect(page.getByText("Which name do you like best?", { exact: true })).toHaveCount(0);
     await expect(page.getByTestId("composer-mode")).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Attach photos" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Attach photos" })).toBeEnabled();
 
     const composer = page.getByRole("textbox", { name: "Message" });
     await expect(composer).toHaveAttribute("placeholder", "Message this session");

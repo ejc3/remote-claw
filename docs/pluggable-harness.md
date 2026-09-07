@@ -11,8 +11,8 @@ Five drivers exist:
   Control, with ordinary text plus one-shot session-scoped Interrupt and read-only worker tool activity;
 - `tmux` — the maintained lower-fidelity plain-Claude compatibility adapter;
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
-- `codex` — the exact 0.151.0 or 0.153.4/Linux arm64 app-server companion: text-and-interrupt browser
-  mutations, native status, and read-only completed shell commands/results.
+- `codex` — the exact 0.151.0 or 0.153.4/Linux arm64 app-server companion: text, images, and interrupt,
+  native status, and read-only completed shell commands/results.
 
 The private MITM remains the supported Claude beta. The native companion has passed its structured
 API-path, local Graduate, literal official web UI coexistence, and separate exact-SHA
@@ -38,7 +38,7 @@ is provider-transport isolation, not per-device unsubscribe. The separate
 [Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) passed clean companion
 restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy.
 Those historical Codex results remain exact 0.151.0 evidence; current-version, command-activity, and
-interrupt acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
+interrupt/image acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
 remain disabled.
 Every current `Session` binding remains process-local.
 
@@ -246,6 +246,11 @@ in the [release roadmap](release-finish-line.md).
 The Codex companion waits for native idle, rechecks that its projection is still open, starts one turn
 with the broker event ID as
 `clientUserMessageId`, and acknowledges only after the matching completed native user item appears.
+Image groups reuse the encrypted composer message and pending admission; the host constructs inline
+data URLs and native text containing sanitized names/caption, with no upload files or URL fetch.
+Full ordered input digests correlate images as well as text. Raw pending images are bounded and released
+after native submission settles or session closure; only text/image-count placeholders are projected.
+See [attachment bounds](protocol.md#10-attachments).
 A bounded process-local text FIFO leaves interrupt reachable while text waits. Interrupt binds one
 observed active native turn; stale-target rejection is a no-op, never a retry against a newer turn.
 Only native status releases queued text, not interrupt RPC acceptance. Background commands may outlive
@@ -317,7 +322,7 @@ The exact advertised viewer capabilities are:
 | `tmux` | no; posture says native/local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
 | `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |
-| Pinned `codex` | no | yes | yes | no | no | no | no |
+| Pinned `codex` | no | yes | yes | no | no | no | yes; images only |
 
 See [tmux-driver.md](tmux-driver.md) and [opencode-driver.md](opencode-driver.md) for adapter-specific
 limitations.
@@ -404,7 +409,8 @@ query, or fragment, or the exact literal `unix://`. That token resolves only to
 `~/.codex`; arbitrary Unix paths are rejected. The exact thread ID remains required.
 
 After resume, `historyMode:"paginated"` selects bounded ascending `thread/items/list` and
-`historyMode:"legacy"` selects bounded ascending `thread/turns/list` with `itemsView:"full"`. Both
+`historyMode:"legacy"` selects bounded ascending `thread/turns/list` with `itemsView:"full"`. Both request
+one item/turn per page to avoid combining inline-image groups, with a 100,000-page raw scan cap. Both
 retain user/assistant text and `commandExecution`; unsupported or unfinished shapes are filtered by
 the projection before the shared 10,000 native-item cap. The exact
 official-Remote M3b acceptance exercised the literal managed socket and this legacy full-turn reader.

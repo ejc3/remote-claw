@@ -3,7 +3,7 @@ import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import { CODEX_CAPABILITIES, CODEX_HARNESS, type Driver, type DriverContext } from "../driver.js";
 import { ReadyBridge } from "../drivers/ready-bridge.js";
 import { toolResultOutput } from "../relay.js";
-import { type RcEvent, RelayCore, type Session } from "../session.js";
+import { type HostImage, type RcEvent, RelayCore, type Session } from "../session.js";
 import {
   assertCodexCompatibility,
   CODEX_HISTORY_ITEM_LIMIT,
@@ -17,9 +17,9 @@ import {
   parseCodexStatus,
 } from "./client.js";
 
-// A paginated thread may contain far more raw items than projected text/commands. Keep the raw
-// pager bounded while allowing roughly 100k native items at app-server's 100-item page size.
-const HISTORY_PAGE_LIMIT = 1_000;
+// One native item per page keeps retained inline images from combining into an oversized frame.
+// Preserve the existing roughly 100k raw-item scan budget, independently of projected item limits.
+const HISTORY_PAGE_LIMIT = 100_000;
 const CORRELATION_TIMEOUT_MS = 15_000;
 
 export class CodexProjectionError extends Error {
@@ -37,7 +37,7 @@ export interface CodexDriverOptions {
 }
 
 interface BrowserMutation {
-  text: string;
+  inputDigest: string;
   clientMsgId?: string;
   itemCoordinate: string | null;
   correlated: PromiseWithResolvers<void>;
@@ -83,17 +83,49 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function userText(item: CodexThreadItem): string | null {
+function userInput(item: CodexThreadItem): { text: string; digest: string } | null {
   if (!Array.isArray(item.content) || item.content.length === 0) return null;
   const parts: string[] = [];
+  const blocks: [string, string][] = [];
   for (const value of item.content) {
     const input = record(value);
-    if (input?.type !== "text" || typeof input.text !== "string") return null;
-    parts.push(input.text);
+    if (input?.type === "text" && typeof input.text === "string") {
+      parts.push(input.text);
+      blocks.push(["text", input.text]);
+    } else if (input?.type === "image" && typeof input.url === "string" && input.url !== "") {
+      blocks.push(["image", input.url]);
+    } else if (
+      input?.type === "localImage" &&
+      typeof input.path === "string" &&
+      input.path !== ""
+    ) {
+      // Read-only native observation. Never read this path or fetch a native image URL.
+      blocks.push(["localImage", input.path]);
+    } else return null;
   }
   const text = parts.join("");
   const trimmed = text.trim();
-  return trimmed === "" || trimmed.startsWith("/") ? null : text;
+  if (trimmed.startsWith("/") || (trimmed === "" && blocks.every(([type]) => type === "text")))
+    return null;
+  return {
+    text: text || `📎 ${blocks.filter(([type]) => type !== "text").length} image(s)`,
+    digest: inputDigest(blocks),
+  };
+}
+
+function inputDigest(blocks: [string, string][]): string {
+  // Hash each block separately: no JSON-sized copy of an entire multi-image group and no raw image
+  // strings retained in the mutation/dedup maps. Tuple encoding preserves order and boundaries.
+  const hash = createHash("sha256");
+  for (const block of blocks) hash.update(JSON.stringify(block));
+  return hash.digest("hex");
+}
+
+function browserInputDigest(text: string, images: readonly HostImage[]): string {
+  return inputDigest([
+    ["text", text],
+    ...images.map((image): [string, string] => ["image", image.url]),
+  ]);
 }
 
 class IdleGate {
@@ -162,13 +194,14 @@ class CodexReconciler {
     // tuple encoding is an exact, collision-free session coordinate for arbitrary string ids.
     const coordinate = JSON.stringify([turnId, item.id]);
     if (item.type === "userMessage") {
-      const text = userText(item);
-      if (text === null) return;
+      const input = userInput(item);
+      if (input === null) return;
+      const { text, digest } = input;
       const clientId = typeof item.clientId === "string" ? item.clientId : null;
-      if (!this.#admit(coordinate, JSON.stringify([item.type, clientId, text]))) return;
+      if (!this.#admit(coordinate, JSON.stringify([item.type, clientId, digest]))) return;
       const mutation = clientId === null ? undefined : this.#mutations.get(clientId);
       if (mutation !== undefined) {
-        if (mutation.itemCoordinate !== null || mutation.text !== text) {
+        if (mutation.itemCoordinate !== null || mutation.inputDigest !== digest) {
           throw new CodexProjectionError("Codex browser coordinate changed or repeated");
         }
         mutation.itemCoordinate = coordinate;
@@ -508,14 +541,21 @@ export class CodexDriver implements Driver {
     // driver's signal aborts, so recheck the fence immediately before the irreversible write.
     if (session.closed) return;
     const mutation: BrowserMutation = {
-      text,
+      inputDigest: browserInputDigest(text, event.images ?? []),
       ...(typeof clientMsgId === "string" ? { clientMsgId } : {}),
       itemCoordinate: null,
       correlated: Promise.withResolvers<void>(),
     };
     this.#mutations.set(event.eventId, mutation);
     try {
-      await this.#client.startTurn(this.#options.threadId, event.eventId, text, signal);
+      await this.#client.startTurn(
+        this.#options.threadId,
+        event.eventId,
+        text,
+        signal,
+        event.images,
+      );
+      session.releaseImages(event);
       await waitForCorrelation(mutation.correlated.promise, signal);
       throwIfAborted(signal);
       session.ack(event.eventId);
@@ -524,8 +564,10 @@ export class CodexDriver implements Driver {
       throw new CodexProjectionError(
         error instanceof CodexProjectionError
           ? error.message
-          : "Codex text outcome is unknown; projection fenced",
+          : "Codex input outcome is unknown; projection fenced",
       );
+    } finally {
+      session.releaseImages(event);
     }
   }
 }

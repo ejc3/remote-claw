@@ -1,5 +1,7 @@
 import { getEventListeners } from "node:events";
 import { describe, expect, it } from "vitest";
+import { MAX_ATTACHMENT_B64, MAX_ATTACHMENT_IMAGES } from "../relay.js";
+import type { HostImage } from "../session.js";
 import {
   assertCodexCompatibility,
   CODEX_APP_SERVER_VERSION,
@@ -68,6 +70,91 @@ class FakeSocket {
 }
 
 describe("Codex app-server boundary", () => {
+  it("sends only text and host-prepared inline images without native policy overrides", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+
+    await client.startTurn(THREAD_ID, "text-event", "ordinary text", signal);
+    expect(socket.sent.at(-1)?.params).toEqual({
+      threadId: THREAD_ID,
+      clientUserMessageId: "text-event",
+      input: [{ type: "text", text: "ordinary text", text_elements: [] }],
+    });
+
+    const images = ["png", "jpeg", "webp", "gif"].map((mime) => ({
+      name: `capture.${mime}`,
+      url: `data:image/${mime};base64,YQ==`,
+      path: "/private/not-an-input",
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
+      model: "not-an-input",
+    }));
+    await client.startTurn(THREAD_ID, "image-event", "describe these screenshots", signal, images);
+    expect(socket.sent.at(-1)?.params).toEqual({
+      threadId: THREAD_ID,
+      clientUserMessageId: "image-event",
+      input: [
+        { type: "text", text: "describe these screenshots", text_elements: [] },
+        ...images.map(({ url }) => ({ type: "image", url })),
+      ],
+    });
+    client.close();
+  });
+
+  it("rejects paths, remote URLs and malformed image data before any native mutation", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+
+    for (const image of [
+      { name: "remote.png", url: "https://example.com/private.png" },
+      { name: "local.png", url: "file:///private/capture.png" },
+      { name: "local.png", path: "/private/capture.png" },
+      { name: "payload", url: "data:text/html;base64,YQ==" },
+      { name: "vector.svg", url: "data:image/svg+xml;base64,YQ==" },
+      { name: "empty.png", url: "data:image/png;base64," },
+      { name: "bad.png", url: "data:image/png;base64,AA" },
+      { name: "bad.png", url: "data:image/png;base64,A=AA" },
+      { name: "bad.png", url: "data:image/png;base64,AAA\n" },
+      { name: "bad.png", url: "data:image/png;base64,AAA\r" },
+      { name: "bad.png", url: 42 },
+      null,
+    ]) {
+      await expect(
+        client.startTurn(THREAD_ID, "invalid-event", "caption", signal, [image] as HostImage[]),
+      ).rejects.toThrow("Codex received invalid host-prepared images");
+    }
+    expect(socket.sent.some((message) => message.method === "turn/start")).toBe(false);
+    client.close();
+  });
+
+  it("bounds image count, each encoded image and the complete native image group", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    const image = { name: "capture.png", url: "data:image/png;base64,YQ==" };
+    const largeImage = {
+      name: "large.png",
+      url: `data:image/png;base64,${"A".repeat(MAX_ATTACHMENT_B64)}`,
+    };
+
+    for (const images of [
+      Array.from({ length: MAX_ATTACHMENT_IMAGES + 1 }, () => image),
+      [{ ...largeImage, url: `${largeImage.url}AAAA` }],
+      [largeImage, largeImage, largeImage],
+    ]) {
+      await expect(
+        client.startTurn(THREAD_ID, "too-large-event", "caption", signal, images),
+      ).rejects.toThrow("Codex received invalid host-prepared images");
+    }
+    expect(socket.sent.some((message) => message.method === "turn/start")).toBe(false);
+    client.close();
+  });
+
   it("reads bounded latest-turn metadata without loading items or selecting another thread", async () => {
     const socket = new FakeSocket();
     const originalSend = socket.send.bind(socket);
@@ -380,6 +467,7 @@ describe("Codex app-server boundary", () => {
         itemsView: "full",
       },
     });
+    expect(CODEX_LEGACY_TURN_PAGE_LIMIT).toBe(1);
     expect(socket.sent.some((message) => message.method === "thread/items/list")).toBe(false);
 
     client.close();
@@ -432,6 +520,7 @@ describe("Codex app-server boundary", () => {
         originalSend(data);
         return;
       }
+      socket.sent.push(message);
       socket.respond(message.id, {
         data: [
           {
@@ -458,6 +547,11 @@ describe("Codex app-server boundary", () => {
     expect(page.data).toMatchObject([
       { turnId: "turn", item: { type: "commandExecution", id: "command" } },
     ]);
+    expect(socket.sent.at(-1)?.params).toEqual({
+      threadId: THREAD_ID,
+      limit: 1,
+      sortDirection: "asc",
+    });
     client.close();
   });
 });

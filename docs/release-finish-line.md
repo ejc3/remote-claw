@@ -189,7 +189,7 @@ home-folder UI artifacts, outside Git.
 | Desktop/mobile daily-use finish | Auditing | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | Queued | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers |
-| Screenshot/file input | Queued | One structured adapter accepts encrypted attachments with truthful delivery and bounded input handling |
+| Screenshot/file input | Codex images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
 | Remote approvals and questions | Queued | Browser decisions reconcile with native/local/provider decisions without weakening permission policy |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
@@ -316,6 +316,30 @@ and `viewer-result.json` plus diagnostic sources live in the same home-folder ar
 No permission policy, native TUI, official browser, managed Codex daemon, or tunnel was restarted.
 This accepts session-scoped Stop and continuation, not exact-turn/successor isolation, in-flight shell
 cancellation, remote approval decisions, or status inference.
+
+**Codex screenshots/images — implemented and live-accepted:** the existing phone/desktop composer
+now submits grouped images with an optional caption to exact Codex 0.151.0 and 0.153.4/Linux arm64.
+The host constructs inline image inputs from authenticated image bytes; it never accepts viewer URLs
+or host paths, fetches remote images, or creates upload files. Native history retains the image bytes.
+The canonical native text contains sanitized filename chips and the caption, while remote-claw's
+retained transcript contains no image bytes. Canonical receipts require the full ordered native input
+digest, not caption-only matching or RPC admission. Whole-group and pending-image bounds keep input
+retention finite; a rejected/ambiguous native send fences only the companion, without retry.
+
+On 2026-09-07 separate native probes on 0.151.0/explicit-loopback WebSocket and
+0.153.4/managed Unix confirmed exact ordered inline-image echoes, client IDs, and retained-history
+bytes. Both models read the harmless image correctly. The actual 0.153.4 companion then accepted
+one image from each phone (390×844) and desktop (1440×1000) composer through the encrypted SQLite
+broker. The native TUI and both viewers showed the image interpretation; reload showed each user and
+assistant message once. Light/dark screenshots were opened and inspected. Evidence and diagnostic
+sources remain outside Git in `/home/ubuntu/remote-claw-ui-artifacts/codex-images-2026-09-07/`.
+
+The cheapest regression owns the discovered large-image dispatch defect: single-frame and reassembled
+multipart images must use the same native admission handler, never the legacy Claude file-reference
+path. Client/Session/driver tests own request allowlisting, pending-byte release, exact image
+correlation and changed-byte fencing. General files, lossless originals, transcript image previews,
+Claude-native uploads, remote approval decisions, and official Codex Remote browser acceptance remain
+outside this slice. Neither supported version's permission policy changed.
 
 ### Execution contract
 
