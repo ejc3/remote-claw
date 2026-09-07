@@ -99,7 +99,7 @@ describe("Codex app-server boundary", () => {
     }
   });
 
-  it("pins the measured app-server and runtime compatibility tuple", () => {
+  it("pins the two measured app-server versions and runtime compatibility tuple", () => {
     const compatible = {
       userAgent: `some-other-subscriber/${CODEX_APP_SERVER_VERSION} codex-cli/${CODEX_APP_SERVER_VERSION}`,
       platformFamily: "unix",
@@ -108,10 +108,35 @@ describe("Codex app-server boundary", () => {
     expect(() =>
       assertCodexCompatibility(compatible, { platform: "linux", arch: "arm64" }),
     ).not.toThrow();
+    expect(() =>
+      assertCodexCompatibility(
+        {
+          ...compatible,
+          userAgent: "codex_chatgpt_ios_remote/0.153.4 (Ubuntu; aarch64)",
+        },
+        { platform: "linux", arch: "arm64" },
+      ),
+    ).not.toThrow();
 
     for (const [result, runtime] of [
       [
         { ...compatible, userAgent: "some-other-subscriber/0.150.0 codex-cli/0.150.0" },
+        { platform: "linux", arch: "arm64" },
+      ],
+      [
+        { ...compatible, userAgent: "subscriber/0.153.3" },
+        { platform: "linux", arch: "arm64" },
+      ],
+      [
+        { ...compatible, userAgent: "subscriber/0.153.5" },
+        { platform: "linux", arch: "arm64" },
+      ],
+      [
+        { ...compatible, userAgent: "subscriber/0.154.0" },
+        { platform: "linux", arch: "arm64" },
+      ],
+      [
+        { ...compatible, userAgent: "subscriber/0.153.4-dev" },
         { platform: "linux", arch: "arm64" },
       ],
       [
@@ -126,7 +151,7 @@ describe("Codex app-server boundary", () => {
       [compatible, { platform: "darwin", arch: "arm64" }],
     ] as const) {
       expect(() => assertCodexCompatibility(result, runtime)).toThrow(
-        /Codex app-server 0\.151\.0 on Linux arm64/,
+        /Codex app-server 0\.151\.0 or 0\.153\.4 on Linux arm64/,
       );
     }
   });
@@ -233,7 +258,16 @@ describe("Codex app-server boundary", () => {
           {
             id: "turn-legacy",
             items: [
-              { type: "commandExecution", id: "tool-hidden" },
+              {
+                type: "commandExecution",
+                id: "command-visible",
+                command: "ls",
+                cwd: "/tmp",
+                status: "completed",
+                aggregatedOutput: "example.ts",
+                exitCode: 0,
+              },
+              { type: "mcpToolCall", id: "tool-hidden" },
               { type: "userMessage", id: "user-legacy", content: [{ type: "text", text: "hi" }] },
               { type: "agentMessage", id: "agent-legacy", text: "hello" },
             ],
@@ -251,6 +285,7 @@ describe("Codex app-server boundary", () => {
 
     expect(page).toMatchObject({
       data: [
+        { turnId: "turn-legacy", item: { id: "command-visible", type: "commandExecution" } },
         { turnId: "turn-legacy", item: { id: "user-legacy" } },
         { turnId: "turn-legacy", item: { id: "agent-legacy" } },
       ],
@@ -270,7 +305,7 @@ describe("Codex app-server boundary", () => {
     client.close();
   });
 
-  it("does not charge hidden tool activity against the legacy text projection", async () => {
+  it("does not charge unsupported tool activity against the legacy projection", async () => {
     const socket = new FakeSocket();
     const originalSend = socket.send.bind(socket);
     socket.send = (data: string): void => {
@@ -286,7 +321,7 @@ describe("Codex app-server boundary", () => {
             id: "turn-legacy",
             items: [
               ...Array.from({ length: 10_001 }, (_, index) => ({
-                type: "commandExecution",
+                type: "mcpToolCall",
                 id: `tool-${index}`,
               })),
               { type: "userMessage", id: "user-visible", content: [{ type: "text", text: "hi" }] },
@@ -305,6 +340,44 @@ describe("Codex app-server boundary", () => {
     const page = await client.listTurnItems(THREAD_ID, undefined, signal);
 
     expect(page.data.map((entry) => entry.item.id)).toEqual(["user-visible", "agent-visible"]);
+    client.close();
+  });
+
+  it("retains command observations in paginated history while excluding unsupported tool families", async () => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    socket.send = (data: string) => {
+      const message = JSON.parse(data);
+      if (message.method !== "thread/items/list") {
+        originalSend(data);
+        return;
+      }
+      socket.respond(message.id, {
+        data: [
+          {
+            turnId: "turn",
+            item: {
+              type: "commandExecution",
+              id: "command",
+              command: "ls",
+              cwd: "/tmp",
+              status: "completed",
+              aggregatedOutput: null,
+              exitCode: 0,
+            },
+          },
+          { turnId: "turn", item: { type: "mcpToolCall", id: "unsupported" } },
+        ],
+        nextCursor: null,
+      });
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    const page = await client.listItems(THREAD_ID, undefined, signal);
+    expect(page.data).toMatchObject([
+      { turnId: "turn", item: { type: "commandExecution", id: "command" } },
+    ]);
     client.close();
   });
 });

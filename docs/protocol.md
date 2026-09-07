@@ -262,9 +262,9 @@ boundary are unchanged.
 
 ### 4.4 Pinned Codex app-server companion
 
-The Codex path requires exact app-server 0.151.0 on Linux arm64, one explicit canonical UUIDv7, and a
-broker backend that supplies both durable host sequence and inbound frame cursors. Its transport is
-either a caller-owned explicit-port loopback WebSocket origin or the literal `unix://` token. The
+The Codex path accepts only exact app-server 0.151.0 or 0.153.4 on Linux arm64, and requires one explicit
+canonical UUIDv7 and a broker backend that supplies both durable host sequence and inbound frame cursors.
+Its transport is either a caller-owned explicit-port loopback WebSocket origin or the literal `unix://` token. The
 latter resolves only to Codex's same-user managed control socket at
 `$CODEX_HOME/app-server-control/app-server-control.sock` (with `~/.codex` as the unset fallback);
 arbitrary Unix paths are rejected. It accepts no forwarded arguments and never starts/stops app-server,
@@ -272,15 +272,23 @@ discovers/selects/creates/deletes/stops a thread, or owns the local TUI.
 
 `thread/resume` with `excludeTurns:true` subscribes and can load the exact stored thread. Its returned
 `historyMode` selects one of two bounded ascending readers: `paginated` uses `thread/items/list`, while
-`legacy` uses `thread/turns/list` with `itemsView:"full"`. Each reader validates the native envelope,
-filters to supported `userMessage` and `agentMessage` text before the shared 10,000 projected-item cap,
-and drains notifications buffered during history before readiness. Page count and cursor-cycle bounds
-still fail closed. A missing half of the broker cursor pair fails the projection before it serves the
+`legacy` uses `thread/turns/list` with `itemsView:"full"`. Each reader validates the native envelope and
+retains `userMessage`, `agentMessage`, and `commandExecution`; the projection validates supported
+completed shapes before the shared 10,000 native-item cap. It drains notifications buffered during
+history before readiness. Page count and cursor-cycle bounds still fail closed. A missing half of the
+broker cursor pair fails the projection before it serves the
 session.
 
 Completed native `userMessage` and non-empty `agentMessage` items publish at their immutable
 `(turnId,itemId)` coordinates; an item ID alone is only turn-scoped. Exact history/live replay at one
 coordinate deduplicates, while changed projected bytes at the same coordinate fence the projection.
+Completed `commandExecution` items use the same coordinate/fingerprint fence and publish a read-only
+`Shell` call followed by its result. The call carries native command/cwd; result output uses the shared
+4,000-character cap plus a truncation marker when needed. Failed or declined status and nonzero exit
+codes are marked as errors, with a fallback explanation when native output is empty. Unfinished commands do not consume a projected
+identity. Other tool families, streaming partials, file changes, and task lifecycle are not projected;
+these observations cannot acknowledge a pending browser prompt or execute a command.
+
 Browser text first receives only seq-less `{native_pending:true}` admission. One idle gate serializes
 `turn/start`, using the host event UUID as `clientUserMessageId`. After waiting for idle, the writer
 rechecks session closure immediately before sending: native idle cannot release a parked prompt into
@@ -290,7 +298,7 @@ timeout, changed/reused coordinate, ambiguous write, cyclic/oversized history, d
 revert, close, or delete fences only the projection instead of guessing success. Native `active` maps
 to viewer `running`, `idle` maps to `idle`, and `notLoaded` or `systemError` fails closed.
 
-For current 0.151 approval and question server requests, the first result or error wins globally. The
+For the measured 0.151 approval and question server requests, the first result or error wins globally. The
 Codex client interface deliberately exposes no response method, so the companion can return neither.
 The supported topology requires a local TUI attached to the exact thread for the entire companion
 lifetime; app-server provides no atomic way to prove that attachment. The TUI solely owns approvals
@@ -313,6 +321,8 @@ projection of the same supplied native thread, reads old native text as observat
 the retired projection's commands or reconstructs its pending mutations. Two browsers recovered history
 once and completed a fresh turn; broker loss stopped only the companion while a local TUI turn still
 completed. Managed-Unix/legacy recovery and simultaneous official-Remote recovery remain unclaimed.
+Current 0.153.4 and read-only command-activity acceptance is tracked separately in the
+[release roadmap](release-finish-line.md); it does not broaden these historical 0.151.0 results.
 
 ## 5. `Session` and the relay
 

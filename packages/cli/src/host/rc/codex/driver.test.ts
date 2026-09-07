@@ -69,6 +69,19 @@ function assistantItem(id: string, text: string): CodexThreadItem {
   return { type: "agentMessage", id, text };
 }
 
+function commandItem(id: string, overrides: Record<string, unknown> = {}): CodexThreadItem {
+  return {
+    type: "commandExecution",
+    id,
+    command: "sed -n '1,10p' example.ts",
+    cwd: "/example",
+    status: "completed",
+    aggregatedOutput: "file content",
+    exitCode: 0,
+    ...overrides,
+  };
+}
+
 function coordinate(turnId: string, itemId: string): string {
   return JSON.stringify([turnId, itemId]);
 }
@@ -469,6 +482,137 @@ describe("Codex M3a companion", () => {
 
     await stop(launched.ac, launched.run);
     controllers.splice(controllers.indexOf(launched.ac), 1);
+  });
+
+  it("projects completed commands once through the bounded tool relay in native item order", async () => {
+    const client = new FakeCodexClient();
+    const success = commandItem("read");
+    client.pages = [{ data: [{ turnId: "turn-1", item: success }], nextCursor: null }];
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    client.emit(completed(success));
+    client.emit(
+      completed(
+        commandItem("failure", {
+          status: "failed",
+          exitCode: 2,
+          aggregatedOutput: "x".repeat(4001),
+        }),
+      ),
+    );
+    client.emit(
+      completed(
+        commandItem("declined", { status: "declined", exitCode: null, aggregatedOutput: null }),
+      ),
+    );
+    client.emit(
+      completed(
+        commandItem("silent-failure", { status: "completed", exitCode: 1, aggregatedOutput: "" }),
+      ),
+    );
+    client.emit(completed(commandItem("foreign"), OTHER_THREAD_ID));
+    client.emit(completed(assistantItem("barrier", "Done")));
+    await waitFor(() =>
+      launched.broker.posts.some((p) => p.recordKind === "assistant" && p.text === "Done"),
+    );
+    const content = launched.broker.posts.filter((p) => p.seq !== null);
+    expect(content.map((p) => p.recordKind)).toEqual([
+      "tool_use",
+      "tool_result",
+      "tool_use",
+      "tool_result",
+      "tool_use",
+      "tool_result",
+      "tool_use",
+      "tool_result",
+      "assistant",
+    ]);
+    expect(JSON.parse(content[0]?.text ?? "")).toMatchObject({
+      name: "Shell",
+      input: { command: success.command, cwd: "/example" },
+    });
+    expect(JSON.parse(content[1]?.text ?? "")).toMatchObject({
+      tool_use_id: coordinate("turn-1", "read"),
+      output: "file content",
+      is_error: false,
+    });
+    expect(JSON.parse(content[3]?.text ?? "")).toMatchObject({
+      output: `${"x".repeat(4000)}…[truncated]`,
+      is_error: true,
+    });
+    expect(JSON.parse(content[5]?.text ?? "")).toMatchObject({
+      output: "Command declined in native Codex.",
+      is_error: true,
+    });
+    expect(JSON.parse(content[7]?.text ?? "")).toMatchObject({
+      output: "Command failed in native Codex (exit 1).",
+      is_error: true,
+    });
+    expect(client.startCalls).toEqual([]);
+    await stop(launched.ac, launched.run);
+  });
+
+  it("does not consume unfinished/unsupported tool identities or turn them into native requests", async () => {
+    const client = new FakeCodexClient();
+    client.pages = [
+      {
+        data: [
+          {
+            turnId: "turn-1",
+            item: commandItem("later", {
+              status: "inProgress",
+              exitCode: null,
+              aggregatedOutput: null,
+            }),
+          },
+        ],
+        nextCursor: null,
+      },
+    ];
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    for (const item of [
+      commandItem("bad-output", { aggregatedOutput: [] }),
+      commandItem("bad-code", { exitCode: "1" }),
+      commandItem("bad-command", { command: [] }),
+      commandItem("bad-state", { status: "unknown" }),
+      { type: "fileChange", id: "file-change" },
+      { type: "mcpToolCall", id: "mcp-call" },
+    ])
+      client.emit(completed(item));
+    client.emit({
+      kind: "request",
+      value: {
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: THREAD_ID, itemId: "later" },
+      },
+    });
+    client.emit(completed(commandItem("later")));
+    client.emit(completed(assistantItem("barrier", "Done")));
+    await waitFor(() =>
+      launched.broker.posts.some((p) => p.recordKind === "assistant" && p.text === "Done"),
+    );
+    expect(launched.broker.posts.filter((p) => p.seq !== null).map((p) => p.recordKind)).toEqual([
+      "tool_use",
+      "tool_result",
+      "assistant",
+    ]);
+    expect(client.startCalls).toEqual([]);
+    expect(launched.session.closed).toBe(false);
+    await stop(launched.ac, launched.run);
+  });
+
+  it("fences changed completed command content but permits the same item id in a different turn", async () => {
+    const launched = await start();
+    controllers.push(launched.ac);
+    launched.client.emit(completed(commandItem("same")));
+    launched.client.emit(completed(commandItem("same"), THREAD_ID, "turn-2"));
+    await waitFor(() => upstream(launched.session, "assistant").length === 2);
+    launched.client.emit(completed(commandItem("same", { aggregatedOutput: "changed" })));
+    expect(await within(launched.run)).toBe(1);
+    expect(upstream(launched.session, "assistant")).toHaveLength(2);
+    expect(launched.client.startCalls).toEqual([]);
+    expect(launched.client.externalThreadRunning).toBe(true);
   });
 
   it("hydrates official Remote legacy history without calling its unsupported item pager", async () => {

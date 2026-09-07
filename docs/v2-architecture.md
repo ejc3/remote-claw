@@ -430,13 +430,13 @@ mutation remain unsupported. Companion teardown and broker/capture loss never ab
 Restart against the same exact <code>ses_*</code> creates a fresh remote-claw projection and does not
 consume old broker commands.
 
-### 10.6 Pinned Codex text/status companion
+### 10.6 Pinned Codex text/status and command-activity companion
 
 <code>--rc-app &lt;origin&gt; --rc-driver=codex --rc-codex-thread &lt;uuidv7&gt;</code> resumes/joins
 one exact thread through either a caller-owned explicit-port loopback Codex app-server or literal
 <code>unix://</code>. The literal token resolves only to Codex's same-user managed control socket under
 <code>$CODEX_HOME/app-server-control/</code> (falling back to <code>~/.codex</code>); arbitrary Unix
-paths are rejected. The supported tuple is exact 0.151.0 on Linux arm64. The companion accepts no
+paths are rejected. The code accepts only exact 0.151.0 or 0.153.4 on Linux arm64. The companion accepts no
 forwarded arguments and never starts/stops app-server, discovers/selects/creates/deletes/stops a
 thread, or owns the TUI. Resume may load the exact stored thread, but the supported topology requires
 the caller to keep a local TUI attached for the companion lifetime.
@@ -444,10 +444,14 @@ the caller to keep a local TUI attached for the companion lifetime.
 The driver subscribes before history. Resume's <code>historyMode</code> selects bounded ascending
 <code>thread/items/list</code> for <code>paginated</code> or bounded ascending
 <code>thread/turns/list</code> with <code>itemsView:"full"</code> for <code>legacy</code>. Both paths
-validate native envelopes and filter to supported user/assistant text before the 10,000 projected-item
-cap, then drain buffered notifications before readiness. Completed text is keyed by immutable
+validate native envelopes and retain user/assistant text plus <code>commandExecution</code>. The
+projection validates supported completed shapes before its shared 10,000 native-item cap, then drains
+buffered notifications before readiness. Projected items are keyed by immutable
 <code>(turnId,itemId)</code>, not the turn-scoped item ID alone; exact replay deduplicates and changed
-projected bytes at the same coordinate fence the projection. Browser text first
+projected bytes at the same coordinate fence the projection. Completed commands emit read-only
+<code>Shell</code> calls and bounded results, including failed/declined/nonzero-exit outcomes. Unfinished
+commands, other tool families, streaming partials, file changes, and task lifecycle are not projected.
+Browser text first
 gets seq-less pending admission; its final acknowledgement waits for the exact native user item carrying
 the host client ID and text. A 15-second correlation deadline and bounded history/dedup fence ambiguous
 or contradictory outcomes. Native active/idle status is advertised. Every browser control, attachment,
@@ -461,6 +465,8 @@ immediately before sending, so a parked prompt cannot escape a projection alread
 A new explicit exact-thread invocation creates a fresh projection and observes native history without
 restoring pending mutations or consuming the retired projection's command stream. The recovery
 acceptance below covers explicit WS/paginated history only.
+The historical M3a/M3b/recovery runs remain exact 0.151.0 evidence; the
+[release roadmap](release-finish-line.md) owns current 0.153.4 and command-activity acceptance.
 
 ## 11. Agent adapters and inference connectors
 
@@ -474,7 +480,7 @@ have narrower, truthfully labeled guarantees.
 | Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart and literal official-client coexistence | Exact Linux/2.1.237 only; no remote controls, permissions, attachments, or status |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
-| Codex | Supported text/status app-server companion for exact 0.151.0/Linux arm64, including bounded same-thread official Remote coexistence and separate explicit-WS/paginated restart/backfill and broker-loss acceptance | One explicit thread and attached local-TUI precondition; managed-Unix/legacy recovery, per-device unsubscribe, and browser controls remain unclaimed |
+| Codex | Current code accepts exact 0.151.0 and 0.153.4/Linux arm64 with text/status and read-only completed command activity; historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0 | One explicit thread and attached local-TUI precondition; current-version/activity acceptance is tracked in the release roadmap; managed-Unix/legacy recovery, per-device unsubscribe, and browser controls remain unclaimed |
 | Bedrock inference | Maintained exact-tuple MITM connector | Replaces Anthropic inference while preserving the private local RC facade; other tuples remain unqualified |
 | Accountless mode | Maintained for the exact M5 Bedrock tuple | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
 
