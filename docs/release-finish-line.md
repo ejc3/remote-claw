@@ -187,7 +187,7 @@ home-folder UI artifacts, outside Git.
 | --- | --- | --- |
 | Native work visibility, Claude first | Claude tools and Codex completed commands implemented and live-accepted | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
 | Desktop/mobile daily-use finish | Auditing | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
-| Remote interrupt and continue | Codex implemented and live-accepted; release checks in progress | One native adapter's running turn can be interrupted from a browser and continued while local/provider clients remain coherent |
+| Remote interrupt and continue | Codex implemented and live-accepted | One native adapter's running turn can be interrupted from a browser and continued while local/provider clients remain coherent |
 | Codex official-Remote recovery | Queued | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers |
 | Screenshot/file input | Queued | One structured adapter accepts encrypted attachments with truthful delivery and bounded input handling |
 | Remote approvals and questions | Queued | Browser decisions reconcile with native/local/provider decisions without weakening permission policy |
