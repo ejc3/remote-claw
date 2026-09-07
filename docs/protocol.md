@@ -385,6 +385,14 @@ capability vector may include `permissionPosture:"local"|"bypassed"|"unknown"` w
 `structuredPermissions:false`; absence never proves a native gate, and explicit `unknown` is distinct
 from legacy absence.
 
+Current supported drivers also declare optional `textInput:"plain"|"terminal"`. This input boundary
+is independent of feature booleans: enabling interrupt or attachments cannot admit slash commands or
+unsafe terminal controls. The shared [harness contract](pluggable-harness.md#2-driver-and-context)
+owns descriptor recognition and compatibility defaults. An absent descriptor means legacy MITM; a
+present unknown descriptor or unknown input policy makes the current viewer read-only. For maintained
+tmux, current presence `mode` determines local/bypassed/unknown posture; the launch capability snapshot
+cannot override later mode changes or rotation.
+
 The host publishes immediately when meaningful presence changes and otherwise every 20 seconds. The
 viewer accepts only newer incarnation/announce coordinates and derives local connection state from a
 45-second freshness window followed by a 30-second reconnecting window. Host time is bounded by local

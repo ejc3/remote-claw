@@ -1,13 +1,16 @@
+import { formatPass } from "@remote-claw/clawsec";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { type Message, parseCapabilities } from "../app/lib/viewer.js";
+import { type Announce, type Message, parseCapabilities, Viewer } from "../app/lib/viewer.js";
 import {
   Bubble,
   isStableClaudeSurface,
   optimisticMessage,
   reconcileAccepted,
+  Transcript,
 } from "../app/page.js";
+import { uniqueIdentity } from "./helpers.js";
 
 const noGrant = async () => undefined;
 const noAnswers = new Map<string, Record<string, string | string[]>>();
@@ -37,6 +40,63 @@ function renderBubble(
 }
 
 describe("stable viewer surface", () => {
+  it("renders current tmux permission mode, not the local launch snapshot, after mode changes", async () => {
+    const viewer = await Viewer.fromPass(
+      await formatPass(await uniqueIdentity()),
+      "https://broker",
+    );
+    const announce: Announce = {
+      sessionId: "tmux-session",
+      title: "tmux",
+      cwd: null,
+      sentAt: 1_000,
+      freshnessAt: 1_000,
+      incarnation: "host-1",
+      incarnationStartedAt: 1_000,
+      announceSeq: 0,
+      status: "requires_action",
+      phase: "idle",
+      needs: true,
+      git: null,
+      harness: { agent: "claude-code", mode: "tmux" },
+      capabilities: {
+        structuredPermissions: false,
+        permissionPosture: "local",
+        textInput: "terminal",
+        status: true,
+        controls: { interrupt: false, setModel: false, setMode: false, end: false },
+        attachments: true,
+      },
+    };
+    const render = (mode?: string) =>
+      renderToStaticMarkup(
+        createElement(Transcript, {
+          viewer,
+          sessionId: announce.sessionId,
+          title: announce.title,
+          announce: { ...announce, ...(mode === undefined ? {} : { mode }) },
+          now: 1_000,
+          reconnectingSince: 0,
+          onBack: () => {},
+        }),
+      );
+
+    const local = render("default");
+    expect(local).toContain("Input needed in the local terminal");
+    expect(local).not.toContain("Permissions off");
+
+    const bypassed = render("bypassPermissions");
+    expect(bypassed).toContain("Permissions off");
+    expect(bypassed).not.toContain("Input needed in the local terminal");
+
+    // Rotation clears mode without rewriting the bridge's launch-time capability snapshot.
+    const unknown = render();
+    expect(unknown).toContain("Confirming permission mode in the local Claude tmux pane.");
+    expect(unknown).not.toContain("Input needed in the local terminal");
+    expect(unknown).not.toContain("Permissions off");
+    expect(render("default")).toContain("Input needed in the local terminal");
+  });
+
   it("keeps a present capability vector with missing or ill-typed status on compatibility UI", () => {
     const otherwiseStable = {
       structuredPermissions: false,

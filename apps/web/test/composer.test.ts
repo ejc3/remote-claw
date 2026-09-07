@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Viewer } from "../app/lib/viewer.js";
+import { parseCapabilities, parseHarness, type Viewer } from "../app/lib/viewer.js";
 import {
   composerTextForSend,
   currentTmuxPermissionPosture,
@@ -13,6 +13,7 @@ import {
   sendComposer,
   shouldClearOptimisticMode,
   stableTextBlockReason,
+  viewerInteractionPolicy,
 } from "../app/page.js";
 
 // Composer send-on-submit (#108/#112): attachments are STAGED then sent together with the text on submit
@@ -235,6 +236,62 @@ describe("supported Codex mutation surface", () => {
     expect(stableTextBlockReason(" \n\t ", true)).toBe("empty");
     expect(stableTextBlockReason(" /review ", true)).toBe("slash");
     expect(stableTextBlockReason("review this change", true)).toBeNull();
+  });
+  it("honors explicit future features without dropping plain-text restrictions", () => {
+    const harness = { agent: "codex", mode: "app-server" };
+    const policy = viewerInteractionPolicy(harness, {
+      ...caps,
+      textInput: "plain",
+      controls: { ...caps.controls, interrupt: true },
+      attachments: true,
+    });
+    expect(policy).toMatchObject({
+      text: true,
+      textInput: "plain",
+      interrupt: true,
+      attachments: true,
+    });
+    expect(stableTextBlockReason(" /review", policy.textInput === "plain")).toBe("slash");
+  });
+  it("blocks unknown harnesses and input policies even when they claim every mutation", () => {
+    for (const [rawHarness, rawCaps] of [
+      [
+        { agent: "grok", mode: "future" },
+        { ...caps, attachments: true },
+      ],
+      [
+        { agent: "codex", mode: "app-server" },
+        { ...caps, textInput: "future" },
+      ],
+    ]) {
+      const harness = parseHarness(rawHarness);
+      expect(viewerInteractionPolicy(harness, parseCapabilities(rawCaps, harness))).toEqual({
+        text: false,
+        textInput: "blocked",
+        interrupt: false,
+        attachments: false,
+        setMode: false,
+        setModel: false,
+        structuredPermissions: false,
+      });
+    }
+  });
+  it("never inherits missing native control flags from the legacy MITM defaults", () => {
+    const harness = { agent: "codex", mode: "app-server" };
+    expect(
+      viewerInteractionPolicy(harness, parseCapabilities({ textInput: "plain" }, harness)),
+    ).toMatchObject({
+      interrupt: false,
+      attachments: false,
+      setMode: false,
+      setModel: false,
+      structuredPermissions: false,
+    });
+    expect(viewerInteractionPolicy(harness, undefined).text).toBe(false);
+    expect(viewerInteractionPolicy(undefined, undefined).interrupt).toBe(true);
+    expect(
+      viewerInteractionPolicy(undefined, parseCapabilities({ textInput: "plain" })).interrupt,
+    ).toBe(false);
   });
 });
 

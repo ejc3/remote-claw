@@ -8,51 +8,22 @@
 
 import type { Identity } from "@remote-claw/clawsec";
 import type { BrokerClient } from "../../broker/client.js";
+import type { DriverCapabilities } from "../../harness.js";
 import type { Tracer } from "../../trace.js";
 import type { GitInfo } from "./gitinfo.js";
 import type { Session } from "./session.js";
 
-/** The driver names the wrapper can dispatch on (`--rc-driver=<name>`, default "mitm"). */
-export type DriverName = "mitm" | "claude-native" | "tmux" | "opencode" | "codex";
-
-/** Per-verb control support. Coarse "controlVerbs: boolean" couldn't say "interrupt works but set_mode
- *  doesn't", which made the viewer fabricate a confirmed mode/model for a driver that silently no-ops it
- *  (a permission-mode "✓" that lies). Each verb is declared independently so the viewer can disable+label
- *  exactly the controls a driver can't honor. `end` is false on EVERY driver: claude's REPL bridge has no
- *  remote session-end (see relay.ts `end` case), so no harness can faithfully service it. */
-export interface ControlCapabilities {
-  /** interrupt the current turn (mitm: control_request; tmux: ESC; opencode: abort). */
-  interrupt: boolean;
-  /** switch model and have it take effect (mitm: set_model; tmux: `/model <alias>` inject). opencode
-   *  only honors `providerID/modelID`, not the viewer's bare aliases, so it declares false. */
-  setModel: boolean;
-  /** switch permission mode (Plan / Accept-edits / …) and have the worker actually enter it (mitm only;
-   *  tmux/opencode have no faithful pane/session analogue). */
-  setMode: boolean;
-  /** end the session remotely — false everywhere (no claude REPL analogue). */
-  end: boolean;
-}
-
-/** A driver declares which broker-side features it can faithfully service. The relay surfaces this on
- *  `session_announce` and the viewer disables+labels controls a driver can't honor (no false "✓"). */
-export interface DriverCapabilities {
-  /** Can surface + round-trip structured can_use_tool permission gates remotely. False says only that
-   * the browser cannot answer: an experimental harness may bypass native gating, while stable Claude
-   * keeps any such gate local to its TUI. */
-  structuredPermissions: boolean;
-  /** Where native permission/question decisions happen when structuredPermissions is false. `unknown`
-   * is a fresh native session whose resolved mode has not reached the transcript yet. Optional for
-   * rolling compatibility: absence is never interpreted as local enforcement. */
-  permissionPosture?: "local" | "bypassed" | "unknown";
-  /** Reports real workerStatus transitions (else presence is a best-effort heuristic). */
-  status: boolean;
-  /** Per-verb control support (interrupt / setModel / setMode / end). */
-  controls: ControlCapabilities;
-  /** Receives viewer attachments. NOTE: attachments are relay-owned end-to-end — a driver never sees
-   *  the `attachment` frame, only the resulting downstream `user` prompt. So this tracks `user`
-   *  injection support; listed for documentation. */
-  attachments: boolean;
-}
+export {
+  CLAUDE_NATIVE_HARNESS,
+  CODEX_HARNESS,
+  type ControlCapabilities,
+  type DriverCapabilities,
+  type DriverName,
+  type HarnessDescriptor,
+  MITM_HARNESS,
+  OPENCODE_HARNESS,
+  TMUX_HARNESS,
+} from "../../harness.js";
 
 /** Whether text is safe to stream through a terminal's bracketed-paste path. TAB and LF are the only
  * controls the tmux composer deliberately supports; every other C0/C1 code point is rejected so an
@@ -82,6 +53,8 @@ export const MITM_CAPABILITIES: DriverCapabilities = {
 /** The stable private-relay beta exposes only plain text. Compatibility plumbing remains available internally,
  * but old/current viewers cannot drive a mutation family that is absent from the supported proof. */
 export const STABLE_MITM_CAPABILITIES: DriverCapabilities = {
+  textInput: "plain",
+  permissionPosture: "local",
   structuredPermissions: false,
   status: true,
   controls: { interrupt: false, setModel: false, setMode: false, end: false },
@@ -92,6 +65,8 @@ export const STABLE_MITM_CAPABILITIES: DriverCapabilities = {
  * not currently prove worker phase transitions, so `status` is deliberately false rather than inferred
  * from transcript traffic. Permission prompts and every non-text mutation remain native/local. */
 export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {
+  textInput: "plain",
+  permissionPosture: "local",
   structuredPermissions: false,
   status: false,
   controls: { interrupt: false, setModel: false, setMode: false, end: false },
@@ -102,37 +77,13 @@ export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {
  * question requests remain first-response-sensitive native UI interactions, so every browser mutation
  * family except text stays disabled. */
 export const CODEX_CAPABILITIES: DriverCapabilities = {
+  textInput: "plain",
+  permissionPosture: "local",
   structuredPermissions: false,
   status: true,
   controls: { interrupt: false, setModel: false, setMode: false, end: false },
   attachments: false,
 };
-
-/** Which harness a session runs, so the viewer's session list can show WHICH agent + mode it is (the
- * sessions look identical otherwise). `agent` is the product; `mode` is how we bridge it. Rides
- *  every session_announce alongside `capabilities`. */
-export interface HarnessDescriptor {
-  /** The underlying agent product. */
-  agent: "claude-code" | "opencode" | "codex";
-  /** How the session is bridged: private RC facade, provider-native RC companion, a tmux pane, or
-   * opencode's own server. */
-  mode: "rc" | "native-rc" | "tmux" | "opencode" | "app-server";
-}
-
-/** The MITM driver runs the real `claude` under native remote-control. */
-export const MITM_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "rc" };
-/** A sidecar client of Anthropic's ordinary Remote Control session; the official client remains live. */
-export const CLAUDE_NATIVE_HARNESS: HarnessDescriptor = {
-  agent: "claude-code",
-  mode: "native-rc",
-};
-/** The tmux driver runs a plain `claude` in a private tmux server, proved ready by SessionStart and
- * bridged through serialized pane injection plus transcript capture. Native permissions stay local. */
-export const TMUX_HARNESS: HarnessDescriptor = { agent: "claude-code", mode: "tmux" };
-/** The opencode driver peer-attaches to an `opencode serve`. */
-export const OPENCODE_HARNESS: HarnessDescriptor = { agent: "opencode", mode: "opencode" };
-/** The Codex driver peer-attaches to one exact thread on a caller-owned local app-server. */
-export const CODEX_HARNESS: HarnessDescriptor = { agent: "codex", mode: "app-server" };
 
 /**
  * Everything a driver needs to bridge a harness to the broker. Mirrors the launch surface

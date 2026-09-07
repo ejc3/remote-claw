@@ -34,6 +34,7 @@ import {
   BrokerStreamRotationError,
   type SeqCursor,
 } from "../../broker/client.js";
+import { harnessPolicy } from "../../harness.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import {
   type DriverCapabilities,
@@ -109,79 +110,6 @@ function supportsControl(capabilities: DriverCapabilities, kind: string): boolea
     default:
       return false;
   }
-}
-
-function isStablePlainTextSurface(
-  capabilities: DriverCapabilities,
-  harness: HarnessDescriptor,
-): boolean {
-  return (
-    harness.agent === "claude-code" &&
-    (harness.mode === "rc" || harness.mode === "native-rc") &&
-    !capabilities.structuredPermissions &&
-    !capabilities.attachments &&
-    !capabilities.controls.interrupt &&
-    !capabilities.controls.setModel &&
-    !capabilities.controls.setMode &&
-    !capabilities.controls.end
-  );
-}
-
-/** The one native-ordered OpenCode text surface. Permission mirroring and viewer-status fidelity are
- * orthogonal: neither may change prompt ordering/correlation semantics, including for older hosts. */
-function isOpencodeNativeTextSurface(
-  capabilities: DriverCapabilities,
-  harness: HarnessDescriptor,
-): boolean {
-  return (
-    harness.agent === "opencode" &&
-    harness.mode === "opencode" &&
-    capabilities.controls.interrupt &&
-    !capabilities.controls.setModel &&
-    !capabilities.controls.setMode &&
-    !capabilities.controls.end &&
-    !capabilities.attachments
-  );
-}
-
-/** Codex app-server is the ordering authority for the exact text-only companion tuple. */
-function isCodexNativeTextSurface(
-  capabilities: DriverCapabilities,
-  harness: HarnessDescriptor,
-): boolean {
-  return (
-    harness.agent === "codex" &&
-    harness.mode === "app-server" &&
-    capabilities.status &&
-    !capabilities.structuredPermissions &&
-    !capabilities.attachments &&
-    !capabilities.controls.interrupt &&
-    !capabilities.controls.setModel &&
-    !capabilities.controls.setMode &&
-    !capabilities.controls.end
-  );
-}
-
-/** The maintained tmux mutation tuple. Browser text is gated against active native turns in the driver;
- * every raw control is disabled so stale/direct client frames cannot become pane keystrokes. */
-function isTmuxGatedTextSurface(
-  capabilities: DriverCapabilities,
-  harness: HarnessDescriptor,
-): boolean {
-  return (
-    harness.agent === "claude-code" &&
-    harness.mode === "tmux" &&
-    !capabilities.structuredPermissions &&
-    (capabilities.permissionPosture === "local" ||
-      capabilities.permissionPosture === "bypassed" ||
-      capabilities.permissionPosture === "unknown") &&
-    !capabilities.status &&
-    capabilities.attachments &&
-    !capabilities.controls.interrupt &&
-    !capabilities.controls.setModel &&
-    !capabilities.controls.setMode &&
-    !capabilities.controls.end
-  );
 }
 
 /** Out-post retry budget for a transient broker error (409 = the channel was disposed or replaced
@@ -605,6 +533,7 @@ export class HostRcRelay {
   readonly #capabilities: DriverCapabilities;
   /** Which harness (agent + bridge mode) this session runs; broadcast on every announce for the list label. */
   readonly #harness: HarnessDescriptor;
+  readonly #policy: ReturnType<typeof harnessPolicy>;
   readonly #postTimeoutMs: number;
   readonly #inboundRetryDelayMs: number;
   readonly #cursorRetryBaseMs: number;
@@ -626,6 +555,8 @@ export class HostRcRelay {
     this.#attachmentsDir = opts.attachmentsDir ?? defaultAttachmentsDir(opts.sessionId);
     this.#capabilities = opts.capabilities ?? MITM_CAPABILITIES;
     this.#harness = opts.harness ?? MITM_HARNESS;
+    this.#policy = harnessPolicy(this.#harness, this.#capabilities);
+    if (this.#policy.textInput === "blocked") throw new Error("unsupported harness input policy");
     this.#postTimeoutMs = checkedDuration(
       opts.postTimeoutMs,
       LOGICAL_POST_TIMEOUT_MS,
@@ -1133,10 +1064,7 @@ export class HostRcRelay {
     this.#durabilityDiscovered = true;
     this.#durable = seqCursor.durable;
     if (!this.#durable) {
-      if (
-        isStablePlainTextSurface(this.#capabilities, this.#harness) ||
-        isCodexNativeTextSurface(this.#capabilities, this.#harness)
-      ) {
+      if (this.#policy.requireDurable) {
         const error = new Error("stable remote control requires a durable broker backend");
         this.#fatal = true;
         this.#fatalCause = error;
@@ -1422,12 +1350,9 @@ export class HostRcRelay {
       if (frame.recordKind === "user") {
         const text = new TextDecoder().decode(plaintext);
         const trimmed = text.trim();
-        const tmuxTextSurface = isTmuxGatedTextSurface(this.#capabilities, this.#harness);
+        const tmuxTextSurface = this.#policy.textInput === "terminal";
         if (
-          ((isStablePlainTextSurface(this.#capabilities, this.#harness) ||
-            isOpencodeNativeTextSurface(this.#capabilities, this.#harness) ||
-            isCodexNativeTextSurface(this.#capabilities, this.#harness) ||
-            tmuxTextSurface) &&
+          ((this.#policy.textInput === "plain" || tmuxTextSurface) &&
             (trimmed === "" || trimmed.startsWith("/"))) ||
           (tmuxTextSurface && !isTmuxPaneSafeText(text))
         ) {
@@ -1435,11 +1360,7 @@ export class HostRcRelay {
           admitted();
           continue;
         }
-        if (
-          this.#harness.mode === "native-rc" ||
-          isOpencodeNativeTextSurface(this.#capabilities, this.#harness) ||
-          isCodexNativeTextSurface(this.#capabilities, this.#harness)
-        ) {
+        if (this.#policy.ordering === "native") {
           // Native history is the ordering authority for this companion. First prove the broker can
           // durably record a pre-mutation admission, then enqueue one immutable native UUID/timestamp.
           // This seq-null shape is intentionally ignored by current viewers; the canonical history
@@ -1639,10 +1560,7 @@ export class HostRcRelay {
     try {
       const body = JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
       caption = typeof body.caption === "string" ? body.caption : "";
-      if (
-        isTmuxGatedTextSurface(this.#capabilities, this.#harness) &&
-        !isTmuxPaneSafeText(caption)
-      ) {
+      if (this.#policy.textInput === "terminal" && !isTmuxPaneSafeText(caption)) {
         throw new Error("attachment caption contains a pane-unsafe control character");
       }
       // New grouped shape: { images: [{name,mime,data}], caption }. Legacy: { name,mime,data,caption }.

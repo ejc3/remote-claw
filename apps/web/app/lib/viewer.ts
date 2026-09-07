@@ -18,6 +18,13 @@ import {
   FrameOrderer,
   securityProvider,
 } from "@remote-claw/cli/broker";
+import {
+  type ControlCapabilities,
+  type DriverCapabilities,
+  type HarnessDescriptor,
+  harnessMetadata,
+  parseHarnessDescriptor,
+} from "@remote-claw/cli/harness";
 
 const td = new TextDecoder();
 
@@ -253,38 +260,26 @@ export function announceFreshnessAt(
 
 /** Which harness a session runs (mirrors the host's HarnessDescriptor) — the viewer's session list
  *  labels private-relay Claude, native-companion Claude, tmux Claude, OpenCode, and Codex distinctly. */
-export interface Harness {
-  agent: "claude-code" | "opencode" | "codex";
-  mode: "rc" | "native-rc" | "tmux" | "opencode" | "app-server";
-}
+export type Harness = HarnessDescriptor;
 
 /** Per-verb control support a driver declares (mirrors the host's ControlCapabilities). The viewer
  *  disables + labels the controls a driver can't honor, so a permission-mode/model "✓" never lies. */
-export interface ControlCaps {
-  interrupt: boolean;
-  setModel: boolean;
-  setMode: boolean;
-  end: boolean;
-}
+export type ControlCaps = ControlCapabilities;
 
 /** Driver capabilities as carried on session_announce (mirrors the host's DriverCapabilities). */
-export interface Capabilities {
-  structuredPermissions: boolean;
-  permissionPosture?: "local" | "bypassed" | "unknown";
-  status: boolean;
-  controls: ControlCaps;
-  attachments: boolean;
+export interface Capabilities extends Omit<DriverCapabilities, "textInput"> {
+  /** `blocked` is a local parser sentinel, never an advertised host capability. */
+  textInput?: "plain" | "terminal" | "blocked";
 }
 
 /** Defensively coerce an announce's `capabilities` into Capabilities|undefined. Decrypted-but-untrusted
  *  (AEAD proves the host wrote it, not that it's well-formed), so every field is type-checked. A missing
- *  or malformed body returns undefined → the viewer treats the host as fully capable (no false gating of
- *  a legacy MITM host). A present vector's `status` must be a literal boolean because truthful status is
+ *  or malformed body returns undefined; only legacy MITM retains compatibility controls in that case.
+ *  A present vector's `status` must be a literal boolean because truthful status is
  *  part of the exact stable-Claude admission tuple; missing/malformed status therefore fails that tuple.
- *  Mutation fields default to ENABLED when absent, for the same don't-over-gate reason, which also keeps
- *  a partial vector on the compatibility surface; a driver that can't honor a mutation states `false`
- *  explicitly. */
-export function parseCapabilities(raw: unknown): Capabilities | undefined {
+ *  Mutation defaults remain enabled only for legacy/private MITM compatibility. Known native and
+ *  unknown harnesses require explicit true. An invalid textInput becomes a local blocked sentinel. */
+export function parseCapabilities(raw: unknown, harness?: Harness): Capabilities | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const c = raw as Record<string, unknown>;
   const ctlRaw =
@@ -292,6 +287,14 @@ export function parseCapabilities(raw: unknown): Capabilities | undefined {
       ? (c.controls as Record<string, unknown>)
       : {};
   const bool = (v: unknown, dflt: boolean): boolean => (typeof v === "boolean" ? v : dflt);
+  const legacyDefaults =
+    harnessMetadata(harness).textInput === "legacy" && c.textInput === undefined;
+  const textInput =
+    c.textInput === undefined
+      ? undefined
+      : c.textInput === "plain" || c.textInput === "terminal"
+        ? c.textInput
+        : "blocked";
   const permissionPosture =
     c.permissionPosture === "local" ||
     c.permissionPosture === "bypassed" ||
@@ -299,39 +302,26 @@ export function parseCapabilities(raw: unknown): Capabilities | undefined {
       ? c.permissionPosture
       : undefined;
   return {
-    structuredPermissions: bool(c.structuredPermissions, true),
+    structuredPermissions: bool(c.structuredPermissions, legacyDefaults),
+    ...(textInput !== undefined ? { textInput } : {}),
     ...(permissionPosture !== undefined ? { permissionPosture } : {}),
     status: bool(c.status, false),
     controls: {
-      interrupt: bool(ctlRaw.interrupt, true),
-      setModel: bool(ctlRaw.setModel, true),
-      setMode: bool(ctlRaw.setMode, true),
-      end: bool(ctlRaw.end, true),
+      interrupt: bool(ctlRaw.interrupt, legacyDefaults),
+      setModel: bool(ctlRaw.setModel, legacyDefaults),
+      setMode: bool(ctlRaw.setMode, legacyDefaults),
+      end: bool(ctlRaw.end, legacyDefaults),
     },
-    attachments: bool(c.attachments, true),
+    attachments: bool(c.attachments, legacyDefaults),
   };
 }
 
-/** The exact agent+mode PAIRS a host can announce. An enum-valid but nonsensical pair (for example,
- *  claude-code+opencode) must NOT slip through and mislabel, so match the whole descriptor rather than
- *  validating each field independently. */
-const KNOWN_HARNESSES: readonly Harness[] = [
-  { agent: "claude-code", mode: "rc" },
-  { agent: "claude-code", mode: "native-rc" },
-  { agent: "claude-code", mode: "tmux" },
-  { agent: "opencode", mode: "opencode" },
-  { agent: "codex", mode: "app-server" },
-];
-
 /** Defensively coerce an announce's `harness` into Harness|undefined. Decrypted-but-untrusted (AEAD
  *  proves the host wrote it, not that it's well-formed), so the (agent, mode) PAIR is matched against the
- *  declared descriptors; anything else → undefined, and the viewer falls back to the private MITM label
- *  (the only legacy host). Matching the pair (not each field) means a hostile body
- *  with a valid-but-mismatched combo can't be mislabelled instead of falling back. */
+ *  declared descriptors. Only absence means legacy MITM; a present unknown/malformed pair becomes the
+ *  shared unknown sentinel and cannot inherit the legacy host's mutation defaults. */
 export function parseHarness(raw: unknown): Harness | undefined {
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const h = raw as Record<string, unknown>;
-  return KNOWN_HARNESSES.find((k) => k.agent === h.agent && k.mode === h.mode);
+  return parseHarnessDescriptor(raw);
 }
 
 /** Defensively coerce an announce's `git` field into GitInfo|null. The body is decrypted-but-untrusted
@@ -583,10 +573,10 @@ export class Viewer {
             git: parseGit(body.git), // git chip (#49); null outside a repo / on an old host
           };
           if (typeof body.mode === "string" && body.mode !== "") announce.mode = body.mode;
-          const caps = parseCapabilities(body.capabilities); // driver capabilities (#149); undefined on legacy hosts
-          if (caps) announce.capabilities = caps;
           const harness = parseHarness(body.harness); // agent + mode label; undefined on legacy hosts
           if (harness) announce.harness = harness;
+          const caps = parseCapabilities(body.capabilities, harness);
+          if (caps) announce.capabilities = caps;
           const existing = this.#acceptedAnnounces.get(sessionId);
           if (!shouldAcceptAnnounce(existing, announce)) continue;
           announce.freshnessAt = announceFreshnessAt(existing, announce, receivedAt);

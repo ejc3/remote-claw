@@ -43,6 +43,24 @@ model work runs; it does not select browser identity, broker transport, readines
 capabilities. Accountless means no Anthropic account and still requires the chosen provider and
 remote-claw credentials.
 
+## Current tranche: harness contract
+
+The endpoint is one browser-safe, static harness contract shared by the host and the desktop/mobile
+viewer. It owns descriptor recognition, labels, native ordering, durable admission, and text-input
+policy. Existing supported drivers explicitly announce optional `capabilities.textInput`, either
+`plain` (non-empty, non-slash text) or `terminal` (also excludes unsafe terminal controls). Features
+such as interrupt and attachments remain separate booleans: enabling one must not weaken ordering,
+durability, or text restrictions. Older MITM announcements retain their bounded compatibility fallback;
+experimental MITM is not silently promoted to the stable surface. Unknown harnesses or unknown input
+policies are read-only in the viewer. No control is graduated by this refactor.
+
+The owner map is the shared CLI contract/export, driver declarations, relay policy use, viewer
+recognition/labels, and focused tests. Dispatch stays explicit. Native protocol clients, broker storage,
+crypto, orchestration, dynamic plugins, and speculative Grok protocol support are out of scope. The
+gate is focused native-order/durable/text-policy regressions, desktop/mobile viewer checks, ordinary
+repository checks, and independent review. Adding another CLI should require its adapter, metadata,
+launch wiring, and its acceptance—not provider switches in the relay or transcript renderer.
+
 ## 1. The seam
 
 ```text
@@ -54,7 +72,9 @@ OpenCode  ─┤
 Codex     ─┘
 ```
 
-`packages/cli/src/host/rc/driver.ts` defines the shared types. A driver owns:
+`packages/cli/src/harness.ts` owns the browser-safe metadata and capability types, exported as
+`@remote-claw/cli/harness`; `host/rc/driver.ts` retains the host adapter/session types and re-exports
+existing descriptor and capability names. A driver owns:
 
 - native attachment/readiness, plus startup only where that adapter contract grants it;
 - capture from its harness into canonical upstream payloads;
@@ -104,6 +124,7 @@ controls.setModel
 controls.setMode
 controls.end
 attachments
+textInput? = plain | terminal
 ```
 
 The viewer disables unsupported controls, and `HostRcRelay` enforces the same vector again on inbound
@@ -122,7 +143,22 @@ The harness descriptor is separate from capabilities:
 | `opencode` | `{agent:"opencode", mode:"opencode"}` |
 | `codex` | `{agent:"codex", mode:"app-server"}` |
 
-It labels the session in the viewer; it does not grant authority.
+The shared metadata labels the session and declares its ordering, durable-admission requirement,
+default text policy, native UI name, and whether the composer preserves outer whitespace. Capability
+flags independently enable supported feature families. A descriptor alone grants no control capability.
+Claude-native, OpenCode, and Codex use native transcript order; private MITM and tmux use relay order.
+Stable MITM, Claude-native, and Codex require durable broker admission. OpenCode and tmux retain their
+existing compatibility admission behavior; this refactor does not expand or graduate those surfaces.
+
+Current supported drivers explicitly declare `textInput`: `plain` rejects empty/slash input;
+`terminal` also rejects C0/C1 characters other than TAB/LF. A tmux announcement cannot weaken the
+terminal restriction by declaring `plain`. These policies survive changes to interrupt, attachments,
+permissions, or status. Only older private MITM hosts still infer the stable plain-text boundary from
+their all-disabled mutation vector; experimental MITM without an explicit input policy keeps its legacy
+behavior. The host rejects an unknown harness or input policy before starting the relay. The viewer
+distinguishes an absent descriptor (legacy MITM) from a present unknown/malformed descriptor, which is
+read-only and labelled “Unknown agent.” Missing native control fields default off; a declared unknown
+input policy disables all browser mutations. Both phone and desktop use this same policy.
 
 ## 3. Canonical `Session` contract
 
@@ -381,7 +417,8 @@ active relay.
 
 ## 8. Code and test map
 
-- `packages/cli/src/host/rc/driver.ts` — driver types, capabilities, descriptors, canonical payloads.
+- `packages/cli/src/harness.ts` — browser-safe metadata, descriptor recognition, capability types, policy.
+- `packages/cli/src/host/rc/driver.ts` — host adapter types, current capability values, canonical payloads.
 - `packages/cli/src/host/rc/session.ts` — shared in-memory event bus.
 - `packages/cli/src/host/rc/drivers/bridge.ts` — one shared `Session` → broker bridge.
 - `packages/cli/src/host/rc/drivers/ready-bridge.ts` — process-local readiness lifecycle.
@@ -393,6 +430,40 @@ active relay.
 - `packages/cli/src/host/rc/codex/**` — app-server client, Codex adapter, and focused tests.
 - `packages/cli/src/run.ts` and `packages/cli/src/args.ts` — dispatch and flags.
 
-The relay and browser tests remain driver-independent. Adapter tests use injected native clients,
+Relay and browser tests cover the shared contract, including each existing adapter's semantic policy.
+Adapter tests use injected native clients,
 filesystem/tmux seams, clocks, and broker clients. The opt-in OpenCode e2e suite can exercise a live
 local `opencode serve`; the M3a acceptance uses a real app-server/TUI and two browser contexts.
+
+## 9. Adding another CLI harness
+
+A future harness such as Grok should use the same adapter seam. There is no Grok compatibility claim
+until its actual CLI/protocol and native collaboration behavior have been observed.
+
+1. Pick one real native seam and a bounded supported version/platform. State whether the companion
+   owns a child or only attaches, how an exact session is selected, and which local/official clients
+   must remain live. Do not infer a protocol from another provider's name or terminal appearance.
+2. Add one `HARNESSES` metadata entry in `packages/cli/src/harness.ts`: descriptor, labels, native UI,
+   ordering, durable requirement, text policy, and whitespace behavior. Keep optional feature flags in
+   the adapter's explicit capabilities. New known metadata is sufficient for generic viewer labels,
+   input/control gating, and relay policy; do not add provider switches to their implementations.
+3. Implement `host/rc/<name>/client.ts` and `driver.ts` against `DriverContext`, `Session`, and
+   `ReadyBridge`. Reuse existing canonical text/tool/task payloads. Complete/deduplicate capture before
+   publication, preserve native ordering when declared, and fence rejected or ambiguous mutations
+   instead of retrying an action that might already have happened. Announce no unproved capability.
+4. Wire explicit dispatch, driver-specific option ownership, and validation in `run.ts`; reserve flags
+   in `args.ts` and explain them in `help.ts`. Reject an explicit attach request without its broker or
+   exact target before identity creation, native probes, or a fallback launch. Reuse identity, broker,
+   scoped bypass, and signal handling. Never pass provider credentials through browser or child argv.
+5. Keep detailed regressions at the native boundary using injected clients: readiness, canonical
+   capture, one injection, unsupported controls, ambiguous sends, and teardown ownership. Extend the
+   shared policy test only when introducing a genuinely new semantic—not for every provider event.
+6. Graduate the smallest real outcome through the packed CLI, native UI, and independent desktop and
+   mobile browsers. They must expose the same supported actions and transcript, with responsive layout;
+   an unavailable native feature must be honestly unavailable on both. Exercise official-provider
+   coexistence when available. Cross-process/provider behavior belongs in this opt-in acceptance;
+   repeatable policy defects belong in focused deterministic tests.
+
+The shared broker, crypto, storage, and transcript renderer need no new implementation for another
+adapter using these semantics. A genuinely new capability requires one reviewed shared contract change
+(including the bridge's explicit capability snapshot), not a parallel transport or plugin framework.

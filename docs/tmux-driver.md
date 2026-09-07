@@ -194,7 +194,8 @@ The current viewer labels permissions local only for the exact maintained tmux t
 evidence. For explicit `unknown`, it shows **Confirming permission mode in the local Claude tmux
 pane.** and keeps ordinary browser text and attachments enabled. The existing transcript pump
 projects later timestamped matching-session permission evidence through presence's `mode`; the viewer
-then becomes `local` or `bypassed` and follows later local mode changes. This is
+then becomes `local` or `bypassed` and follows later local mode changes. Current mode is authoritative
+over the bridge's launch-time capability snapshot, including after rotation. This is
 metadata observation, not a settings parser or permission hook: no request or decision content is
 transported and the browser still cannot answer a gate. Explicit bypass and a legacy announcement with
 no posture show **Permissions off**. Older viewers that do not understand the new local or unknown

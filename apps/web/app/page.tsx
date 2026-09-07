@@ -13,6 +13,7 @@ import { Spinner } from "@astryxdesign/core/Spinner";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Text } from "@astryxdesign/core/Text";
 import { parsePass, toHex } from "@remote-claw/clawsec";
+import { harnessMetadata, harnessPolicy } from "@remote-claw/cli/harness";
 import {
   type CSSProperties,
   memo,
@@ -812,17 +813,30 @@ export function transcriptHasVisibleAddition(
  *  omits `harness` and falls back to the private-relay RC label. The native companion is named explicitly
  *  so it cannot be mistaken for that replacement relay. */
 function harnessLabel(harness: Harness | undefined): string {
-  if (harness?.agent === "opencode") return "OpenCode";
-  if (harness?.agent === "codex") return "Codex";
-  return "Claude Code";
+  return harnessMetadata(harness).label;
 }
 
 function harnessDetail(harness: Harness | undefined): string {
-  if (harness?.agent === "opencode") return "Native OpenCode session";
-  if (harness?.agent === "codex") return "Local app-server";
-  if (harness?.mode === "native-rc") return "Anthropic remote control";
-  if (harness?.mode === "tmux") return "Terminal bridge";
-  return "Private relay";
+  return harnessMetadata(harness).detail;
+}
+
+/** One interaction policy on phone and desktop; provider names do not grant or disable features. */
+export function viewerInteractionPolicy(
+  harness: Harness | undefined,
+  caps: Capabilities | undefined,
+) {
+  const policy = harnessPolicy(harness, caps);
+  const legacy = harnessMetadata(harness).textInput === "legacy" && caps?.textInput === undefined;
+  const enabled = policy.textInput !== "blocked" && (caps !== undefined || legacy);
+  return {
+    textInput: policy.textInput,
+    text: enabled,
+    setMode: enabled && (caps?.controls.setMode ?? legacy),
+    setModel: enabled && (caps?.controls.setModel ?? legacy),
+    interrupt: enabled && (caps?.controls.interrupt ?? legacy),
+    attachments: enabled && (caps?.attachments ?? legacy),
+    structuredPermissions: enabled && (caps?.structuredPermissions ?? legacy),
+  };
 }
 
 /** The session's git context (#49): branch, a dot for uncommitted changes, and ahead/behind vs its
@@ -1170,7 +1184,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   );
 }
 
-function Transcript(props: {
+export function Transcript(props: {
   viewer: Viewer;
   sessionId: string;
   title: string;
@@ -1267,8 +1281,9 @@ function Transcript(props: {
   // honor a verb (tmux/opencode set_mode; opencode set_model) declares it false → the viewer disables
   // that control so it never shows a "✓" the worker never applied.
   const caps = announce?.capabilities;
+  const metadata = harnessMetadata(announce?.harness);
+  const interaction = viewerInteractionPolicy(announce?.harness, caps);
   const stableClaude = isStableClaudeSurface(announce?.harness, caps);
-  const openCode = announce?.harness?.agent === "opencode" && announce.harness.mode === "opencode";
   const codex = announce?.harness?.agent === "codex" && announce.harness.mode === "app-server";
   // Rolling deploys can still surface an older tmux host with either the historical permission mirror
   // or explicit bypass. Only a new, exact local-posture tuple earns the local-ownership claim.
@@ -1276,27 +1291,28 @@ function Transcript(props: {
   const tmuxPermissionPosture = currentTmuxPermissionPosture(announce?.harness, caps, announceMode);
   const tmuxLocalPermissions = tmuxText && tmuxPermissionPosture === "local";
   const tmuxPermissionsUnknown = tmuxText && tmuxPermissionPosture === "unknown";
-  const nativeOpenCode = isOpenCodeNativeTextSurface(announce?.harness, caps);
   const supportedOpenCode = isSupportedOpenCodeSurface(announce?.harness, caps);
-  // Codex has no compatibility control surface: once the validated harness pair says app-server,
-  // fail closed to native text/local gates even if a future or malformed capability vector differs.
-  const nativeTextOnly = stableClaude || nativeOpenCode || codex || tmuxText;
-  const localInputDisclosure = codex
-    ? "Approvals and questions stay in the local Codex TUI."
-    : supportedOpenCode
-      ? "Permission prompts stay in the OpenCode TUI."
-      : tmuxLocalPermissions
-        ? "Permissions and questions stay in the local Claude tmux pane."
-        : tmuxPermissionsUnknown
-          ? "Confirming permission mode in the local Claude tmux pane."
-          : stableClaude && announce?.harness?.mode === "rc"
-            ? "Local terminal prompts may not appear here."
-            : null;
-  const supportsSetMode = codex ? false : (caps?.controls.setMode ?? true);
-  const supportsSetModel = codex ? false : (caps?.controls.setModel ?? true);
-  const supportsInterrupt = codex ? false : (caps?.controls.interrupt ?? true);
-  const supportsAttachments = codex ? false : (caps?.attachments ?? true);
-  const supportsRemotePermissions = codex ? false : (caps?.structuredPermissions ?? true);
+  const nativeTextOnly = interaction.textInput === "plain" || interaction.textInput === "terminal";
+  const localInputDisclosure = !interaction.text
+    ? "This harness or input policy is not supported. Update remote-claw to enable controls."
+    : interaction.structuredPermissions
+      ? null
+      : codex
+        ? "Approvals and questions stay in the local Codex TUI."
+        : supportedOpenCode
+          ? "Permission prompts stay in the OpenCode TUI."
+          : tmuxLocalPermissions
+            ? "Permissions and questions stay in the local Claude tmux pane."
+            : tmuxPermissionsUnknown
+              ? "Confirming permission mode in the local Claude tmux pane."
+              : stableClaude && announce?.harness?.mode === "rc"
+                ? "Local terminal prompts may not appear here."
+                : null;
+  const supportsSetMode = interaction.setMode;
+  const supportsSetModel = interaction.setModel;
+  const supportsInterrupt = interaction.interrupt;
+  const supportsAttachments = interaction.attachments;
+  const supportsRemotePermissions = interaction.structuredPermissions;
   const canSetMode = remoteMutationEnabled(connected, supportsSetMode);
   const canSetModel = remoteMutationEnabled(connected, supportsSetModel);
   const canInterrupt = remoteMutationEnabled(connected, supportsInterrupt);
@@ -1305,22 +1321,33 @@ function Transcript(props: {
   // `structuredPermissions:false` means only that the BROWSER cannot answer. Stable Claude, the exact
   // supported OpenCode tuple, Codex app-server, and tmux keep gates in their native/local UI; an
   // explicit compatibility bypass posture is a different claim.
-  const permissionsLocal = stableClaude || supportedOpenCode || codex || tmuxLocalPermissions;
-  const workerLabel: "Claude" | "OpenCode" | "Codex" = openCode
-    ? "OpenCode"
-    : codex
-      ? "Codex"
-      : "Claude";
+  const permissionsLocal =
+    !supportsRemotePermissions &&
+    ((tmuxText ? tmuxLocalPermissions : caps?.permissionPosture === "local") ||
+      stableClaude ||
+      supportedOpenCode ||
+      codex);
+  const workerLabel = metadata.shortLabel;
   const permissionAgent = workerLabel;
   const permsBypassed =
-    caps?.structuredPermissions === false && !permissionsLocal && !tmuxPermissionsUnknown;
-  const textBlockReason = stableTextBlockReason(input, nativeTextOnly, tmuxText);
+    interaction.text &&
+    caps?.structuredPermissions === false &&
+    !permissionsLocal &&
+    !tmuxPermissionsUnknown;
+  const textBlockReason = stableTextBlockReason(
+    input,
+    nativeTextOnly,
+    interaction.textInput === "terminal",
+  );
   const slashBlocked = textBlockReason === "slash";
   const controlBlocked = textBlockReason === "control";
   const composerHasPayload =
     textBlockReason === null ||
     (textBlockReason === "empty" && supportsAttachments && staged.length > 0);
-  const canSend = remoteMutationEnabled(connected, composerHasPayload && !slashBlocked);
+  const canSend = remoteMutationEnabled(
+    connected,
+    interaction.text && composerHasPayload && !slashBlocked,
+  );
 
   // Reconcile a fresh announce against the optimistic pick: clear it once the announce CONFIRMS the pick or
   // shows a genuine remote change, but KEEP it while the announce still echoes the pre-pick mode (a
@@ -1554,14 +1581,18 @@ function Transcript(props: {
   const send = useCallback(async () => {
     // OpenCode's native message identity binds immutable text. Validate with trim, but preserve every
     // original text byte for an admitted prompt; other surfaces retain their established trim behavior.
-    const text = composerTextForSend(input, nativeOpenCode);
+    const text = composerTextForSend(input, metadata.preserveText);
     // Mutation gates are repeated at the action boundary: disabled controls are presentation, not proof.
-    if (!connected) return;
+    if (!connected || !interaction.text) return;
     if (!supportsAttachments && staged.length > 0) {
       clearStaged();
       return;
     }
-    const blockReason = stableTextBlockReason(text, nativeTextOnly, tmuxText);
+    const blockReason = stableTextBlockReason(
+      text,
+      nativeTextOnly,
+      interaction.textInput === "terminal",
+    );
     if (
       blockReason === "slash" ||
       blockReason === "control" ||
@@ -1604,9 +1635,10 @@ function Transcript(props: {
     clearStaged,
     connected,
     supportsAttachments,
-    nativeOpenCode,
+    metadata.preserveText,
+    interaction.text,
+    interaction.textInput,
     nativeTextOnly,
-    tmuxText,
   ]);
 
   // Auto-grow the composer textarea up to a cap; recompute whenever the text changes (incl. on clear).
@@ -1853,8 +1885,7 @@ function Transcript(props: {
         )}
         {slashBlocked && (
           <p className="staged-notice" role="status">
-            Slash commands aren’t available remotely. Use the local{" "}
-            {openCode ? "OpenCode TUI" : codex ? "Codex TUI" : "Claude terminal"}.
+            Slash commands aren’t available remotely. Use the local {metadata.localUi}.
           </p>
         )}
         {controlBlocked && (
@@ -1964,15 +1995,19 @@ function Transcript(props: {
           agentLabel={harnessLabel(announce?.harness)}
           connectionLabel={harnessDetail(announce?.harness)}
           permissionLabel={
-            permsBypassed
-              ? "Per-tool permissions are off"
-              : permissionsLocal
-                ? codex
-                  ? "Approvals and questions stay in Codex"
-                  : supportedOpenCode
-                    ? "Permission prompts stay in OpenCode"
-                    : "Permission prompts stay in the local terminal"
-                : "Permission prompts can be answered here"
+            !interaction.text
+              ? "Controls unavailable for this harness"
+              : permsBypassed
+                ? "Per-tool permissions are off"
+                : tmuxPermissionsUnknown
+                  ? "Confirming permission mode in the local terminal"
+                  : permissionsLocal
+                    ? codex
+                      ? "Approvals and questions stay in Codex"
+                      : supportedOpenCode
+                        ? "Permission prompts stay in OpenCode"
+                        : "Permission prompts stay in the local terminal"
+                    : "Permission prompts can be answered here"
           }
           branch={announce?.git?.branch ?? null}
           currentModel={optimisticModel}
@@ -2032,7 +2067,7 @@ function StatusStrip({
   needs: boolean;
   interrupting: boolean;
   permissionsLocal: boolean;
-  workerLabel: "Claude" | "OpenCode" | "Codex";
+  workerLabel: string;
 }) {
   // role="alert" (assertive) for states that need attention now; role="status" (polite) for ambient
   // activity — so a screen reader announces the flip to disconnected / needs-you / working (#58 a11y).
@@ -2580,7 +2615,7 @@ export function Bubble({
   onGrant: GrantFn;
   canGrant: boolean;
   permissionsLocal: boolean;
-  permissionAgent?: "Claude" | "OpenCode" | "Codex";
+  permissionAgent?: string;
   hostConnected: boolean;
   resolved: Map<string, "allow" | "deny">;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
@@ -2696,7 +2731,7 @@ function PermissionRow({
   onGrant: GrantFn;
   canGrant: boolean;
   permissionsLocal: boolean;
-  permissionAgent: "Claude" | "OpenCode" | "Codex";
+  permissionAgent: string;
   hostConnected: boolean;
   resolved: Map<string, "allow" | "deny">;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;

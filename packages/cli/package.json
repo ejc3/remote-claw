@@ -10,7 +10,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./broker": "./src/broker/index.ts",
-    "./rc": "./src/host/rc/index.ts"
+    "./rc": "./src/host/rc/index.ts",
+    "./harness": "./src/harness.ts"
   },
   "dependencies": {
     "@remote-claw/clawsec": "workspace:*",

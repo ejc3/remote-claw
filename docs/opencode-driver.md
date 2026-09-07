@@ -200,6 +200,8 @@ The default supported vector is:
 | Capability | Value | Meaning |
 | --- | --- | --- |
 | Structured permissions | false | policy and gates stay native/local |
+| Permission posture | local | the browser cannot answer native gates |
+| Text input | plain | non-empty, non-slash text; outer whitespace is preserved |
 | Status | true | read-only MAIN status: native `busy`/`retry` maps to running; ordinary idle requires exact history/status reproof |
 | Interrupt | true | exact-session native abort |
 | Set model | false | tuple is pinned |
@@ -207,8 +209,8 @@ The default supported vector is:
 | End | false | companion does not own the native session |
 | Attachments | false | no proved native file-part fidelity |
 
-Experimental permission mirroring changes only `structuredPermissions` to true after its parent rule
-is installed and read back. It does not graduate any other capability. Attachment rejection happens
+Experimental permission mirroring sets `structuredPermissions` to true and omits the local posture
+after its parent rule is installed and read back. It does not graduate any other capability. Attachment rejection happens
 before reassembly or file writes.
 
 ## 8. Teardown and restart

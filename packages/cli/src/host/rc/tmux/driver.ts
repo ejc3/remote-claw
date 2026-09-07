@@ -287,6 +287,7 @@ export function tmuxCapabilities(
     status: false,
     controls: { interrupt: false, setModel: false, setMode: false, end: false },
     attachments: true,
+    textInput: "terminal",
   };
 }
 
