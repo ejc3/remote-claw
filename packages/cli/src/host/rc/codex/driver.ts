@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import { CODEX_CAPABILITIES, CODEX_HARNESS, type Driver, type DriverContext } from "../driver.js";
 import { ReadyBridge } from "../drivers/ready-bridge.js";
+import { toolResultOutput } from "../relay.js";
 import { type RcEvent, RelayCore, type Session } from "../session.js";
 import {
   assertCodexCompatibility,
@@ -206,14 +208,12 @@ class CodexReconciler {
         return;
       const output = item.aggregatedOutput ?? "";
       const failed = item.status !== "completed" || (item.exitCode !== null && item.exitCode !== 0);
-      const fingerprint = JSON.stringify([
-        item.type,
-        item.command,
-        item.cwd,
-        item.status,
-        item.exitCode,
-        output,
-      ]);
+      // Retain only a digest, but fence changes even beyond the displayed output prefix.
+      const fingerprint = createHash("sha256")
+        .update(
+          JSON.stringify([item.type, item.command, item.cwd, item.status, item.exitCode, output]),
+        )
+        .digest("hex");
       if (!this.#admit(coordinate, fingerprint)) return;
       this.#session.pushUpstream({
         type: "assistant",
@@ -240,13 +240,15 @@ class CodexReconciler {
               type: "tool_result",
               tool_use_id: coordinate,
               is_error: failed,
-              content:
+              // Session retains upstream events before the relay applies its publication bound.
+              content: toolResultOutput(
                 output ||
-                (item.status === "declined"
-                  ? "Command declined in native Codex."
-                  : failed
-                    ? `Command failed in native Codex${item.exitCode === null ? "." : ` (exit ${item.exitCode}).`}`
-                    : ""),
+                  (item.status === "declined"
+                    ? "Command declined in native Codex."
+                    : failed
+                      ? `Command failed in native Codex${item.exitCode === null ? "." : ` (exit ${item.exitCode}).`}`
+                      : ""),
+              ),
             },
           ],
         },
