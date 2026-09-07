@@ -17,6 +17,9 @@ through the managed Unix socket, including provider-origin and browser-origin te
 browser turns after provider-transport disconnect. Viewer UI-1 then completed an exact-count activity
 rollup and chronological detail sheet without adding provider lifecycle claims. The OpenCode status
 follow-on has since implemented, advertised, and separately accepted read-only MAIN running/idle.
+The separate [Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) also passed
+fresh-projection restart/backfill and broker-loss isolation on explicit-port loopback WebSocket with
+paginated history.
 Current evidence and remaining gates live in
 [native coexistence](native-rc-passthrough-scoping.md) and the
 [release roadmap](release-finish-line.md).
@@ -74,9 +77,13 @@ completed after the provider transport disconnected.
 
 Keep the result narrow: explicit UUIDv7, attached-TUI precondition, non-empty non-slash text, real
 status, and no other browser controls. Provider-transport isolation does not prove that a particular
-phone or desktop client unsubscribed. Companion restart/backfill, broker-loss acceptance, stable
-projection identity, richer content and controls, and other Codex versions/platforms remain later
-adapter-local gates; they do not reopen M3a or M3b.
+phone or desktop client unsubscribed. The separate 2026-09-07
+[recovery acceptance](release-finish-line.md#codex-recovery--complete) establishes fresh-projection
+restart/backfill and broker-loss isolation for the pinned version/platform with explicit-port loopback
+WebSocket, paginated history, a packed CLI, local SQLite, one TUI, and two browsers. Recovery through
+managed Unix/legacy history or alongside official Remote, stable projection identity, richer content
+and controls, and other Codex versions/platforms remain later adapter-local gates; they do not reopen
+M3a or M3b.
 
 ### tmux compatibility
 

@@ -45,8 +45,13 @@ appeared exactly once in the official thread, TUI, and both browsers, and the se
 the host receipt. An ephemeral provider transport was then disabled and remained disabled while a
 browser-B turn completed; the managed daemon, TUI, companion, and both browsers stayed live, after
 which provider transport restored to connected. This proves provider-transport isolation, not a
-per-device unsubscribe. It does not graduate richer controls, companion restart/backfill, or broker-loss
-recovery. The attachment path
+per-device unsubscribe. A separate 2026-09-07
+[Codex recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) now covers the same
+version/platform through explicit-port loopback WebSocket with paginated history: a packed CLI,
+attached local TUI, and two browsers survived fresh-projection restart/backfill without replaying
+native mutations; broker loss retired only the companion while local work completed. Recovery through
+managed Unix/legacy history or alongside official Remote, stable projection identity, and richer
+controls remain unclaimed. The attachment path
 accepts literal `unix://` only as Codex's same-user managed control socket
 (`$CODEX_HOME/app-server-control/app-server-control.sock`, falling back to `~/.codex`), while retaining
 the historical explicit-port loopback WebSocket form and rejecting arbitrary Unix paths. Resume's

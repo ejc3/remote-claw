@@ -397,6 +397,9 @@ export class CodexDriver implements Driver {
       throw new CodexProjectionError("Codex browser coordinate limit or reuse");
     }
     await gate.wait(signal);
+    // Session closure precedes asynchronous bridge teardown. Native idle can arrive before the
+    // driver's signal aborts, so recheck the fence immediately before the irreversible write.
+    if (session.closed) return;
     const mutation: BrowserMutation = {
       text,
       ...(typeof clientMsgId === "string" ? { clientMsgId } : {}),

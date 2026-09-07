@@ -17,9 +17,13 @@ The exact OpenCode M2 text/interrupt tuple and exact Codex 0.151.0/Linux arm64 M
 text/status tuple are supported. OpenCode now also advertises implemented read-only MAIN running/idle
 status; its separate real-TUI/two-browser status acceptance passed on 2026-08-31 without rewriting M2.
 M3b also proved same-thread ChatGPT Remote text coexistence through
-the managed Unix socket and continued browser turns after provider-transport disconnect. It did not
-prove per-device Remote unsubscribe, Codex companion restart/backfill, broker-loss acceptance, richer
-controls/content, or another version/platform. Other OpenCode/Codex tuples are unsupported; only
+the managed Unix socket and continued browser turns after provider-transport disconnect. A separate
+[Codex recovery acceptance](release-finish-line.md#codex-recovery--complete) passed on 2026-09-07 for
+the same version/platform through explicit-port loopback WebSocket with paginated history: a packed
+CLI, local SQLite broker, attached TUI, and two browsers exercised fresh-projection restart/backfill
+and broker-loss isolation. Recovery through managed Unix/legacy history or alongside official Remote,
+per-device Remote unsubscribe, stable projection identity, richer controls/content, and other
+versions/platforms remain unclaimed. Other OpenCode/Codex tuples are unsupported; only
 OpenCode's positive permission-mirroring opt-in retains experimental guarantees. The tmux adapter
 is maintained for its exact M4 tuple: ordinary non-empty non-slash text plus attachments are fenced
 behind an active model turn and its native permission/question modal, every raw browser control is

@@ -4,7 +4,10 @@
 `0.151.0` on Linux arm64. One local Codex TUI and two remote-claw browsers shared one exact native
 thread through an explicit-port loopback app-server. M3b then passed on an exact official Remote thread
 for the same Codex version/platform through the literal managed Unix socket and legacy full-turn
-hydration. The earlier `0.146.0` observations below remain historical seam evidence.
+hydration. The separate 2026-09-07
+[recovery follow-on](release-finish-line.md#codex-recovery--complete) accepted clean companion
+restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy
+or simultaneous official Remote. The earlier `0.146.0` observations below remain historical seam evidence.
 
 ## M3a product result
 
@@ -105,7 +108,9 @@ generalized coordinator, outward gateway, signing hierarchy, or durable command 
 for a demonstrated native failure with an executable fault test. See
 [Remote connections](https://learn.chatgpt.com/docs/remote-connections).
 
-## What this does not prove
+## What M3a/M3b did not prove
+
+These are limits of those original runs; the separate recovery result is linked above.
 
 - tools, forms, attachments, child-agent fan-out, or browser ownership of approvals/questions;
 - every notification, rich item family, or full TUI rendering parity;

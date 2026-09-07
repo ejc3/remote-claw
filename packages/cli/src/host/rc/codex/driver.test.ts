@@ -506,6 +506,63 @@ describe("Codex M3a companion", () => {
     controllers.splice(controllers.indexOf(launched.ac), 1);
   });
 
+  it("restarts with fresh history observation without replaying an earlier browser mutation", async () => {
+    const first = await start();
+    controllers.push(first.ac);
+    first.broker.pushInbound(
+      browserFrame(first.identityId, first.session.id, "applied before restart", "old-browser"),
+    );
+    await waitFor(() => first.client.startCalls.length === 1);
+    const oldCoordinate = first.client.startCalls[0]?.clientUserMessageId;
+    if (oldCoordinate === undefined) throw new Error("missing prior native coordinate");
+
+    // The native mutation happened, but its completed item was not observed before the companion
+    // stopped. The next invocation must learn that outcome from history without resubmitting it.
+    await stop(first.ac, first.run);
+    controllers.splice(controllers.indexOf(first.ac), 1);
+    const priorUser = userItem("prior-user", "applied before restart", oldCoordinate);
+    const priorAnswer = assistantItem("prior-answer", "answer before restart");
+    const client = new FakeCodexClient();
+    client.pages = [
+      {
+        data: [
+          { turnId: "prior-turn", item: priorUser },
+          { turnId: "prior-turn", item: priorAnswer },
+        ],
+        nextCursor: null,
+      },
+    ];
+    client.buffered.push(
+      completed(priorUser, THREAD_ID, "prior-turn"),
+      completed(priorAnswer, THREAD_ID, "prior-turn"),
+    );
+    const second = await start(client);
+    controllers.push(second.ac);
+
+    expect(second.session.id).not.toBe(first.session.id);
+    expect(first.client.resumeCalls).toEqual([THREAD_ID]);
+    expect(client.resumeCalls).toEqual([THREAD_ID]);
+    expect(upstream(second.session, "user")).toMatchObject([
+      { uuid: coordinate("prior-turn", "prior-user"), local_prompt: true },
+    ]);
+    expect(upstream(second.session, "user")[0]).not.toHaveProperty("client_msg_id");
+    expect(upstream(second.session, "assistant")).toHaveLength(1);
+    expect(client.startCalls).toEqual([]);
+
+    second.broker.pushInbound(
+      browserFrame(first.identityId, first.session.id, "retired projection command", "stale"),
+    );
+    second.broker.pushInbound(
+      browserFrame(second.identityId, second.session.id, "new projection command", "fresh"),
+    );
+    await waitFor(() => client.startCalls.length === 1);
+    expect(client.startCalls.map(({ text }) => text)).toEqual(["new projection command"]);
+    expect(first.client.startCalls).toHaveLength(1);
+
+    await stop(second.ac, second.run);
+    controllers.splice(controllers.indexOf(second.ac), 1);
+  });
+
   it("does not charge ignored text shapes or hidden pages against projected history", async () => {
     const client = new FakeCodexClient();
     client.pages = [
@@ -680,6 +737,41 @@ describe("Codex M3a companion", () => {
       { client_msg_id: clientMsgId, native_pending: true },
     ]);
     expect(launched.broker.posts.some((post) => post.recordKind === "session_terminal")).toBe(true);
+  });
+
+  it("does not submit parked browser text when native idle races a closed broker session", async () => {
+    const client = new FakeCodexClient();
+    client.resumeResult.thread.status = { type: "active" };
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    launched.broker.pushInbound(
+      browserFrame(
+        launched.identityId,
+        launched.broker.sessionId,
+        "must not run after closure",
+        "parked-browser-coordinate",
+      ),
+    );
+    await waitFor(() => accepted(launched.broker).length === 1);
+    expect(client.startCalls).toEqual([]);
+
+    launched.session.close("injected broker relay closure");
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "thread/status/changed",
+        params: { threadId: THREAD_ID, status: { type: "idle" } },
+      },
+    });
+
+    await expect(within(launched.run)).resolves.toBe(1);
+    expect(client.startCalls).toEqual([]);
+    expect(client.closeCalls).toBe(1);
+    expect(client.externalThreadRunning).toBe(true);
+    expect(accepted(launched.broker)).toEqual([
+      { client_msg_id: "parked-browser-coordinate", native_pending: true },
+    ]);
+    controllers.splice(controllers.indexOf(launched.ac), 1);
   });
 
   it("fails closed at the bounded native-user correlation deadline", async () => {
