@@ -479,6 +479,14 @@ have narrower, truthfully labeled guarantees.
 Capability claims are per adapter, not inherited from the shared relay. A failure should end its
 remote projection without claiming that an unsupported or ambiguous native mutation succeeded.
 
+The browser-safe `packages/cli/src/harness.ts` contract supplies known descriptors, labels, ordering,
+durable admission, and text-input policy to both relay and viewer. Supported adapters explicitly declare
+`textInput:"plain"|"terminal"`; feature flags such as interrupt remain independent of that boundary.
+Unknown descriptors or input policies are read-only in the viewer. Future harnesses reuse this static
+metadata plus an adapter and explicit launch dispatch; see the
+[extension checklist](pluggable-harness.md#9-adding-another-cli-harness). No new native feature or
+provider compatibility is implied by shared metadata.
+
 Tmux uses one content-free private turn sentinel, not a permission bridge. Node loads prompt bytes into
 a private tmux buffer over stdin; a fixed helper then holds a startup-probed Linux `flock` across gate
 claim, bracketed pane paste, bounded settle, and Enter. Claude's synchronous `UserPromptSubmit` hook

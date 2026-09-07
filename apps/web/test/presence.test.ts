@@ -449,8 +449,7 @@ describe("parseCapabilities", () => {
 });
 
 // parseHarness coerces the announce's `harness` (decrypted-but-untrusted) into the agent+mode label the
-// session list shows (#164). Unknown enums / malformed bodies → undefined so the viewer falls back to the
-// MITM label (a legacy host is always native-RC Claude Code) rather than mislabeling.
+// session list shows. Only absence is legacy; unknown descriptors retain a read-only sentinel.
 describe("parseHarness", () => {
   it("parses each known agent+mode verbatim", () => {
     expect(parseHarness({ agent: "claude-code", mode: "rc" })).toEqual({
@@ -475,29 +474,26 @@ describe("parseHarness", () => {
     });
   });
 
-  it("returns undefined for a legacy host (absent) or a non-object", () => {
+  it("returns undefined only for a legacy host (absent)", () => {
     expect(parseHarness(undefined)).toBeUndefined();
-    expect(parseHarness(null)).toBeUndefined();
-    expect(parseHarness("nope")).toBeUndefined();
   });
 
-  it("returns undefined for an unknown agent or mode (never mislabels)", () => {
-    expect(parseHarness({ agent: "gemini", mode: "rc" })).toBeUndefined();
-    expect(parseHarness({ agent: "claude-code", mode: "ssh" })).toBeUndefined();
-    expect(parseHarness({ agent: "claude-code" })).toBeUndefined(); // missing mode
-    expect(parseHarness({ mode: "rc" })).toBeUndefined(); // missing agent
-  });
-
-  it("rejects an enum-valid but nonsensical PAIR (matches the whole descriptor, not each field)", () => {
-    // Both fields are individually valid enums, but the COMBO is not one a host announces — it must fall
-    // back to the MITM label, never be mislabelled (e.g. as "Claude Code · RC"). codex.
-    expect(parseHarness({ agent: "claude-code", mode: "opencode" })).toBeUndefined();
-    expect(parseHarness({ agent: "opencode", mode: "rc" })).toBeUndefined();
-    expect(parseHarness({ agent: "opencode", mode: "native-rc" })).toBeUndefined();
-    expect(parseHarness({ agent: "opencode", mode: "tmux" })).toBeUndefined();
-    expect(parseHarness({ agent: "codex", mode: "rc" })).toBeUndefined();
-    expect(parseHarness({ agent: "codex", mode: "opencode" })).toBeUndefined();
-    expect(parseHarness({ agent: "claude-code", mode: "app-server" })).toBeUndefined();
-    expect(parseHarness({ agent: "opencode", mode: "app-server" })).toBeUndefined();
+  it.each([
+    null,
+    "nope",
+    { agent: "gemini", mode: "rc" },
+    { agent: "claude-code", mode: "ssh" },
+    { agent: "claude-code" },
+    { mode: "rc" },
+    { agent: "claude-code", mode: "opencode" },
+    { agent: "opencode", mode: "rc" },
+    { agent: "opencode", mode: "native-rc" },
+    { agent: "opencode", mode: "tmux" },
+    { agent: "codex", mode: "rc" },
+    { agent: "codex", mode: "opencode" },
+    { agent: "claude-code", mode: "app-server" },
+    { agent: "opencode", mode: "app-server" },
+  ])("keeps an unknown/malformed pair read-only instead of inheriting MITM: %j", (raw) => {
+    expect(parseHarness(raw)).toEqual({ agent: "unknown", mode: "unknown" });
   });
 });

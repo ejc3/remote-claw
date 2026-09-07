@@ -562,6 +562,8 @@ describe("OpenCode M2 registration", () => {
     await waitFor(() => broker.posts.some((post) => post.recordKind === "session_announce"));
     expect(driver.capabilities).toEqual({
       structuredPermissions: false,
+      permissionPosture: "local",
+      textInput: "plain",
       status: true,
       controls: {
         interrupt: true,

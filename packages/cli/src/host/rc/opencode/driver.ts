@@ -234,12 +234,14 @@ interface OpencodeConnection {
 function opencodeViewerCapabilities(structuredPermissions: boolean): DriverCapabilities {
   return {
     structuredPermissions,
+    ...(!structuredPermissions ? { permissionPosture: "local" as const } : {}),
     // MAIN-session busy/retry and strictly reconciled idle are a supported read-only viewer surface.
     // Child lifecycle never drives this status, and transport recovery retains the last proved value.
     status: true,
     controls: { interrupt: true, setModel: false, setMode: false, end: false },
     // The compatibility prompt translator has no proved native OpenCode file-part fidelity.
     attachments: false,
+    textInput: "plain",
   };
 }
 

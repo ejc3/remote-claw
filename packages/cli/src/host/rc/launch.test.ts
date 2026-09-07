@@ -1305,6 +1305,8 @@ describe.skipIf(!RUN)("runRcLaunch wiring", () => {
     expect(announce).toBeDefined();
     expect(JSON.parse(announce as string).capabilities).toEqual({
       structuredPermissions: false,
+      permissionPosture: "local",
+      textInput: "plain",
       status: true,
       controls: { interrupt: false, setModel: false, setMode: false, end: false },
       attachments: false,

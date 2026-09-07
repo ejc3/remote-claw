@@ -889,6 +889,19 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
       text: "\t Codex browser prompt \n",
       relayFor: codexRelayOf,
     },
+    ...[CLAUDE_NATIVE_HARNESS, OPENCODE_HARNESS, CODEX_HARNESS].map((harness) => ({
+      surface: `${harness.agent}/${harness.mode} with optional feature flags`,
+      text: "\t native-ordered prompt \n",
+      relayFor: (session: Session, client: FakeClient) =>
+        new HostRcRelay({
+          session,
+          client: client as unknown as BrokerClient,
+          sessionId: "s",
+          identityId: ID,
+          harness,
+          capabilities: { ...MITM_CAPABILITIES, textInput: "plain" },
+        }),
+    })),
   ])("$surface waits for native observation before assigning a browser user its canonical seq", async ({
     text,
     relayFor,
@@ -902,6 +915,8 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
     const served = relay.serve(ac.signal);
 
     await waitFor(() => client.streamStarts.length === 1);
+    client.pushInbound(inFrame("user", "native-slash", " /review", "must-not-admit"));
+    client.pushInbound(inFrame("user", "native-empty", " \t ", "must-not-admit-empty"));
     client.pushInbound(inFrame("user", "native-in", text, "browser-msg"));
     await waitFor(() => pushUser.mock.calls.length === 1);
 
@@ -1673,6 +1688,18 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
         relayOf(session, client, STABLE_MITM_CAPABILITIES),
     },
     { surface: "Codex", relayFor: codexRelayOf },
+    ...[MITM_HARNESS, CLAUDE_NATIVE_HARNESS, CODEX_HARNESS].map((harness) => ({
+      surface: `${harness.agent}/${harness.mode} with optional features`,
+      relayFor: (session: Session, client: FakeClient) =>
+        new HostRcRelay({
+          session,
+          client: client as unknown as BrokerClient,
+          sessionId: "s",
+          identityId: ID,
+          harness,
+          capabilities: { ...MITM_CAPABILITIES, textInput: "plain" },
+        }),
+    })),
   ])("$surface fails closed before pumps or discoverability on a non-durable broker", async ({
     relayFor,
   }) => {

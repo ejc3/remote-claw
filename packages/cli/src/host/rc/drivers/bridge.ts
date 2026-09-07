@@ -69,6 +69,9 @@ function snapshotAnnouncement(announcement: BridgeAnnouncement): BridgeAnnouncem
           },
     capabilities: {
       structuredPermissions: announcement.capabilities.structuredPermissions,
+      ...(announcement.capabilities.textInput !== undefined
+        ? { textInput: announcement.capabilities.textInput }
+        : {}),
       ...(announcement.capabilities.permissionPosture !== undefined
         ? { permissionPosture: announcement.capabilities.permissionPosture }
         : {}),
