@@ -552,6 +552,51 @@ describe("Codex M3a companion", () => {
     await stop(launched.ac, launched.run);
   });
 
+  it("bounds retained command output, deduplicates large results, and fences hidden tail changes", async () => {
+    const client = new FakeCodexClient();
+    const prefix = `🚀${"x".repeat(3997)}\uD83D`;
+    const output = `${prefix}\uDE80${"x".repeat(1_000_000)} original tail`;
+    const item = commandItem("large-output", { aggregatedOutput: output });
+    client.pages = [{ data: [{ turnId: "turn-1", item }], nextCursor: null }];
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    client.emit(completed(item));
+    client.emit(completed(item));
+    client.emit(completed(assistantItem("replay-barrier", "Done")));
+    await waitFor(() =>
+      launched.broker.posts.some((post) => post.recordKind === "assistant" && post.text === "Done"),
+    );
+
+    // Inspect the retained Session, not merely the broker's already-capped publication.
+    expect(upstream(launched.session, "user")).toEqual([
+      expect.objectContaining({
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: coordinate("turn-1", "large-output"),
+              is_error: false,
+              content: `${prefix}…[truncated]`,
+            },
+          ],
+        },
+      }),
+    ]);
+    expect(launched.broker.posts.filter((post) => post.recordKind === "tool_result")).toHaveLength(
+      1,
+    );
+    expect(launched.session.closed).toBe(false);
+
+    client.emit(
+      completed(commandItem("large-output", { aggregatedOutput: `${output} changed tail` })),
+    );
+    await expect(within(launched.run)).resolves.toBe(1);
+    expect(upstream(launched.session, "user")).toHaveLength(1);
+    expect(client.startCalls).toEqual([]);
+    expect(client.externalThreadRunning).toBe(true);
+  });
+
   it("does not consume unfinished/unsupported tool identities or turn them into native requests", async () => {
     const client = new FakeCodexClient();
     client.pages = [

@@ -238,7 +238,7 @@ const TOOL_RESULT_CAP = 4000;
  * HOST as base64 (too big to relay, not viewable remotely; SendUserFile is the worker→viewer image
  * path). Capped to TOOL_RESULT_CAP.
  */
-function toolResultOutput(content: unknown): string {
+export function toolResultOutput(content: unknown): string {
   let text: string;
   if (typeof content === "string") {
     text = content;
@@ -258,7 +258,11 @@ function toolResultOutput(content: unknown): string {
   } else {
     text = "";
   }
-  return text.length > TOOL_RESULT_CAP ? `${text.slice(0, TOOL_RESULT_CAP)}…[truncated]` : text;
+  if (text.length <= TOOL_RESULT_CAP) return text;
+  // A V8 substring can retain the entire source. Copy the bounded prefix before Session stores it;
+  // UTF-16 preserves the existing code-unit cap, including a surrogate split at the boundary.
+  const prefix = Buffer.from(text.slice(0, TOOL_RESULT_CAP), "utf16le").toString("utf16le");
+  return `${prefix}…[truncated]`;
 }
 
 /** A user message's prompt text (content is a raw string, or `text` blocks) — used only to surface a
