@@ -378,7 +378,7 @@ Trace mode writes no frames to the remote-claw broker. Diagnostics are off by de
 shows shapes; trace logging shows bounded, recursively redacted JSON. On POSIX a log file must be an
 owned mode-0600 regular non-symlink file. Unsupported targets drop records.
 
-### 10.4 Native text companion
+### 10.4 Native text and session-Interrupt companion
 
 <code>--rc-app &lt;origin&gt; --rc-driver=claude-native --remote-control</code> also forwards ordinary
 Anthropic Remote Control unchanged. Its transparent proxy observes the spawned child's one successful
@@ -397,9 +397,16 @@ title/recency, persists an owner registry, or reuses the retired projection.
 
 Browser text uses a caller-owned UUID and one serialized provider writer. A rejected or
 outcome-unknown POST permanently fences only the remote projection and is never replayed; ordinary
-Claude and its provider session remain alive. The viewer advertises
-<code>{agent:"claude-code",mode:"native-rc"}</code> with permissions, status, controls, and
-attachments all disabled. This surface is Linux-only and pins exact Claude 2.1.237.
+Claude and its provider session remain alive. The writer also accepts one-shot session-scoped
+Interrupt, with one pending response slot installed before the POST. A matching canonical worker
+success releases later browser text; HTTP admission and generic results do not imply idle. Interrupt
+has no exact-turn target, so a delayed Stop may affect newer native/peer work. It is never retried,
+including after a 401; response timeout or unknown/rejected outcome fences only the companion.
+See [control semantics](protocol.md#11-compatibility-control-verbs).
+The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text and Interrupt;
+permissions, status, other controls, and attachments remain disabled. This surface is Linux-only and
+pins exact Claude 2.1.237. The [release roadmap](release-finish-line.md) owns current Interrupt acceptance,
+separately from historical M1.
 
 ### 10.5 Pinned OpenCode text/interrupt/status companion
 
@@ -477,7 +484,7 @@ have narrower, truthfully labeled guarantees.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
-| Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart and literal official-client coexistence | Exact Linux/2.1.237 only; no remote controls, permissions, attachments, or status |
+| Claude native companion | Structured text projection and read-only tool activity over ordinary Anthropic RC; current code adds one-shot session-scoped Interrupt, separately from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; no other controls, remote permission/question responses, attachments, or status |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
 | Codex | Current code accepts exact 0.151.0 and 0.153.4/Linux arm64 with text/status and read-only completed command activity; historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0 | One explicit thread and attached local-TUI precondition; current-version/activity acceptance is tracked in the release roadmap; managed-Unix/legacy recovery, per-device unsubscribe, and browser controls remain unclaimed |
@@ -613,13 +620,15 @@ The <code>claude-native</code> driver uses these bounded <code>AnthropicRcClient
 
 - <code>history</code> for caller-driven ordered reconciliation;
 - <code>streamEvents</code> for one independent SSE reader;
-- <code>postEvent</code> for one user event with a caller-owned UUID and timestamp.
+- <code>postEvent</code> for one user event with a caller-owned UUID and timestamp; and
+- current <code>postInterrupt</code> for one session-scoped Stop with caller-owned UUID/request ID,
+  separate from the historical M1 text acceptance.
 
 Its production transport is fixed to <code>https://api.anthropic.com</code> and the pinned API
 version. The built-in credential source is Linux-only, reads native Claude's owner-only mode-0600
 credential file afresh, never writes or refreshes it, and waits for native Claude to rotate a rejected
-token. A 401 is retried only when the bearer actually changed. Network-ambiguous writes are not
-automatically replayed.
+token. A 401 is retried only when the bearer actually changed, except that session-scoped Interrupt
+disables rotation/retry entirely. Network-ambiguous writes are not automatically replayed.
 
 The native companion implements this bounded orchestration:
 

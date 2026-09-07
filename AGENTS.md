@@ -30,7 +30,12 @@ Tmux makes no provider-native/official-client coexistence claim. The OpenCode st
 complete and advertised; its separate real-TUI/two-browser status acceptance passed on 2026-08-31. The
 Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text and read-only worker
 tool calls/textual results to remote-claw while
-ordinary Anthropic Remote Control remains active. Its packed-install restart, broker-loss, and
+ordinary Anthropic Remote Control remains active. Current browser mutations are ordinary non-empty
+non-slash text plus one-shot session-scoped Interrupt. Interrupt has no native turn ID: a delayed Stop
+may affect newer peer work. The serial writer waits for the matching canonical worker success before
+later browser text; HTTP admission and generic results are not idle. Status, permissions/questions,
+other controls, and attachments stay unsupported. Current Interrupt acceptance belongs to the
+[release roadmap](docs/release-finish-line.md), not the historical M1 text result. Its packed-install restart, broker-loss, and
 credential/log checks passed. The literal logged-in official Claude web UI on the user's phone, the
 local TUI, and two remote-claw browsers then completed the bounded coexistence run, including liveness
 after the official client disconnected. The Graduate commit's separate exact-SHA deployed-broker gate
@@ -89,8 +94,10 @@ Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-
 - **`--rc-app <origin> --rc-driver=claude-native --remote-control`**
   (`runClaudeNativeDriverPath`, `run.ts`) — transparently forwards ordinary Anthropic Remote Control,
   binds only the spawned child's successful bridge request, and projects provider-ordered text plus
-  read-only worker tool activity through our encrypted broker. The local TUI and provider RC API remain live; remote-claw permissions,
-  questions, controls, attachments, and status are disabled. Linux and exact Claude 2.1.237 only.
+  read-only worker tool activity through our encrypted broker. Browser mutations are ordinary text plus
+  one-shot session-scoped Interrupt; a delayed Stop can affect newer native/peer work. The local TUI
+  and provider RC API remain live; remote-claw permissions, questions, other controls, attachments,
+  and status are disabled. Linux and exact Claude 2.1.237 only.
 - **`--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>`** — attaches a fresh
   remote-claw projection to that exact already-running native session. Apart from the required pinned-
   version probe, it starts no interactive Claude session or proxy, performs no session discovery,

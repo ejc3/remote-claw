@@ -87,7 +87,7 @@ The implemented native modes are:
 | --- | --- |
 | `--rc-app <origin>` (default `--rc-driver=mitm`) | Runs real Claude Code behind a loopback TLS proxy, answers `/v1/code/sessions/**` locally, and relays through the E2E-encrypted broker. This replaces Anthropic Remote Control, so the official Claude client cannot join. |
 | `--rc-trace` | Passes traffic to Anthropic while recording bounded, redacted protocol diagnostics. The official client can drive the session, but remote-claw browsers cannot. |
-| `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only; permissions, questions, interrupts, model/mode changes, attachments, and end stay native/local. |
+| `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text plus one-shot session-scoped Interrupt; permissions, questions, model/mode changes, attachments, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
 | `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The mutable surface remains non-empty non-slash text plus interrupt. Read-only MAIN-session running/idle status is advertised; native/local UI still owns permissions, questions, model/mode, attachments, and end. |
 | `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0 or 0.153.4 on Linux arm64. Browser input remains non-empty non-slash text; native status and completed shell commands/results are read-only. The attached local TUI solely owns approvals and questions, and every other browser control is disabled. |
@@ -239,10 +239,18 @@ node dist/remote-claw.js --rc-app https://your-app.example \
 ```
 
 Use a durable `sqlite`/Turso broker profile and the same backend in the viewer. Browser mutations are
-text-only. Validated worker tool calls and textual tool results also appear as read-only activity,
+ordinary non-empty non-slash text plus one-shot session-scoped Interrupt. It has no native turn ID,
+so a delayed Stop may affect newer work from another native/provider peer. The companion waits for the
+matching canonical worker success before posting subsequent browser text, not merely HTTP admission
+or a generic result. Missing confirmation after 30 seconds from HTTP success, rejection, or an unknown
+outcome stops only the companion; Interrupt is never automatically retried, including after a 401.
+This is not an idle-state or process-kill guarantee. Current Interrupt acceptance is tracked separately
+from historical M1 in the [release roadmap](docs/release-finish-line.md).
+
+Validated worker tool calls and textual tool results also appear as read-only activity,
 with failures kept visible in the transcript and existing output truncation applied. This does not
 infer running state or background-task lifecycle. Native/local UI owns every permission, question,
-interrupt, model/mode, attachment, and end action.
+model/mode, attachment, and end action.
 
 To restart only the companion for a still-running native session, explicitly supply that session's
 exact `cse_*` ID:
