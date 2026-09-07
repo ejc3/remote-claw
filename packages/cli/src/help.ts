@@ -51,20 +51,22 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
   --rc-driver <d>    capture/inject driver (or set RC_DRIVER): mitm | claude-native | tmux | opencode |
                      codex
                      (default mitm). mitm is the supported private relay and replaces Anthropic RC.
-                     claude-native is the Linux/Claude 2.1.237 text-only companion: it leaves ordinary
+                     claude-native is the Linux/Claude 2.1.237 text/interrupt companion: it leaves ordinary
                      Anthropic Remote Control intact alongside the local TUI and remote-claw browsers.
                      Literal official-client coexistence acceptance passed for the pinned release.
                      Use it with claude's own --remote-control.
                      tmux is the maintained lower-fidelity compatibility driver; its accepted tuple is
                      Linux arm64 with Claude 2.1.237, and it makes no provider-native/official-client
                      coexistence claim. OpenCode has one
-                     pinned supported text/interrupt/status tuple. Codex has one pinned text/status companion
-                     tuple described below.
+                     pinned supported text/interrupt/status tuple. Codex has pinned text/interrupt/status
+                     companion tuples described below.
 
 Claude native companion (--rc-driver=claude-native):
   Launch form starts ordinary Claude behind a transparent session-binding observer, then mirrors the
-  exact native session through the sealed broker. Only non-empty, non-slash text is supported. Permissions,
-  questions, interrupts, model/mode changes, attachments, and end remain native/local and disabled in
+  exact native session through the sealed broker. Browser input is non-empty, non-slash text plus
+  session-scoped Interrupt. Stop is sent once and waits for the matching native acknowledgement before
+  later browser text; it has no exact-turn target and a delayed Stop may affect newer work. No native
+  running/idle status is inferred. Permissions, questions, model/mode changes, attachments, and end remain native/local and disabled in
   the viewer. --rc-inference, --rc-bedrock-*, and --rc-accountless are rejected for this driver.
   --rc-native-session <cse_…>  attach a fresh remote-claw projection to this exact already-running
                      Anthropic RC session. This form starts no interactive Claude session or proxy and

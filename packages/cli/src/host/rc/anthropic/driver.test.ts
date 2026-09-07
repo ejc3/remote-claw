@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
 import type { DriverContext } from "../driver.js";
 import type { MitmOptions } from "../mitm.js";
@@ -11,6 +11,7 @@ import type { Session } from "../session.js";
 import type {
   AnthropicRcEvent,
   RcEventPage,
+  RcInterruptEventInput,
   RcPostAck,
   RcSseItem,
   RcUserEventInput,
@@ -107,6 +108,7 @@ class FakeNativeClient implements ClaudeNativeClient {
   readonly streams = [new NativeStream()];
   readonly historyCalls: Array<{ sessionId: string; cursor: string | undefined }> = [];
   readonly postCalls: Array<{ sessionId: string; input: RcUserEventInput }> = [];
+  readonly interruptCalls: Array<{ sessionId: string; input: RcInterruptEventInput }> = [];
   historyImpl: (
     sessionId: string,
     cursor: string | undefined,
@@ -118,6 +120,11 @@ class FakeNativeClient implements ClaudeNativeClient {
       sequenceNum: String(call + 1),
       duplicate: false,
     });
+  interruptImpl: (input: RcInterruptEventInput) => Promise<RcPostAck> = async (input) => ({
+    eventId: input.uuid,
+    sequenceNum: "1",
+    duplicate: false,
+  });
 
   history(
     sessionId: string,
@@ -144,6 +151,11 @@ class FakeNativeClient implements ClaudeNativeClient {
     this.postCalls.push({ sessionId, input });
     this.order.push(`post:${sessionId}:${input.message.content}`);
     return this.postImpl(sessionId, input, call);
+  }
+
+  postInterrupt(sessionId: string, input: RcInterruptEventInput): Promise<RcPostAck> {
+    this.interruptCalls.push({ sessionId, input });
+    return this.interruptImpl(input);
   }
 }
 
@@ -432,6 +444,23 @@ function assistant(
     createdAt: `2026-08-30T00:00:${sequenceNum.padStart(2, "0")}.000Z`,
     payload,
     raw: { event_id: eventId, event_type: "assistant", sequence_num: sequenceNum, payload },
+  };
+}
+
+function interruptResponse(
+  sequence: string,
+  requestId: string,
+  subtype = "success",
+  source: "client" | "worker" = "worker",
+): AnthropicRcEvent {
+  const payload = { type: "control_response", response: { request_id: requestId, subtype } };
+  const eventId = `interrupt-response-${sequence}`;
+  return {
+    ...assistant(eventId, sequence, ""),
+    eventType: "control_response",
+    source,
+    payload,
+    raw: { event_id: eventId, event_type: "control_response", sequence_num: sequence, payload },
   };
 }
 
@@ -1339,7 +1368,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     const harness = await startHarness();
     try {
       await bindReady(harness, "cse_controls");
-      for (const subtype of ["interrupt", "set_model", "set_permission_mode", "end_session"]) {
+      for (const subtype of ["set_model", "set_permission_mode", "end_session"]) {
         harness.session.pushControlRequest(subtype);
       }
       harness.session.pushUserInput("text barrier");
@@ -1349,8 +1378,133 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
         "text barrier",
       ]);
       expect(harness.broker.content).toEqual([]);
+      expect(harness.native.interruptCalls).toEqual([]);
       expect(harness.session.closed).toBe(false);
     } finally {
+      await harness.stop();
+    }
+  });
+
+  it("waits for the matching worker Interrupt response before later text, ignoring result and foreign responses", async () => {
+    const harness = await startHarness();
+    try {
+      await bindReady(harness, "cse_interrupt");
+      const stop = inbound(
+        harness,
+        "interrupt",
+        "stop-once",
+        JSON.stringify({ expiry: Date.now() + 10_000 }),
+      );
+      harness.broker.push(stop);
+      await waitFor(() => harness.native.interruptCalls.length === 1);
+      const input = harness.native.interruptCalls[0]?.input;
+      if (input === undefined) throw new Error("missing native Interrupt");
+      harness.broker.push(stop); // Shared authenticated replay must not generate another native write.
+      harness.broker.push(inbound(harness, "user", "continuation", "continue after Stop"));
+      await waitFor(() => acceptedBodies(harness).some((body) => body.native_pending === true));
+      const terminal = assistant("generic-result", "1", "");
+      harness.native.streams[0]?.push({
+        ...terminal,
+        eventType: "result",
+        payload: { type: "result", result: "", subtype: "success", is_error: false },
+      });
+      harness.native.streams[0]?.push(interruptResponse("2", "foreign-request"));
+      harness.native.streams[0]?.push(interruptResponse("3", input.requestId, "success", "client"));
+      harness.native.streams[0]?.push(assistant("response-barrier", "4", "still waiting"));
+      await waitFor(() => harness.broker.content.some((post) => post.text === "still waiting"));
+      expect(harness.native.postCalls).toEqual([]);
+      expect(harness.native.interruptCalls).toHaveLength(1);
+      expect(harness.broker.announcements[0]).toMatchObject({
+        capabilities: { status: false, controls: { interrupt: true } },
+      });
+
+      const response = interruptResponse("5", input.requestId);
+      harness.native.streams[0]?.push(response);
+      harness.native.streams[0]?.push(response);
+      await waitFor(() => harness.native.postCalls.length === 1);
+      expect(harness.native.postCalls[0]?.input.message.content).toBe("continue after Stop");
+      expect(harness.native.interruptCalls[0]?.sessionId).toBe("cse_interrupt");
+      expect(harness.native.interruptCalls).toHaveLength(1);
+      expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("retains a fast worker response received before the Interrupt HTTP acknowledgement", async () => {
+    const harness = await startHarness();
+    const admission = Promise.withResolvers<RcPostAck>();
+    harness.native.interruptImpl = async (input) => {
+      harness.native.streams[0]?.push(interruptResponse("1", input.requestId));
+      harness.native.streams[0]?.push(
+        assistant("fast-response-barrier", "2", "response preceded HTTP"),
+      );
+      return admission.promise;
+    };
+    try {
+      await bindReady(harness);
+      harness.session.pushControlRequest("interrupt");
+      harness.session.pushUserInput("continue after fast response");
+      await waitFor(() =>
+        harness.broker.content.some((post) => post.text === "response preceded HTTP"),
+      );
+      expect(harness.native.postCalls).toEqual([]);
+      const input = harness.native.interruptCalls[0]?.input;
+      if (input === undefined) throw new Error("missing native Interrupt");
+      admission.resolve({ eventId: input.uuid, sequenceNum: "1", duplicate: false });
+      await waitFor(() => harness.native.postCalls.length === 1);
+      expect(harness.native.postCalls[0]?.input.message.content).toBe(
+        "continue after fast response",
+      );
+      expect(harness.session.closed).toBe(false);
+    } finally {
+      admission.resolve({ eventId: "unused", sequenceNum: "1", duplicate: false });
+      await harness.stop();
+    }
+  });
+
+  it.each([
+    "unknown POST",
+    "worker rejection",
+  ])("fences only the companion after Interrupt %s without retry or later text", async (failure) => {
+    const harness = await startHarness();
+    harness.native.interruptImpl = async (input) => {
+      if (failure === "unknown POST")
+        throw AnthropicRcError.network("postInterrupt", { retryable: false, outcomeUnknown: true });
+      harness.native.streams[0]?.push(interruptResponse("1", input.requestId, "error"));
+      return { eventId: input.uuid, sequenceNum: "1", duplicate: false };
+    };
+    try {
+      await bindReady(harness);
+      harness.session.pushControlRequest("interrupt");
+      harness.session.pushControlRequest("interrupt");
+      harness.session.pushUserInput("must not follow failed Stop");
+      await waitFor(() => harness.session.closed);
+      expect(harness.native.interruptCalls).toHaveLength(1);
+      expect(harness.native.postCalls).toEqual([]);
+      expect(harness.proxy.closed).toBe(false);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("bounds the wait for an unconfirmed Interrupt and leaves native Claude alive", async () => {
+    const harness = await startHarness();
+    try {
+      await bindReady(harness);
+      vi.useFakeTimers();
+      harness.session.pushControlRequest("interrupt");
+      harness.session.pushUserInput("must not follow unconfirmed Stop");
+      await vi.waitFor(() => expect(harness.native.interruptCalls).toHaveLength(1));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(harness.session.closed).toBe(true);
+      expect(harness.native.postCalls).toEqual([]);
+      expect(harness.native.interruptCalls).toHaveLength(1);
+      expect(harness.proxy.closed).toBe(false);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      vi.useRealTimers();
       await harness.stop();
     }
   });
@@ -1407,7 +1561,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     }
   });
 
-  it("does not send queued text when reconnect history completes after session closure", async () => {
+  it("does not send queued Interrupt or text when reconnect history completes after session closure", async () => {
     const harness = await startHarness();
     const reconciliation = Promise.withResolvers<RcEventPage>();
     const reconciliationStarted = Promise.withResolvers<void>();
@@ -1420,10 +1574,12 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       };
       harness.native.streams[0]?.end();
       await reconciliationStarted.promise;
+      harness.session.pushControlRequest("interrupt");
       harness.broker.push(inbound(harness, "user", "queued", "must not send", "closed-client"));
       await waitFor(() => acceptedBodies(harness).some((body) => body.native_pending === true));
       await tick();
       expect(harness.native.postCalls).toEqual([]);
+      expect(harness.native.interruptCalls).toEqual([]);
 
       // Broker failure closes the Session before asynchronous bridge teardown aborts the driver.
       // Completing empty reconciliation must not release this already-admitted native write.
@@ -1432,6 +1588,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       await tick();
 
       expect(harness.native.postCalls).toEqual([]);
+      expect(harness.native.interruptCalls).toEqual([]);
       expect(harness.broker.content).toEqual([]);
       expect(harness.isRunSettled()).toBe(false);
       expect(harness.proxy.closed).toBe(false);

@@ -727,7 +727,7 @@ test.describe("capability gating (#149)", () => {
     await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
   });
 
-  test("the native Claude companion is text-only without the private-relay transcript warning", async ({
+  test("the native Claude companion supports text and interrupt without a private-relay warning", async ({
     page,
     seedHost,
   }) => {
@@ -764,7 +764,11 @@ test.describe("capability gating (#149)", () => {
     await expect(sheet).toContainText("Claude Code · Anthropic remote control");
     await expect(sheet).toContainText("Permission prompts stay in the local terminal");
     await expect(sheet).toContainText("can’t switch model");
-    await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
+    const interrupt = sheet.locator(".mode-row-danger", { hasText: "Interrupt" });
+    await expect(interrupt).toBeEnabled();
+    await interrupt.click();
+    await expect(sheet).not.toBeVisible();
+    await expect(page.locator(".send-err")).toHaveCount(0);
   });
 
   test("maximal native-RC controls remain an explicit compatibility fixture", async ({

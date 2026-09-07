@@ -1046,7 +1046,7 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
     await served;
   });
 
-  it("suppresses every unsupported native control without creating transcript content", async () => {
+  it("admits only native Interrupt and suppresses every other control without transcript content", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     client.reportedDurable = true;
@@ -1067,7 +1067,7 @@ describe("HostRcRelay provider-ordered text boundaries", () => {
     }
     await waitFor(() => client.opened.length === 4);
     await tick();
-    expect(pushControl).not.toHaveBeenCalled();
+    expect(pushControl).toHaveBeenCalledExactlyOnceWith("interrupt");
     expect(client.content).toEqual([]);
 
     session.pushUpstream(assistant("provider content still flows"));

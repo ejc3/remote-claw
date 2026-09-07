@@ -96,9 +96,10 @@ describe("RC_HELP banner", () => {
   it("exposes the bounded Claude native companion separately from the private relay", () => {
     expect(RC_HELP).toMatch(/mitm \| claude-native \| tmux \| opencode/);
     expect(RC_HELP).toContain("Claude native companion (--rc-driver=claude-native)");
-    expect(RC_HELP).toContain("Linux/Claude 2.1.237 text-only companion");
+    expect(RC_HELP).toContain("Linux/Claude 2.1.237 text/interrupt companion");
     expect(RC_HELP).toMatch(/Literal official-client coexistence acceptance passed/);
-    expect(RC_HELP).toContain("Only non-empty, non-slash text is supported");
+    expect(RC_HELP).toContain("session-scoped Interrupt");
+    expect(RC_HELP).toContain("a delayed Stop may affect newer work");
     expect(RC_HELP).toMatch(/--rc-inference, --rc-bedrock-\*, and --rc-accountless are rejected/);
     expect(RC_HELP).toMatch(/--rc-native-session <cse_…>/);
     expect(RC_HELP).toMatch(/starts no interactive Claude session or proxy/);

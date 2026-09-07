@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AnthropicRcClient, type RcUserEventInput } from "./client.js";
+import { AnthropicRcClient, type RcInterruptEventInput, type RcUserEventInput } from "./client.js";
 import { AnthropicRcError } from "./errors.js";
 import type { AnthropicRcTransport, AnthropicRcTransportRequest } from "./transport.js";
 
@@ -343,6 +343,91 @@ describe("AnthropicRcClient.postEvent", () => {
         },
       ],
     });
+  });
+});
+
+describe("AnthropicRcClient.postInterrupt", () => {
+  it("posts only the captured Interrupt payload and returns the canonical acknowledgement", async () => {
+    const transport = new FakeTransport(
+      json({ results: [{ event_id: "evt_stop", sequence_num: "42", duplicate: false }] }),
+    );
+    const client = new AnthropicRcClient({ transport });
+    let requestIdReads = 0;
+    const input = {
+      uuid: "interrupt-event-uuid",
+      get requestId() {
+        requestIdReads += 1;
+        return requestIdReads === 1 ? "interrupt-request-id" : "x".repeat(513);
+      },
+      timestamp: "must-not-be-forwarded",
+      session_id: "different-session",
+      turnId: "must-not-be-forwarded",
+      request: { subtype: "set_permission_mode" },
+    };
+
+    await expect(client.postInterrupt("cse/a", input)).resolves.toEqual({
+      eventId: "evt_stop",
+      sequenceNum: "42",
+      duplicate: false,
+    });
+    expect(requestIdReads).toBe(1);
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0]).toMatchObject({
+      operation: "postInterrupt",
+      method: "POST",
+      path: "/v1/code/sessions/cse%2Fa/events",
+      accept: "application/json",
+      retryAfter401: false,
+    });
+    expect(JSON.parse(transport.requests[0]?.body ?? "{}")).toEqual({
+      events: [
+        {
+          payload: {
+            type: "control_request",
+            request_id: "interrupt-request-id",
+            request: { subtype: "interrupt" },
+            uuid: "interrupt-event-uuid",
+          },
+        },
+      ],
+    });
+  });
+
+  it.each([
+    ["empty UUID", { uuid: "", requestId: "request" }],
+    ["oversized UUID", { uuid: "u".repeat(513), requestId: "request" }],
+    ["empty request ID", { uuid: "uuid", requestId: "" }],
+    ["oversized request ID", { uuid: "uuid", requestId: "r".repeat(513) }],
+    ["non-string request ID", { uuid: "uuid", requestId: 1 }],
+    ["non-object input", null],
+  ])("rejects %s before transport dispatch", async (_label, input) => {
+    const transport = new FakeTransport();
+    const client = new AnthropicRcClient({ transport });
+
+    await expect(
+      client.postInterrupt("cse_input", input as RcInterruptEventInput),
+    ).rejects.toMatchObject({
+      kind: "protocol",
+      operation: "postInterrupt",
+      retryable: false,
+      outcomeUnknown: false,
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it("treats a malformed admission acknowledgement as an unknown non-retryable write", async () => {
+    const transport = new FakeTransport(json({ results: [] }));
+    const client = new AnthropicRcClient({ transport });
+
+    await expect(
+      client.postInterrupt("cse_input", { uuid: "uuid", requestId: "request" }),
+    ).rejects.toMatchObject({
+      kind: "protocol",
+      operation: "postInterrupt",
+      retryable: false,
+      outcomeUnknown: true,
+    });
+    expect(transport.requests).toHaveLength(1);
   });
 });
 

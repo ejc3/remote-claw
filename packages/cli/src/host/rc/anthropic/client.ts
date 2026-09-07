@@ -59,6 +59,11 @@ export interface RcUserEventInput {
   parentToolUseId: string | null;
 }
 
+export interface RcInterruptEventInput {
+  uuid: string;
+  requestId: string;
+}
+
 export interface RcPostAck {
   /** Anthropic's canonical event identity; this may differ from the submitted UUID. */
   eventId: string;
@@ -361,25 +366,39 @@ export class AnthropicRcClient {
       options.signal,
       body,
     );
-    const response = expectRecord(raw, operation, "response", true);
-    if (!Array.isArray(response.results) || response.results.length !== 1) {
-      throw AnthropicRcError.protocol(
-        operation,
-        "results must contain exactly one acknowledgement",
-        { outcomeUnknown: true },
-      );
-    }
-    const ack = expectRecord(response.results[0], operation, "results[0]", true);
-    if (typeof ack.duplicate !== "boolean") {
-      throw AnthropicRcError.protocol(operation, "results[0].duplicate is not boolean", {
-        outcomeUnknown: true,
-      });
-    }
-    return {
-      duplicate: ack.duplicate,
-      eventId: requiredString(ack.event_id, operation, "results[0].event_id", true),
-      sequenceNum: sequenceNum(ack.sequence_num, operation, "results[0].sequence_num", true),
-    };
+    return parsePostAck(raw, operation);
+  }
+
+  /** One session-scoped Interrupt attempt; the native request carries no exact-turn target. */
+  async postInterrupt(
+    sessionId: string,
+    event: RcInterruptEventInput,
+    options: RcRequestOptions = {},
+  ): Promise<RcPostAck> {
+    const operation = "postInterrupt";
+    const encodedSession = encodeSessionId(sessionId, operation);
+    const validatedEvent = validateInterruptEvent(event, operation);
+    const body = JSON.stringify({
+      events: [
+        {
+          payload: {
+            type: "control_request",
+            request_id: validatedEvent.requestId,
+            request: { subtype: "interrupt" },
+            uuid: validatedEvent.uuid,
+          },
+        },
+      ],
+    });
+    const raw = await this.#json(
+      operation,
+      "POST",
+      `/v1/code/sessions/${encodedSession}/events`,
+      options.signal,
+      body,
+      { retryAfter401: false },
+    );
+    return parsePostAck(raw, operation);
   }
 
   async #json(
@@ -388,6 +407,7 @@ export class AnthropicRcClient {
     path: string,
     signal: AbortSignal | undefined,
     body?: string,
+    transportOptions: { retryAfter401?: boolean } = {},
   ): Promise<unknown> {
     const timeout = AbortSignal.timeout(this.#requestTimeoutMs);
     const requestSignal = signal === undefined ? timeout : AbortSignal.any([signal, timeout]);
@@ -401,6 +421,7 @@ export class AnthropicRcClient {
         path,
         accept: "application/json",
         ...(body === undefined ? {} : { body }),
+        ...transportOptions,
         signal: requestSignal,
       });
     } catch (error) {
@@ -428,6 +449,26 @@ export class AnthropicRcClient {
     }
     return readBoundedJson(inspected, operation, requestSignal, method);
   }
+}
+
+function parsePostAck(raw: unknown, operation: string): RcPostAck {
+  const response = expectRecord(raw, operation, "response", true);
+  if (!Array.isArray(response.results) || response.results.length !== 1) {
+    throw AnthropicRcError.protocol(operation, "results must contain exactly one acknowledgement", {
+      outcomeUnknown: true,
+    });
+  }
+  const ack = expectRecord(response.results[0], operation, "results[0]", true);
+  if (typeof ack.duplicate !== "boolean") {
+    throw AnthropicRcError.protocol(operation, "results[0].duplicate is not boolean", {
+      outcomeUnknown: true,
+    });
+  }
+  return {
+    duplicate: ack.duplicate,
+    eventId: requiredString(ack.event_id, operation, "results[0].event_id", true),
+    sequenceNum: sequenceNum(ack.sequence_num, operation, "results[0].sequence_num", true),
+  };
 }
 
 function pageQuery(options: RcListOptions): string {
@@ -812,6 +853,25 @@ async function readBoundedJson(
   } catch {
     throw invalid("body is not valid JSON");
   }
+}
+
+function validateInterruptEvent(
+  event: RcInterruptEventInput,
+  operation: string,
+): RcInterruptEventInput {
+  let uuid: unknown;
+  let requestId: unknown;
+  try {
+    const input = expectRecord(event, operation, "event");
+    uuid = input.uuid;
+    requestId = input.requestId;
+  } catch {
+    throw AnthropicRcError.protocol(operation, "event fields are not readable");
+  }
+  return {
+    uuid: boundedInputString(uuid, operation, "uuid", MAX_EVENT_METADATA_CHARS),
+    requestId: boundedInputString(requestId, operation, "requestId", MAX_EVENT_METADATA_CHARS),
+  };
 }
 
 function validateUserEvent(event: RcUserEventInput, operation: string): RcUserEventInput {
