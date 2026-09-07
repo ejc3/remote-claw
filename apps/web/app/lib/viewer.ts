@@ -348,7 +348,7 @@ export interface Message {
   msgId: string;
   /** Set on a locally-rendered OPTIMISTIC echo (#113): the user's own just-sent message, shown instantly
    *  (msgId `pending-<clientMsgId>`) before the host echoes it back. The `accepted` ack (matching
-   *  clientMsgId) re-keys it to the real `user-<seq>` so the host's content echo dedups — no flash, no dup. */
+   *  clientMsgId) re-keys it to the real `user-<seq>` so canonical content replaces it in place. */
   clientMsgId?: string;
   optimistic?: boolean;
   /** True only for a local user echo whose publish outcome is ambiguous. This state is absorbing until

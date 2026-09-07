@@ -108,7 +108,8 @@ function userInput(item: CodexThreadItem): { text: string; digest: string } | nu
   if (trimmed.startsWith("/") || (trimmed === "" && blocks.every(([type]) => type === "text")))
     return null;
   return {
-    text: text || `📎 ${blocks.filter(([type]) => type !== "text").length} image(s)`,
+    text:
+      trimmed === "" ? `📎 ${blocks.filter(([type]) => type !== "text").length} image(s)` : text,
     digest: inputDigest(blocks),
   };
 }
