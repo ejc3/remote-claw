@@ -275,16 +275,16 @@ test("a photo STAGES, then is sent on submit and echoes in the transcript (#44/#
   );
   await page
     .locator('input[type="file"]')
-    .setInputFiles({ name: "photo.png", mimeType: "image/png", buffer: png });
+    .setInputFiles({ name: "Screen Shot.png", mimeType: "image/png", buffer: png });
 
   // Attaching STAGES the image (a removable thumbnail) — it is NOT sent yet (#112).
   await expect(page.locator(".staged-item img")).toBeVisible();
-  await expect(page.locator(".row-user .pill", { hasText: "📎 photo.png" })).toHaveCount(0);
+  await expect(page.locator(".row-user .pill", { hasText: "📎 Screen Shot.png" })).toHaveCount(0);
 
   // Submit → the staged image is sent; the host writes it + echoes the attachment chip (proves the full
   // inbound path: viewer downscale → E2E frame → relay write + inject + echo → transcript).
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.locator(".row-user .pill", { hasText: "📎 photo.png" })).toBeVisible();
+  await expect(page.locator(".row-user .pill", { hasText: "📎 Screen_Shot.png" })).toBeVisible();
   await page.locator("section.chat").screenshot({ path: "test-results/attachment-e2e.png" });
 });
 

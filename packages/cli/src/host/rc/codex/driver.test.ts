@@ -955,7 +955,15 @@ describe("Codex M3a companion", () => {
     expect(event.images).toBeUndefined();
   });
 
-  it("projects native image history without retaining inline bytes or reading local paths", async () => {
+  it.each([
+    { label: "caption", texts: ["describe"], expected: "describe" },
+    { label: "no text", texts: [], expected: "📎 2 image(s)" },
+    { label: "empty text", texts: [""], expected: "📎 2 image(s)" },
+    { label: "whitespace text", texts: [" \t", "\n "], expected: "📎 2 image(s)" },
+  ])("projects native image history with $label without retaining inline bytes or reading local paths", async ({
+    texts,
+    expected,
+  }) => {
     const client = new FakeCodexClient();
     client.pages = [
       {
@@ -963,9 +971,9 @@ describe("Codex M3a companion", () => {
           {
             turnId: "old-turn",
             item: {
-              ...userItem("old-image", "describe"),
+              ...userItem("old-image", texts.join("")),
               content: [
-                { type: "text", text: "describe" },
+                ...texts.map((text) => ({ type: "text", text })),
                 { type: "image", url: `data:image/png;base64,${"A".repeat(1024 * 1024)}` },
                 { type: "localImage", path: "/not-readable.png" },
               ],
@@ -977,9 +985,7 @@ describe("Codex M3a companion", () => {
     ];
     const launched = await start(client);
     controllers.push(launched.ac);
-    expect(upstream(launched.session, "user")).toMatchObject([
-      { message: { content: "describe" } },
-    ]);
+    expect(upstream(launched.session, "user")).toMatchObject([{ message: { content: expected } }]);
     expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("data:image");
     await stop(launched.ac, launched.run);
   });

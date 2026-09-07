@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseAccepted } from "../app/lib/transcript.js";
 import type { Message } from "../app/lib/viewer.js";
 import {
+  appendUniqueMessage,
   markDeliveryUnknown,
   markPendingDeliveryUnknown,
   optimisticMessage,
@@ -70,14 +71,26 @@ describe("reconcileAccepted", () => {
     expect(msgs[0]?.msgId).toBe("user-9");
   });
 
-  it("end-to-end: optimistic → accepted re-key → echo dedups by msgId (one bubble either order)", () => {
-    // Order A: accepted before echo
-    let msgs = [opt("cm-9")];
-    msgs = reconcileAccepted(msgs, "cm-9", 4); // re-keyed to user-4
-    const echo: Message = { kind: "user", seq: 4, text: "msg cm-9", msgId: "user-4" };
-    const hasDup = msgs.some((m) => m.msgId === echo.msgId);
-    expect(hasDup).toBe(true); // appendUniqueMessage would dedup the echo → still one bubble
-    expect(msgs).toHaveLength(1);
+  it.each([
+    true,
+    false,
+  ])("uses canonical filenames in place, with no duplicate (ack first=%s)", (ackFirst) => {
+    let msgs = [optimisticMessage("cm-9", "describe", staged(["Screen Shot.png"]))];
+    const echo: Message = {
+      kind: "user",
+      seq: 4,
+      text: "📎 Screen_Shot.png\ndescribe",
+      msgId: "user-4",
+    };
+    if (ackFirst) msgs = reconcileAccepted(msgs, "cm-9", 4);
+    msgs = appendUniqueMessage(msgs, echo);
+    if (!ackFirst) msgs = reconcileAccepted(msgs, "cm-9", 4);
+    expect(msgs).toEqual([
+      { ...echo, clientMsgId: "cm-9", optimistic: false, deliveryUnknown: false },
+    ]);
+    expect(appendUniqueMessage(msgs, echo)).toBe(msgs);
+    expect(appendUniqueMessage(msgs, { ...echo, text: "changed replay" })).toBe(msgs);
+    expect(reconcileAccepted(msgs, "cm-9", 4)).toEqual(msgs);
   });
 });
 

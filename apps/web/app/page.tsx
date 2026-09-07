@@ -107,8 +107,33 @@ function isGapMessage(
   );
 }
 
-function appendUniqueMessage(prev: Message[], msg: Message): Message[] {
-  if (prev.some((m) => m.msgId === msg.msgId)) return prev;
+export function appendUniqueMessage(prev: Message[], msg: Message): Message[] {
+  const existing = prev.find((m) => m.msgId === msg.msgId);
+  if (existing) {
+    const clientMsgId = existing.clientMsgId;
+    // An accepted receipt rekeys our optimistic row before its canonical content arrives. Replace
+    // that provisional text (e.g. an unsanitized filename), retaining the sender's receipt status.
+    // Once canonical, ordinary replay still deduplicates without rewriting transcript content.
+    if (
+      msg.kind === "user" &&
+      msg.seq !== null &&
+      existing.kind === "user" &&
+      existing.seq === null &&
+      clientMsgId !== undefined &&
+      existing.optimistic === false
+    )
+      return prev.map((m) =>
+        m === existing
+          ? {
+              ...msg,
+              clientMsgId,
+              optimistic: false,
+              deliveryUnknown: false,
+            }
+          : m,
+      );
+    return prev;
+  }
   return [...prev, msg];
 }
 
@@ -275,7 +300,7 @@ export function composerTextForSend(text: string, preserveOriginal: boolean): st
 /** The OPTIMISTIC echo (#113) of a just-sent message — rendered instantly so the user's image/text
  *  appears without waiting for the host's round-trip echo (which on a suspended iOS stream is delayed).
  *  Mirrors the host's echo text (📎 chips + caption, or the prompt) and carries `clientMsgId` so the
- *  `accepted` ack can re-key it to the real `user-<seq>` (then the host echo dedups by msgId). */
+ *  `accepted` ack can re-key it to the real `user-<seq>` (then the host echo updates it in place). */
 export function optimisticMessage(
   clientMsgId: string,
   text: string,
@@ -322,7 +347,7 @@ export function fitStaged(
 
 /** Reconcile an optimistic echo against the host's `accepted` ack (#113): if the real `user-<seq>` echo
  *  has already arrived, drop the still-pending optimistic twin; otherwise re-key the optimistic to
- *  `user-<seq>` so the upcoming echo dedups by msgId. Either order → exactly one bubble, no flash.
+ *  `user-<seq>` so the upcoming echo updates it in place. Either order → one canonical bubble.
  *
  *  IDEMPOTENT under a re-delivered ack (at-least-once; a #seen eviction on a long session, or a fresh
  *  orderer on revive, re-yields the seq-null `accepted`): the optimistic twin is identified ONLY by its
