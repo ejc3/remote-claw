@@ -33,8 +33,10 @@ legacy full-turn hydration. One provider marker appeared once in two browsers; o
 acknowledgement appeared once in official Remote, the TUI, and both browsers, with a host receipt in the
 sending browser. A browser-B turn completed while an ephemeral provider transport stayed disabled;
 daemon, TUI, companion, and browsers stayed live before provider transport restored to connected. This
-is provider-transport isolation, not per-device unsubscribe, and it does not graduate richer controls,
-restart/backfill, or broker-loss. Every current `Session` binding remains process-local.
+is provider-transport isolation, not per-device unsubscribe. The separate
+[Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) passed clean companion
+restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy.
+Richer controls remain disabled. Every current `Session` binding remains process-local.
 
 This adapter choice is independent of inference routing. Anthropic, OpenAI, or Bedrock selects where
 model work runs; it does not select browser identity, broker transport, readiness, or native
@@ -194,7 +196,8 @@ The Claude-native companion sends non-empty, non-slash text through one serializ
 a stable UUID. It waits for the canonical provider history/SSE event before publishing the ordered user
 row. Any rejected or outcome-unknown POST permanently fences the projection and is not retried.
 
-The Codex companion waits for native idle, starts one turn with the broker event ID as
+The Codex companion waits for native idle, rechecks that its projection is still open, starts one turn
+with the broker event ID as
 `clientUserMessageId`, and acknowledges only after the matching completed native user item appears.
 The immutable projection coordinate is `(turnId,itemId)`, because Codex item IDs are only turn-scoped.
 An exact replay deduplicates; changed projected bytes at the same pair fence the projection.
@@ -248,7 +251,7 @@ attached for the projection lifetime.
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
 | Permission behavior | stable surface disabled | native/local; never projected or answered | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | approvals/questions solely owned by attached local TUI; companion cannot respond |
 | Status advertised | yes | no | no | yes | yes |
-| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection; restart acceptance is not yet claimed |
+| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on explicit WS/paginated history |
 
 The exact advertised viewer capabilities are:
 

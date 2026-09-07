@@ -34,7 +34,7 @@ What exists today:
 | Claude native collaboration plus multiple remote-claw browsers | M1 complete on Linux/exact-2.1.237: structured provider-ordered text, local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and exact-SHA deployed-broker acceptance |
 | OpenCode server adapter | M2 complete for exact 1.17.5/Linux arm64, the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux fallback | M4 complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: maintained lower-fidelity local-pane/two-browser fallback; browser input is held behind an active model turn and its permission/question modal, reload/departure/broker-loss passed, and the shared idle editor/slash/config UI must not be used concurrently; no independent peer ordering or provider-native/official-client claim |
-| Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation; per-device unsubscribe, richer controls, restart/backfill, and broker-loss are not claimed |
+| Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation. A separate explicit-WS/paginated run accepted clean companion restart/backfill and broker-loss isolation; managed-Unix/legacy recovery, per-device unsubscribe, and richer controls remain unclaimed |
 | Bedrock and no-Anthropic-account launch | M5 complete for one tools-disabled text round-trip on exact Linux arm64 / Claude 2.1.237 / `us-east-1` / `anthropic.claude-opus-4-8` / temporary IMDSv2 SigV4; separate from adapter fidelity |
 
 The current private relay is useful product infrastructure, but no single adapter is the whole
@@ -454,7 +454,11 @@ and structured permission/question answer is disabled.
 For current app-server approval/question requests, the first result or error wins globally. The
 companion client has no response method, so it can send neither and the attached TUI remains sole owner.
 Closing or failing the projection closes only the companion socket and remote-claw session, never the
-app-server, TUI, or native thread.
+app-server, TUI, or native thread. The writer rechecks session closure after waiting for native idle,
+immediately before sending, so a parked prompt cannot escape a projection already closed by the relay.
+A new explicit exact-thread invocation creates a fresh projection and observes native history without
+restoring pending mutations or consuming the retired projection's command stream. The recovery
+acceptance below covers explicit WS/paginated history only.
 
 ## 11. Agent adapters and inference connectors
 
@@ -468,7 +472,7 @@ have narrower, truthfully labeled guarantees.
 | Claude native companion | Structured text projection over ordinary Anthropic RC, including explicit exact-ID fresh-projection restart and literal official-client coexistence | Exact Linux/2.1.237 only; no remote controls, permissions, attachments, or status |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
-| Codex | Supported text/status app-server companion for exact 0.151.0/Linux arm64, including bounded same-thread official Remote coexistence | One explicit thread and attached local-TUI precondition; provider-transport isolation is proved, but per-device unsubscribe, browser controls, restart/backfill, and broker-loss are not |
+| Codex | Supported text/status app-server companion for exact 0.151.0/Linux arm64, including bounded same-thread official Remote coexistence and separate explicit-WS/paginated restart/backfill and broker-loss acceptance | One explicit thread and attached local-TUI precondition; managed-Unix/legacy recovery, per-device unsubscribe, and browser controls remain unclaimed |
 | Bedrock inference | Maintained exact-tuple MITM connector | Replaces Anthropic inference while preserving the private local RC facade; other tuples remain unqualified |
 | Accountless mode | Maintained for the exact M5 Bedrock tuple | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
 
@@ -729,6 +733,17 @@ transport was absent. It does not prove that one provider device was selectively
 another remained connected, so it is not a per-device unsubscribe result. The run also does not
 graduate richer controls, attachments, browser approval/question ownership, companion
 restart/backfill, or broker-loss behavior.
+
+## 15.3 Codex recovery follow-on complete
+
+The 2026-09-07 packed-install run used exact 0.151.0/Linux arm64, explicit-loopback WS with paginated
+history, a built viewer/local SQLite broker, one dedicated native TUI, and two Chromium contexts.
+Clean companion stop/restart changed the projection ID, not the supplied native thread. Native history
+was unchanged across attachment, both browsers recovered each turn once, and a fresh browser turn
+completed. Cutting all broker-proxy connections then stopped only the companion; a later local TUI
+turn completed. This does not extend recovery acceptance to managed Unix/legacy or simultaneous
+official Remote. The [release record](release-finish-line.md#codex-recovery--complete) owns details;
+the post-closure idle race and applied-but-unobserved restart case have focused driver regressions.
 
 ## 16. Post-M2 viewer parity lane
 

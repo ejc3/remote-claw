@@ -23,7 +23,11 @@ credentials.
 > M3b is also complete on an exact official Remote thread through Codex's managed Unix socket and
 > legacy full-turn history: official Remote, the TUI, and two browsers exchanged one-copy text, and a
 > browser turn remained live while provider transport was disabled. This proves provider-transport
-> isolation, not per-device unsubscribe, and does not claim richer controls, restart, or broker-loss.
+> isolation, not per-device unsubscribe. A separate
+> [Codex recovery follow-on](docs/release-finish-line.md#codex-recovery--complete) now proves
+> fresh-projection restart/backfill and broker-loss isolation on explicit-port loopback WebSocket
+> with paginated history. Recovery through managed Unix/legacy history or alongside official Remote,
+> stable projection identity, and richer controls remain unclaimed.
 > M4 is also complete for the lower-fidelity tmux fallback: a packed CLI with exact Claude 2.1.237 on
 > Linux arm64 and Bedrock Sonnet 4.6 kept a local pane and two browsers coherent across reload, browser
 > departure, a locally approved permission prompt, broker loss, and a later local turn. A browser prompt
@@ -51,7 +55,7 @@ The intended surface matrix is:
 | Agent surface | Local native UI | Official provider collaboration | remote-claw browsers | Current truth |
 | --- | --- | --- | --- | --- |
 | Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; M1's exact-2.1.237 native companion passed local TUI, literal official web UI on the user's phone, two-browser, fresh-projection restart, broker-loss, packed-install, and exact-SHA deployed-broker acceptance |
-| Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket; failure isolation is proved at the provider-transport boundary, not as per-device unsubscribe |
+| Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket. A separate [loopback/paginated recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) adds fresh-projection restart/backfill and broker-loss isolation; per-device Remote unsubscribe remains unclaimed |
 | OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | M2 complete for exact OpenCode 1.17.5 on Linux arm64 with the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux compatibility | Terminal pane | Not claimed by this fallback | Multiple browsers | M4 complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed CLI, local pane, two browsers, reload, non-empty non-slash text plus attachments, active-turn native-modal isolation, browser departure, and broker-loss isolation; idle-editor concurrency, raw controls, ordering, and native application remain lower fidelity or unsupported |
 
@@ -135,7 +139,9 @@ Other supported and experimental paths have narrower current claims:
   text/status result. The current companion also accepts literal `unix://` for Codex's same-user
   managed control socket; it rejects arbitrary Unix paths. The local TUI must stay attached and owns
   approvals/questions. M3b's exact official-Remote/TUI/two-browser coexistence and provider-transport
-  isolation gate is complete; richer controls, restart/backfill, and broker-loss remain separate.
+  isolation gate is complete. The separate
+  [Codex recovery result](docs/release-finish-line.md#codex-recovery--complete) covers only explicit-port
+  loopback WebSocket with paginated history; richer controls remain disabled.
 - tmux captures transcripts and injects ordinary non-empty non-slash text plus attachments when no
   higher-fidelity native seam is available. Node loads a private tmux buffer before a fixed helper
   takes a shared Linux `flock`, claims the content-free gate, and holds the lock through paste, settle,
@@ -313,7 +319,16 @@ prompt and acknowledgement appeared exactly once in official Remote, the TUI, an
 the sending browser showed its host receipt. While an ephemeral provider transport stayed disabled, a
 browser-B turn completed and the managed daemon, TUI, companion, and both browsers stayed live; provider
 transport then restored to connected. This proves provider-transport isolation, not per-device
-unsubscribe. Richer controls, restart/backfill, and broker-loss remain unclaimed.
+unsubscribe.
+
+To restart only the companion, repeat its invocation with the same exact thread UUID and open the
+fresh projection in the viewer. The new projection observes native history without replaying retired
+browser commands. The separate 2026-09-07
+[recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) passed with a packed CLI,
+local SQLite broker, attached TUI, and two browsers on explicit-port loopback WebSocket with paginated
+history. Broker loss retired only the companion while a local TUI turn completed. This recovery result
+does not cover managed Unix/legacy history, simultaneous official Remote, stable projection identity,
+or richer controls.
 
 ## Development gates
 

@@ -11,7 +11,8 @@ text/interrupt tuple and its real-TUI/two-browser acceptance are also green. Its
 follow-on and separate real-TUI/two-browser running-to-idle acceptance are also green. Codex M3a's exact
 0.151.0/Linux arm64 app-server text/status tuple and real-TUI/two-browser acceptance are green. M3b's
 exact official-Remote/TUI/two-browser coexistence and provider-transport-isolation outcome is also
-green for that tuple. M4's packed exact-Claude/Linux/Bedrock tmux outcome is also green: local pane,
+green for that tuple. The Codex clean companion restart/backfill and broker-loss follow-on is green
+on explicit WS/paginated history, not managed Unix/legacy. M4's packed exact-Claude/Linux/Bedrock tmux outcome is also green: local pane,
 two browsers, reload, a browser turn queued without touching a focused native permission modal, local
 approval after both browsers departed, queued-turn completion, broker loss, and later local work. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
@@ -89,7 +90,7 @@ pnpm --filter @remote-claw/web run test:run
 | Claude private facade | <code>packages/cli/src/host/rc/mitm*.test.ts</code>, <code>session.test.ts</code>, <code>relay.test.ts</code>, <code>launch.test.ts</code> | Strict native intake, worker delivery, translation, fail-stop, and child isolation |
 | Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code> | Fixed-origin OAuth transport, exact launch/attach binding, subscribe/history reconciliation, provider-coordinate dedup, fresh-projection restart, conservative writes, and native/projection isolation |
 | Pinned OpenCode adapter | <code>packages/cli/src/host/rc/opencode/*.test.ts</code>, focused relay/viewer tests | Exact-session capture, native coordinates and parents, marker correlation, FIFO idle admission, reconnect fencing, interrupt, restart projection, and honest text/interrupt plus read-only MAIN-status capabilities |
-| Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/viewer tests | Explicit-port loopback and literal same-user managed-socket URL boundaries, UUID/version/platform checks, `historyMode` API selection, supported-text filtering before bounds, `(turnId,itemId)` identity and changed-byte fencing, subscribe/history/readiness, native item correlation and deadline, response-less server requests, disconnect/archive/revert fencing, teardown, dispatch intent, and honest M3a/M3b capabilities |
+| Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/viewer tests, opt-in <code>tests/web/app-e2e/codex-recovery-live.spec.ts</code> | Explicit-port loopback and literal same-user managed-socket URL boundaries, UUID/version/platform checks, `historyMode` API selection, supported-text filtering before bounds, `(turnId,itemId)` identity and changed-byte fencing, subscribe/history/readiness, native item correlation and deadline, response-less server requests, disconnect/archive/revert fencing, post-idle closure fence, fresh-projection history without command replay, teardown, dispatch intent, and honest capabilities; the live sentinel owns packed-process/browser/TUI restart and broker-loss wiring |
 | Maintained tmux fallback | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, focused relay/viewer tests, <code>tests/web/app-e2e/tmux-live.spec.ts</code> | Shared-helper/flock exclusion for active turns and their native permission/question modal, buffer-before-gate injection, Linux startup probe, blocking prompt-hook failures, SessionEnd projection retirement, Stop-family non-release, three-layer slash/control rejection, permission posture, readiness/recovery, browser departure, and broker-loss isolation for the accepted exact tuple; not idle-editor, generic idle-modal, peer-ordering, structured, or provider parity |
 | Maintained exact Bedrock/accountless connector; broader tuples experimental | <code>packages/cli/src/host/rc/bedrock/*.test.ts</code>, focused MITM/launch tests, exact live gate below | Exact M5 text-only tuple, credential-route isolation, and connector-local contracts; not broader tuple or full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
@@ -470,8 +471,8 @@ answered only in the TUI. The companion returned neither a result nor error for 
 response-wins requests and stayed live. Clean companion stop left app-server, TUI, and thread live.
 The real gate is retained because cross-process request fan-out and local TUI ownership cannot be
 faithfully established by a mock. It is a bounded acceptance outcome, not a permanent raw-probe suite.
-Focused tests own the deterministic boundaries listed in the ownership table. Restart/backfill and a
-live broker-loss run are not claimed.
+Focused tests own the deterministic boundaries listed in the ownership table. M3a itself did not claim
+restart/backfill or a live broker-loss run; the separate follow-on below does.
 
 M3b used an exact official Remote thread on Codex 0.151.0/Linux arm64, literal `unix://` to Codex's
 same-user managed control socket, and `historyMode:"legacy"` full-turn hydration. The attached local TUI
@@ -487,13 +488,47 @@ richer controls, attachments, companion restart/backfill, or broker-loss. Determ
 to own URL boundaries, both history modes, filtering, `(turnId,itemId)` identity, changed-byte fencing,
 and the other adapter invariants in the ownership table.
 
+### Codex recovery follow-on
+
+Passed on 2026-09-07 for exact Codex 0.151.0/Linux arm64, explicit-loopback WS and paginated history.
+The single opt-in sentinel starts a built local SQLite broker and two Chromium contexts (desktop and
+phone), runs a packed-installed companion, stops/restarts it on the same native thread with a fresh
+projection, compares native text history unchanged, and checks browser turns once. It then cuts every
+connection through its broker proxy and requires a fresh local TUI answer while only the companion
+exits with failure. The supplied native app-server and TUI are caller-owned and are never stopped by
+the test. Use a dedicated idle test thread with an empty TUI composer; do not point it at a user's
+active session.
+
+Run `pnpm --dir tests/web test:codex-recovery-live` with these explicit environment inputs:
+
+- `RC_CODEX_RECOVERY_CLI`: absolute path to the packed-installed CLI.
+- `RC_CODEX_RECOVERY_URL`: exact explicit-port loopback WebSocket URL.
+- `RC_CODEX_RECOVERY_THREAD`: exact UUIDv7 of the paginated native thread with its TUI attached.
+- `RC_CODEX_RECOVERY_CWD`: dedicated native working directory.
+- `RC_CODEX_RECOVERY_TMUX_SOCKET` and `RC_CODEX_RECOVERY_TMUX_TARGET`: the dedicated TUI's tmux socket
+  and target.
+- Optional `RC_CODEX_RECOVERY_ARTIFACTS`: absolute private screenshot directory outside the checkout.
+
+The command sets `RC_CODEX_RECOVERY_LIVE=1`; ordinary suites never discover or probe native services.
+Playwright traces are disabled because pairing is pass-bearing. The initial live attempt exposed a
+harness-only terminal input race; a bounded draft-presence wait and 250 ms settle before one Enter
+fixed submission. No application behavior changed for that finding.
+
+The application closure race belongs in `driver.test.ts`: session close can precede asynchronous bridge
+abort, and native idle must not release already-parked browser text across that boundary. The second
+focused regression observes a previously applied but unacknowledged prompt after restart without
+repeating its write, and rejects retired-session input. These do not need provider calls. The live
+sentinel stays because packed-process attachment, actual native history, browser reconstruction, and
+local TUI survival after socket loss cannot be established by the fake client. Managed-Unix/legacy,
+native-process crash recovery, and simultaneous official-Remote recovery remain outside this gate.
+
 The later milestones use the same shared security checks but keep product-specific truth:
 
 | Surface | Required real outcome |
 | --- | --- |
 | OpenCode status follow-on | Complete: one installed exact 1.17.5 session's MAIN running-to-idle transition was observed consistently by an attached TUI and two independent Chromium contexts; this does not reopen M2 |
 | OpenCode beyond M2 | Each added version, platform, model, permission/control family, or native collaboration surface needs its own exact tuple and bounded outcome; it does not reopen the completed text/interrupt tuple |
-| Codex beyond M3a/M3b | Later versions, platforms, controls, attachments, restart/backfill, broker-loss, and any per-device unsubscribe claim need their own bounded outcome without reopening the completed exact-tuple text/status/coexistence result |
+| Codex beyond accepted tuples | Managed-Unix/legacy recovery, later versions, platforms, controls, attachments, and any per-device unsubscribe claim need their own bounded outcome without reopening the completed text/status/coexistence and explicit-WS/paginated recovery results |
 | tmux | Complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: packed install, recoverable local pane, two browsers, reload, active-turn isolation at a focused native permission modal, queued browser completion after both browsers depart, and broker-loss isolation; idle-editor concurrency, independent peer ordering, and provider-native/official-client coexistence are explicitly not advertised |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 

@@ -22,7 +22,9 @@ also advertises read-only MAIN-session running/idle status; its separate real-TU
 acceptance passed on 2026-08-31 without rewriting the M2 evidence. The exact Codex 0.151.0/Linux arm64
 app-server text/status companion passed M3a with one local TUI and two browsers. M3b also passed on one
 exact official Remote thread through the literal managed Unix socket and legacy full-turn hydration;
-its bounded failure result is provider-transport isolation, not per-device unsubscribe.
+its bounded failure result is provider-transport isolation, not per-device unsubscribe. The separate
+[Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) passed clean companion
+restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy.
 M4's exact Claude 2.1.237/Linux arm64/Bedrock Sonnet 4.6 tmux acceptance is also complete for its
 lower-fidelity local-pane/two-browser boundary. A browser turn stayed queued while an active model turn
 held a native permission modal, both browsers departed, local approval completed the native turn, the
@@ -269,7 +271,9 @@ Completed native `userMessage` and non-empty `agentMessage` items publish at the
 `(turnId,itemId)` coordinates; an item ID alone is only turn-scoped. Exact history/live replay at one
 coordinate deduplicates, while changed projected bytes at the same coordinate fence the projection.
 Browser text first receives only seq-less `{native_pending:true}` admission. One idle gate serializes
-`turn/start`, using the host event UUID as `clientUserMessageId`; the final downstream acknowledgement
+`turn/start`, using the host event UUID as `clientUserMessageId`. After waiting for idle, the writer
+rechecks session closure immediately before sending: native idle cannot release a parked prompt into
+an already-retired projection's native thread. The final downstream acknowledgement
 waits up to 15 seconds for the exact completed native user item with the same client ID and text. A
 timeout, changed/reused coordinate, ambiguous write, cyclic/oversized history, disconnect, archive,
 revert, close, or delete fences only the projection instead of guessing success. Native `active` maps
@@ -290,7 +294,14 @@ thread, TUI, and both browsers, and the sending browser received the host receip
 transport then stayed disabled while a browser-B turn completed; the managed daemon, TUI, companion,
 and both browsers remained live, after which provider transport restored to connected. This isolates
 loss of provider transport from browser collaboration. It does not prove a per-device unsubscribe and
-does not graduate richer controls, restart/backfill, or broker-loss.
+does not itself graduate richer controls, restart/backfill, or broker-loss.
+
+The separate 2026-09-07 recovery run passed clean companion restart and broker-loss isolation on exact
+0.151.0/Linux arm64 with explicit-loopback WS and paginated history. A new invocation creates a fresh
+projection of the same supplied native thread, reads old native text as observation, and never consumes
+the retired projection's commands or reconstructs its pending mutations. Two browsers recovered history
+once and completed a fresh turn; broker loss stopped only the companion while a local TUI turn still
+completed. Managed-Unix/legacy recovery and simultaneous official-Remote recovery remain unclaimed.
 
 ## 5. `Session` and the relay
 
@@ -572,7 +583,8 @@ publish and recovery-cursor bodies are shape-checked. The exact `410 + channel_s
 remains the only typed permanent channel-loss response.
 
 These are product limits, not invitations to rebuild a second protocol stack. M1, pinned M2, M3a,
-the bounded exact-tuple M3b coexistence/provider-transport-isolation gate, and the exact M5
+the bounded exact-tuple M3b coexistence/provider-transport-isolation gate, the explicit-WS/paginated
+Codex recovery follow-on, and the exact M5
 accountless Bedrock tuple are complete. Add protocol machinery only for a concrete later capability
 failure.
 
