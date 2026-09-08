@@ -14,6 +14,7 @@ import type { Tracer } from "../../trace.js";
 import {
   CLAUDE_NATIVE_CAPABILITIES,
   CLAUDE_NATIVE_HARNESS,
+  CODEX_APPROVAL_CAPABILITIES,
   CODEX_CAPABILITIES,
   CODEX_HARNESS,
   type DriverCapabilities,
@@ -1806,6 +1807,97 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     expect(client.announces.at(-1)?.needs).toBe(false);
   });
 
+  it("native approval admission is pending until provider resolution, with one response", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const relay = relayOf(session, client, CODEX_APPROVAL_CAPABILITIES);
+    const pushControl = vi.spyOn(session, "pushControlResponse");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "native-approval",
+      request: { subtype: "can_use_tool", tool_name: "Shell", input: { command: "printf safe" } },
+    });
+    await waitFor(() => client.content.some((p) => p.recordKind === "permission_request"));
+    for (const msgId of ["answer-a", "answer-b"]) {
+      client.pushInbound(
+        inFrame(
+          "permission",
+          msgId,
+          JSON.stringify({ request_id: "native-approval", behavior: "allow" }),
+        ),
+      );
+    }
+    await waitFor(() => pushControl.mock.calls.length === 1);
+    await tick();
+    expect(
+      client.posts
+        .filter((p) => p.recordKind === "permission_resolved")
+        .map((p) => JSON.parse(p.text)),
+    ).toEqual([{ request_id: "native-approval", behavior: "pending" }]);
+    session.pushUpstream({ type: "control_cancel_request", request_id: "native-approval" });
+    await waitFor(() => client.posts.some((p) => p.msgId === "permresolved-native-approval"));
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "stale-answer",
+        JSON.stringify({ request_id: "native-approval", behavior: "deny" }),
+      ),
+    );
+    await waitFor(() => client.streamedInbound.includes("stale-answer"));
+    await tick();
+    ac.abort();
+    await served;
+    expect(pushControl).toHaveBeenCalledTimes(1);
+    const states = client.posts.filter((p) => p.recordKind === "permission_resolved");
+    expect(states.every((p) => p.seq === null)).toBe(true);
+    expect(states.map((p) => JSON.parse(p.text).behavior)).toEqual(["pending", "resolved"]);
+    expect(client.content.map((p) => p.seq)).toEqual([0]);
+  });
+
+  it("native answered-elsewhere closes an unanswered gate; interrupt admission alone does not", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const relay = relayOf(session, client, CODEX_APPROVAL_CAPABILITIES);
+    const pushControl = vi.spyOn(session, "pushControlResponse");
+    const interrupt = vi.spyOn(session, "pushControlRequest");
+    await relay.announce("native box");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "native-elsewhere",
+      request: { subtype: "can_use_tool", tool_name: "Shell", input: { command: "printf safe" } },
+    });
+    await waitFor(() => client.announces.at(-1)?.needs === true);
+    client.pushInbound(inFrame("interrupt", "interrupt-pending", "{}"));
+    await waitFor(() => interrupt.mock.calls.some(([subtype]) => subtype === "interrupt"));
+    expect(client.announces.at(-1)?.needs).toBe(true);
+    session.pushUpstream({ type: "control_cancel_request", request_id: "native-elsewhere" });
+    await waitFor(() => client.posts.some((p) => p.msgId === "permresolved-native-elsewhere"));
+    await waitFor(() => client.announces.at(-1)?.needs === false);
+    client.pushInbound(
+      inFrame(
+        "permission",
+        "already-answered",
+        JSON.stringify({ request_id: "native-elsewhere", behavior: "allow" }),
+      ),
+    );
+    await waitFor(() => client.streamedInbound.includes("already-answered"));
+    await tick();
+    ac.abort();
+    await served;
+    expect(pushControl).not.toHaveBeenCalled();
+    expect(
+      client.posts
+        .filter((p) => p.recordKind === "permission_resolved")
+        .map((p) => JSON.parse(p.text).behavior),
+    ).toEqual(["resolved"]);
+  });
+
   it("permission_resolved is unordered (seq=null), does not burn content seq, and replays on catch_up", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
@@ -1882,10 +1974,14 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
     expect(JSON.parse(resolved?.text ?? "{}")).toMatchObject({ behavior: "deny" });
   });
 
-  it("does not apply a permission grant when logging permission_resolved fails", async () => {
+  it.each([
+    MITM_CAPABILITIES,
+    CODEX_APPROVAL_CAPABILITIES,
+  ])("does not apply a permission grant when logging its decision state fails (%j)", async (caps) => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
-    const relay = relayOf(session, client);
+    client.reportedDurable = true;
+    const relay = relayOf(session, client, caps);
     const pushControl = vi.spyOn(session, "pushControlResponse");
     const ac = new AbortController();
     const served = relay.serve(ac.signal).then(

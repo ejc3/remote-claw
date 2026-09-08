@@ -19,7 +19,7 @@ import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import { ensureCerts, HostRcRelay, MitmProxy, RelayCore } from "@remote-claw/cli/rc";
 import { teardownWorkflowTests } from "@workflow/vitest";
 import { afterAll, describe, expect, it } from "vitest";
-import { parsePermissionResolved, parseQuestions } from "../../app/lib/transcript";
+import { foldPermissionResolutions, parseQuestions } from "../../app/lib/transcript";
 import { type Announce, type Message, Viewer } from "../../app/lib/viewer";
 import { displayedPermissionMode } from "../../app/page";
 import { uniqueIdentity } from "../helpers";
@@ -723,12 +723,7 @@ describe.skipIf(!RUN)("rc-spine e2e (real MITM + real RC worker protocol + real 
     await waitFor(() => lateMsgs.some((m) => m.kind === "permission_request"), 20_000);
     await waitFor(() => lateMsgs.some((m) => m.kind === "permission_resolved"), 20_000);
 
-    const resolvedMap = new Map<string, "allow" | "deny">();
-    for (const m of lateMsgs) {
-      if (m.kind !== "permission_resolved") continue;
-      const r = parsePermissionResolved(m.text);
-      if (r.requestId !== "") resolvedMap.set(r.requestId, r.behavior);
-    }
+    const resolvedMap = foldPermissionResolutions(lateMsgs);
     // page.tsx: effective = confirmed ?? decision → "allow" with no local decision → renders resolved.
     expect(resolvedMap.get("perm-viewer-1")).toBe("allow");
   }, 50_000);

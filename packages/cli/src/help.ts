@@ -129,10 +129,12 @@ Pinned Codex companion (--rc-driver=codex):
                      and host-prepared inline bytes, never browser URLs or file paths;
                      native status and completed shell commands/results are read-only. Interrupt binds
                      one active turn ID without retargeting or retrying; background commands may continue.
-                     Approvals, questions, model/mode changes, general files, and end remain in the
-                     local Codex client and are disabled in the viewer. Keep a local Codex TUI attached
-                     to that exact thread for the companion lifetime; it is the sole owner of approvals
-                     and questions. Supported tuple: Linux arm64 and exact Codex app-server 0.151.0
+                     Exact 0.153.4 also supports one-shot ordinary local-command approvals: Allow does
+                     not change policy; Deny rejects the command or cancels the native turn as labelled.
+                     Submitted choices stay pending until native resolution. Version 0.151.0 approvals,
+                     other permission kinds, and all questions remain native-owned. Model/mode changes,
+                     general files, and end are disabled. Keep a local Codex TUI attached to that exact
+                     thread for the companion lifetime. Supported tuple: Linux arm64 and exact Codex app-server 0.151.0
                      or 0.153.4.
                      No forwarded arguments.
 

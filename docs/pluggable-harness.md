@@ -12,7 +12,8 @@ Five drivers exist:
 - `tmux` — the maintained lower-fidelity plain-Claude compatibility adapter;
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
 - `codex` — the exact 0.151.0 or 0.153.4/Linux arm64 app-server companion: text, images, and interrupt,
-  native status, and read-only completed shell commands/results.
+  native status, and read-only completed shell commands/results; exact 0.153.4 also implements one-shot
+  ordinary local-command approvals.
 
 The private MITM remains the supported Claude beta. The native companion has passed its structured
 API-path, local Graduate, literal official web UI coexistence, and separate exact-SHA
@@ -38,7 +39,7 @@ is provider-transport isolation, not per-device unsubscribe. The separate
 [Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) passed clean companion
 restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy.
 Those historical Codex results remain exact 0.151.0 evidence; current-version, command-activity, and
-interrupt/image acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
+interrupt/image and command-approval acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
 remain disabled.
 Every current `Session` binding remains process-local.
 
@@ -121,6 +122,7 @@ The driver capability vector is deliberately per feature:
 
 ```text
 structuredPermissions
+permissionResolution? = native
 permissionPosture? = local | bypassed | unknown
 status
 controls.interrupt
@@ -136,6 +138,8 @@ frames. A driver cannot gain a mutation surface merely because an older viewer s
 structured browser permissions are false, the optional permission posture distinguishes known
 native/local ownership, explicit bypass, and an explicitly unresolved native mode. Absence is legacy
 and is never interpreted as local enforcement.
+`permissionResolution:"native"` keeps submitted choices pending until the provider resolves the request;
+it does not grant unsupported approval kinds or identify which client's choice won.
 
 The harness descriptor is separate from capabilities:
 
@@ -267,8 +271,17 @@ Completed `commandExecution` shares that identity fence and produces read-only `
 results, including failed/declined/nonzero-exit outcomes. It cannot correlate or acknowledge a pending
 browser prompt. Unfinished commands, other tool families, streaming partials, file changes, and task
 lifecycle are not projected.
-The companion client exposes no app-server request-response method, so native approvals and questions
-cannot be answered or errored by remote-claw.
+Exact 0.153.4 additionally admits ordinary local `commandExecution/requestApproval` records through
+`codex/approvals.ts`: complete bounded command/absolute cwd/optional reason, `kind:"command"`,
+`environmentId:"local"`, no network/additional-permission context, and advertised `accept` plus
+`decline` or `cancel`. Fresh opaque viewer IDs map to exact connection-owned native request objects;
+the client exposes only a one-shot command-decision method, not a generic result/error API. Allow
+cannot amend input or policy; Deny uses the advertised negative decision and discloses turn cancellation.
+Native resolution removes authority and closes the card neutrally; broker admission or socket send
+means pending, never that our choice won. Unknown writes fence only the companion without retry.
+Version 0.151.0 approvals and all unsupported permissions/questions remain native-owned. Keep the
+local TUI attached. The [release roadmap](release-finish-line.md#codex-command-approvals) records the
+native probe and passed phone/desktop acceptance without claiming official Remote approval coverage.
 
 The Claude MITM has a stronger pre-write replay fence described in
 [protocol.md](protocol.md#41-private-facade), but it likewise does not claim native
@@ -315,7 +328,7 @@ attached for the projection lifetime.
 | Capture | authenticated RC event batches | subscribe-before-history provider reconciliation | tail main and sub-agent JSONL | history plus coalesced SSE parts | resume subscription, `historyMode`-selected bounded text/completed-command history, then buffered/live notifications |
 | Remote text | Claude downstream SSE | serialized provider event POST | non-empty non-slash private-buffer text; helper/flock gates pane paste + Enter against active native turns | `prompt_async` | serialized `turn/start`, correlated to completed native user item |
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
-| Permission behavior | stable surface disabled | native/local; never projected or answered | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | approvals/questions solely owned by attached local TUI; companion cannot respond |
+| Permission behavior | stable surface disabled | native/local; never projected or answered | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4: one-shot ordinary local-command decisions with native resolution; 0.151.0 and all other permissions/questions remain native-owned |
 | Status advertised | yes | no | no | yes | yes |
 | Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on explicit WS/paginated history |
 
@@ -328,7 +341,8 @@ The exact advertised viewer capabilities are:
 | `tmux` | no; posture says native/local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
 | `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |
-| Pinned `codex` | no | yes | yes | no | no | no | yes; images only |
+| `codex` 0.151.0 | no | yes | yes | no | no | no | yes; images only |
+| `codex` 0.153.4 | ordinary local commands only; native resolution | yes | yes | no | no | no | yes; images only |
 
 See [tmux-driver.md](tmux-driver.md) and [opencode-driver.md](opencode-driver.md) for adapter-specific
 limitations.

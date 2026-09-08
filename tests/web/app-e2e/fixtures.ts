@@ -21,6 +21,8 @@ export interface SeedResult {
   sessionId: string;
   /** Close the real Session and publish its production session_terminal marker. */
   terminalize: () => Promise<void>;
+  /** End the scripted native command request through its production cancellation projection. */
+  resolvePermission: () => Promise<void>;
 }
 export type SeedHost = (opts?: {
   /** Use the two-frame seed owned by the deployed outcome smoke. */
@@ -41,7 +43,8 @@ export type SeedHost = (opts?: {
     | "tmux-unknown"
     | "tmux-legacy-skip"
     | "opencode"
-    | "codex";
+    | "codex"
+    | "codex-approval";
   /** Harness preset (RC_E2E_HARNESS) for the agent+mode badge (#164). Unset is the private MITM relay;
    * `native-rc` is the companion attached to Anthropic's ordinary Remote Control session. */
   harness?: "native-rc" | "tmux" | "opencode" | "codex";
@@ -164,6 +167,16 @@ function spawnHost(opts: {
             pass: o.pass,
             sessionId: o.sessionId,
             terminalize: () => terminalize(o.sessionId as string),
+            resolvePermission: () =>
+              new Promise<void>((resolve, reject) => {
+                if (child.stdin === null || child.stdin.destroyed) {
+                  reject(new Error("host-runner exited before resolving permission"));
+                  return;
+                }
+                child.stdin.write("resolve-permission\n", (error) =>
+                  error ? reject(error) : resolve(),
+                );
+              }),
           });
         }
       } catch {

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -41,7 +42,10 @@ export interface CodexNotification {
   params: Record<string, unknown>;
 }
 
+export type CodexRequestId = string | number;
+
 export interface CodexServerRequest {
+  id: CodexRequestId;
   method: string;
   params: Record<string, unknown>;
 }
@@ -70,8 +74,8 @@ export interface CodexItemsPage {
   nextCursor: string | null;
 }
 
-/** The driver-facing surface deliberately has no server-request response method. This makes the
- * companion structurally unable to win Codex's first-response-wins approval/question race. */
+/** Only an explicitly selected, observed command approval can receive a response. Other native
+ * requests remain passive; there is no generic result/error or policy-changing response API. */
 export interface CodexClient {
   initialize(signal: AbortSignal): Promise<CodexInitializeResult>;
   resume(threadId: string, signal: AbortSignal): Promise<CodexResumeResult>;
@@ -94,6 +98,11 @@ export interface CodexClient {
   ): Promise<void>;
   activeTurn(threadId: string, signal: AbortSignal): Promise<string | null>;
   interruptTurn(threadId: string, turnId: string, signal: AbortSignal): Promise<void>;
+  respondCommandApproval(
+    request: CodexServerRequest,
+    decision: "accept" | "decline" | "cancel",
+    signal: AbortSignal,
+  ): boolean;
   drainInbound(): CodexInbound[];
   inbound(signal: AbortSignal): AsyncGenerator<CodexInbound>;
   close(): void;
@@ -148,6 +157,25 @@ function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function isRequestId(value: unknown): value is CodexRequestId {
+  return typeof value === "string" || (typeof value === "number" && Number.isSafeInteger(value));
+}
+
+/** Retain only a fixed-size identity after resolution. Object-key order is not native identity. */
+function requestFingerprint(request: CodexServerRequest): string {
+  const canonical = JSON.stringify([request.method, request.params], (_key, value: unknown) => {
+    const object = record(value);
+    return object === null
+      ? value
+      : Object.fromEntries(
+          Object.keys(object)
+            .sort()
+            .map((key) => [key, object[key]]),
+        );
+  });
+  return createHash("sha256").update(canonical).digest("hex");
 }
 
 function aborted(): Error {
@@ -217,14 +245,19 @@ export function normalizeCodexAppServerUrl(raw: string): string {
   return url.origin;
 }
 
-/** A tiny JSON-RPC client for the exact app-server methods M3a needs. Server requests are queued for
- * observation only and can never receive a result OR an error from this client. */
+/** A tiny JSON-RPC client with one-shot replies restricted to observed command approvals. Native
+ * serverRequest/resolved, not a socket write, owns resolution of the first-response-wins race. */
 export class CodexAppServerClient implements CodexClient {
   readonly #url: string;
   readonly #socketFactory: SocketFactory;
   #socket: SocketLike | null = null;
   #nextId = 1;
   readonly #pending = new Map<number, PendingRequest>();
+  readonly #serverRequests = new Map<
+    CodexRequestId,
+    { fingerprint: string; threadId: string | null }
+  >();
+  readonly #liveServerRequests = new Map<CodexRequestId, CodexServerRequest>();
   readonly #queue: CodexInbound[] = [];
   #wake = Promise.withResolvers<void>();
   #closed = false;
@@ -478,6 +511,47 @@ export class CodexAppServerClient implements CodexClient {
     }
   }
 
+  /** True means one submission was attempted, never that this client's choice won. The exact
+   * connection-owned request object is required; consumed/resolved requests cannot be revived. */
+  respondCommandApproval(
+    request: CodexServerRequest,
+    decision: "accept" | "decline" | "cancel",
+    signal: AbortSignal,
+  ): boolean {
+    if (signal.aborted) throw aborted();
+    if (
+      record(request) === null ||
+      this.#closed ||
+      this.#liveServerRequests.get(request.id) !== request
+    ) {
+      return false;
+    }
+    const available = request.params.availableDecisions;
+    if (
+      this.#serverRequests.get(request.id)?.fingerprint !== requestFingerprint(request) ||
+      request.method !== "item/commandExecution/requestApproval" ||
+      (decision !== "accept" && decision !== "decline" && decision !== "cancel") ||
+      (available !== undefined &&
+        available !== null &&
+        (!Array.isArray(available) || !available.includes(decision)))
+    ) {
+      throw new CodexAppServerError("unsupported Codex command approval response");
+    }
+    const socket = this.#socket;
+    if (socket === null || socket.readyState !== WebSocket.OPEN) {
+      throw new CodexAppServerError("Codex app-server is not connected");
+    }
+    // Consume before the irreversible write, including a write that throws after partial delivery.
+    this.#liveServerRequests.delete(request.id);
+    try {
+      socket.send(JSON.stringify({ id: request.id, result: { decision } }));
+    } catch {
+      this.#protocolFailure();
+      throw new CodexAppServerError("Codex command approval submission failed");
+    }
+    return true;
+  }
+
   async *inbound(signal: AbortSignal): AsyncGenerator<CodexInbound> {
     for (;;) {
       while (this.#queue.length > 0) {
@@ -498,6 +572,7 @@ export class CodexAppServerClient implements CodexClient {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#clearServerRequests();
     this.#socket?.close();
     this.#releaseQueue();
     this.#rejectPending(new CodexAppServerError("Codex client closed"));
@@ -537,6 +612,7 @@ export class CodexAppServerClient implements CodexClient {
   }
 
   readonly #onMessage = (event: MessageEvent): void => {
+    if (this.#closed) return;
     let message: Record<string, unknown> | null = null;
     try {
       const body = typeof event.data === "string" ? event.data : "";
@@ -545,6 +621,10 @@ export class CodexAppServerClient implements CodexClient {
       // Malformed JSON makes subsequent request ownership unknowable. Fence this projection.
     }
     if (message === null) {
+      this.#protocolFailure();
+      return;
+    }
+    if (message.id !== undefined && !isRequestId(message.id)) {
       this.#protocolFailure();
       return;
     }
@@ -568,26 +648,72 @@ export class CodexAppServerClient implements CodexClient {
     }
     if (typeof message.method !== "string") return;
     const params = record(message.params) ?? {};
-    this.#queue.push(
-      message.id !== undefined
-        ? { kind: "request", value: { method: message.method, params } }
-        : { kind: "notification", value: { method: message.method, params } },
-    );
+    if (message.id !== undefined) {
+      const request: CodexServerRequest = { id: message.id, method: message.method, params };
+      let fingerprint: string;
+      try {
+        fingerprint = requestFingerprint(request);
+      } catch {
+        this.#protocolFailure();
+        return;
+      }
+      const existing = this.#serverRequests.get(request.id);
+      if (existing !== undefined) {
+        if (existing.fingerprint !== fingerprint) {
+          this.#protocolFailure();
+          return;
+        }
+        const live = this.#liveServerRequests.get(request.id);
+        if (live !== undefined) {
+          this.#queue.push({ kind: "request", value: live });
+        }
+      } else {
+        if (this.#serverRequests.size >= CODEX_HISTORY_ITEM_LIMIT) {
+          this.#protocolFailure();
+          return;
+        }
+        this.#serverRequests.set(request.id, {
+          fingerprint,
+          threadId: typeof params.threadId === "string" ? params.threadId : null,
+        });
+        this.#liveServerRequests.set(request.id, request);
+        this.#queue.push({ kind: "request", value: request });
+      }
+    } else {
+      if (message.method === "serverRequest/resolved") {
+        if (!isRequestId(params.requestId)) {
+          this.#protocolFailure();
+          return;
+        }
+        const request = this.#serverRequests.get(params.requestId);
+        if (request !== undefined && request.threadId === params.threadId) {
+          this.#liveServerRequests.delete(params.requestId);
+        }
+      }
+      this.#queue.push({ kind: "notification", value: { method: message.method, params } });
+    }
     this.#releaseQueue();
   };
 
   readonly #onClose = (): void => {
     if (this.#closed) return;
     this.#closed = true;
+    this.#clearServerRequests();
     this.#rejectPending(new CodexAppServerError("Codex app-server connection closed"));
     this.#releaseQueue();
   };
 
   #protocolFailure(): void {
     this.#closed = true;
+    this.#clearServerRequests();
     this.#socket?.close();
     this.#rejectPending(new CodexAppServerError("Codex app-server protocol error"));
     this.#releaseQueue();
+  }
+
+  #clearServerRequests(): void {
+    this.#serverRequests.clear();
+    this.#liveServerRequests.clear();
   }
 
   #rejectPending(error: Error): void {
@@ -605,16 +731,17 @@ export class CodexAppServerClient implements CodexClient {
   }
 }
 
+/** The first subscriber supplies the product name, which can contain spaces ("Codex Desktop").
+ * Only that leading product's version counts; never fall through to a later codex-cli token. */
+export function codexAppServerVersion(userAgent: string): string | null {
+  return /^[^\s/]+(?: [^\s/]+)*\/([^\s/]+)(?:\s|$)/.exec(userAgent)?.[1] ?? null;
+}
+
 export function assertCodexCompatibility(
   result: CodexInitializeResult,
   runtime: Readonly<{ platform: NodeJS.Platform; arch: string }> = process,
 ): void {
-  // app-server's leading product name belongs to the first initialized subscriber and is shared by
-  // later subscribers. The version after its final slash is the server version; never pin that
-  // unrelated client name to this companion's name.
-  const serverProduct = result.userAgent.split(" ", 1)[0] ?? "";
-  const slash = serverProduct.lastIndexOf("/");
-  const serverVersion = slash === -1 ? "" : serverProduct.slice(slash + 1);
+  const serverVersion = codexAppServerVersion(result.userAgent);
   if (
     runtime.platform !== "linux" ||
     runtime.arch !== "arm64" ||

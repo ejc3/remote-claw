@@ -10,6 +10,8 @@ export interface ControlCapabilities {
 
 export interface DriverCapabilities {
   structuredPermissions: boolean;
+  /** Native first-response-wins decisions close only on provider resolution, not broker admission. */
+  permissionResolution?: "native";
   permissionPosture?: "local" | "bypassed" | "unknown";
   status: boolean;
   controls: ControlCapabilities;

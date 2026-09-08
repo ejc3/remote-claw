@@ -5,9 +5,13 @@ import type { HostImage } from "../session.js";
 import {
   assertCodexCompatibility,
   CODEX_APP_SERVER_VERSION,
+  CODEX_HISTORY_ITEM_LIMIT,
   CODEX_LEGACY_TURN_PAGE_LIMIT,
   CodexAppServerClient,
   CodexAppServerError,
+  type CodexRequestId,
+  type CodexServerRequest,
+  codexAppServerVersion,
   isCodexThreadId,
   normalizeCodexAppServerUrl,
 } from "./client.js";
@@ -60,13 +64,34 @@ class FakeSocket {
     this.#events.addEventListener(type, listener, options);
   }
 
-  emit(message: Record<string, unknown>): void {
+  emit(message: Record<string, unknown> | CodexServerRequest): void {
     this.#events.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
   }
 
   respond(id: unknown, result: unknown): void {
     queueMicrotask(() => this.emit({ id, result }));
   }
+}
+
+function commandApproval(id: CodexRequestId = 731): CodexServerRequest {
+  return {
+    id,
+    method: "item/commandExecution/requestApproval",
+    params: {
+      threadId: THREAD_ID,
+      turnId: "turn-approval",
+      itemId: "item-approval",
+      command: "echo example",
+      cwd: "/tmp",
+      availableDecisions: ["accept", "decline", "cancel"],
+    },
+  };
+}
+
+function takeServerRequest(client: CodexAppServerClient): CodexServerRequest {
+  const inbound = client.drainInbound().find((event) => event.kind === "request");
+  if (inbound?.kind !== "request") throw new Error("expected native server request");
+  return inbound.value;
 }
 
 describe("Codex app-server boundary", () => {
@@ -279,6 +304,16 @@ describe("Codex app-server boundary", () => {
       assertCodexCompatibility(
         {
           ...compatible,
+          userAgent:
+            "Codex Desktop/0.153.4 (Ubuntu 24.4.0; aarch64) unknown (remote-claw-approval-version; 0.0.0)",
+        },
+        { platform: "linux", arch: "arm64" },
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertCodexCompatibility(
+        {
+          ...compatible,
           userAgent: "codex_chatgpt_ios_remote/0.153.4 (Ubuntu; aarch64)",
         },
         { platform: "linux", arch: "arm64" },
@@ -307,6 +342,10 @@ describe("Codex app-server boundary", () => {
         { platform: "linux", arch: "arm64" },
       ],
       [
+        { ...compatible, userAgent: "Codex Desktop/0.150.0 codex-cli/0.153.4" },
+        { platform: "linux", arch: "arm64" },
+      ],
+      [
         { ...compatible, platformFamily: "windows" },
         { platform: "linux", arch: "arm64" },
       ],
@@ -321,6 +360,23 @@ describe("Codex app-server boundary", () => {
         /Codex app-server 0\.151\.0 or 0\.153\.4 on Linux arm64/,
       );
     }
+  });
+
+  it.each([
+    ["Codex Desktop/0.153.4 (Ubuntu 24.4.0; aarch64)", "0.153.4"],
+    ["legacy-subscriber/0.151.0 codex-cli/0.151.0", "0.151.0"],
+    ["Codex Desktop/0.150.0 codex-cli/0.153.4", "0.150.0"],
+    ["subscriber/0.153.4-dev codex-cli/0.153.4", "0.153.4-dev"],
+    ["", null],
+    ["Codex Desktop", null],
+    ["/0.153.4", null],
+    ["Codex Desktop/", null],
+    ["Codex Desktop/ codex-cli/0.153.4", null],
+    ["Codex Desktop/0.153.4/extra", null],
+    [" Codex Desktop/0.153.4", null],
+    ["Codex\nDesktop/0.153.4", null],
+  ])("extracts only the leading product version from %j", (userAgent, expected) => {
+    expect(codexAppServerVersion(userAgent as string)).toBe(expected);
   });
 
   it("rejects a resumed thread without a recognized history mode", async () => {
@@ -370,6 +426,7 @@ describe("Codex app-server boundary", () => {
       {
         kind: "request",
         value: {
+          id: 731,
           method: "item/commandExecution/requestApproval",
           params: { threadId: THREAD_ID, itemId: "item-approval" },
         },
@@ -383,6 +440,230 @@ describe("Codex app-server boundary", () => {
     ).toBe(false);
 
     client.close();
+  });
+
+  it("reuses live replay identity and submits each typed request ID at most once", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    socket.emit(commandApproval(731));
+    const numeric = takeServerRequest(client);
+    const replay = commandApproval(731);
+    replay.params = Object.fromEntries(Object.entries(replay.params).reverse());
+    socket.emit(replay);
+    expect(takeServerRequest(client)).toBe(numeric);
+    socket.emit(commandApproval("731"));
+    const textual = takeServerRequest(client);
+    expect(client.respondCommandApproval(numeric, "accept", signal)).toBe(true);
+    expect(client.respondCommandApproval(numeric, "decline", signal)).toBe(false);
+    socket.emit(commandApproval(731));
+    expect(client.drainInbound()).toEqual([]);
+    expect(client.respondCommandApproval(textual, "cancel", signal)).toBe(true);
+    expect(socket.sent.filter((message) => "result" in message)).toEqual([
+      { id: 731, result: { decision: "accept" } },
+      { id: "731", result: { decision: "cancel" } },
+    ]);
+    client.close();
+  });
+
+  it("only a matching native thread and request ID resolves an already queued approval", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    socket.emit(commandApproval());
+    const request = takeServerRequest(client);
+    for (const params of [
+      { threadId: "another-thread", requestId: 731 },
+      { threadId: THREAD_ID, requestId: "731" },
+    ]) {
+      socket.emit({ method: "serverRequest/resolved", params });
+    }
+    socket.emit(commandApproval());
+    expect(takeServerRequest(client)).toBe(request);
+    socket.emit({
+      method: "serverRequest/resolved",
+      params: { threadId: THREAD_ID, requestId: 731 },
+    });
+    expect(client.respondCommandApproval(request, "accept", signal)).toBe(false);
+    expect(client.drainInbound()).toEqual([
+      {
+        kind: "notification",
+        value: {
+          method: "serverRequest/resolved",
+          params: { threadId: THREAD_ID, requestId: 731 },
+        },
+      },
+    ]);
+    socket.emit(commandApproval());
+    expect(client.drainInbound()).toEqual([]);
+    expect(socket.sent.some((message) => "result" in message || "error" in message)).toBe(false);
+    client.close();
+  });
+
+  it.each([
+    "pending",
+    "consumed",
+    "resolved",
+  ])("fences changed request-ID reuse while the original is %s", async (state) => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    socket.emit(commandApproval());
+    const request = takeServerRequest(client);
+    if (state === "consumed") client.respondCommandApproval(request, "decline", signal);
+    if (state === "resolved") {
+      socket.emit({
+        method: "serverRequest/resolved",
+        params: { threadId: THREAD_ID, requestId: 731 },
+      });
+    }
+    const before = socket.sent.length;
+    const changed = commandApproval();
+    changed.params.command = "different command";
+    socket.emit(changed);
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(client.respondCommandApproval(request, "accept", signal)).toBe(false);
+    expect(socket.sent).toHaveLength(before);
+  });
+
+  it.each([
+    Number.MAX_SAFE_INTEGER + 1,
+    1.5,
+    null,
+    {},
+  ])("fences unsafe native request ID %j before an old queued decision can send", async (id) => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    socket.emit(commandApproval());
+    const request = takeServerRequest(client);
+    socket.emit({ ...commandApproval(), id });
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(client.respondCommandApproval(request, "accept", signal)).toBe(false);
+    expect(socket.sent.some((message) => "result" in message || "error" in message)).toBe(false);
+  });
+
+  it("rejects foreign objects, unsupported methods/choices and altered observed requests", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    socket.emit(commandApproval());
+    const request = takeServerRequest(client);
+    expect(client.respondCommandApproval(structuredClone(request), "accept", signal)).toBe(false);
+    expect(client.respondCommandApproval(commandApproval(999), "accept", signal)).toBe(false);
+    expect(() =>
+      client.respondCommandApproval(request, "acceptForSession" as "accept", signal),
+    ).toThrow("unsupported Codex command approval response");
+    request.params.command = "changed after observation";
+    expect(() => client.respondCommandApproval(request, "accept", signal)).toThrow(
+      "unsupported Codex command approval response",
+    );
+    socket.emit({ ...commandApproval(732), method: "item/fileChange/requestApproval" });
+    const fileRequest = takeServerRequest(client);
+    expect(() => client.respondCommandApproval(fileRequest, "accept", signal)).toThrow(
+      "unsupported Codex command approval response",
+    );
+    expect(socket.sent.some((message) => "result" in message || "error" in message)).toBe(false);
+    client.close();
+  });
+
+  it("restricts answers to native available decisions without applying policy amendments", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    const native = commandApproval();
+    native.params.availableDecisions = [
+      "accept",
+      { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["echo"] } },
+      "cancel",
+    ];
+    socket.emit(native);
+    const request = takeServerRequest(client);
+    expect(() => client.respondCommandApproval(request, "decline", signal)).toThrow(
+      "unsupported Codex command approval response",
+    );
+    expect(client.respondCommandApproval(request, "cancel", signal)).toBe(true);
+    expect(socket.sent.at(-1)).toEqual({ id: 731, result: { decision: "cancel" } });
+    client.close();
+  });
+
+  it("never sends after abort or close, and consumes an ambiguous write before it throws", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const controller = new AbortController();
+    await client.initialize(controller.signal);
+    socket.emit(commandApproval());
+    const request = takeServerRequest(client);
+    controller.abort();
+    expect(() => client.respondCommandApproval(request, "accept", controller.signal)).toThrow(
+      "operation aborted",
+    );
+    expect(socket.sent.some((message) => "result" in message)).toBe(false);
+    const originalSend = socket.send.bind(socket);
+    socket.send = (data: string): void => {
+      originalSend(data);
+      throw new Error("private socket detail");
+    };
+    const signal = new AbortController().signal;
+    expect(() => client.respondCommandApproval(request, "accept", signal)).toThrow(
+      "Codex command approval submission failed",
+    );
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(client.respondCommandApproval(request, "accept", signal)).toBe(false);
+    socket.emit(commandApproval());
+    expect(client.respondCommandApproval(request, "accept", signal)).toBe(false);
+    expect(socket.sent.filter((message) => "result" in message)).toHaveLength(1);
+    client.close();
+  });
+
+  it.each([
+    "client",
+    "socket",
+    "not-open",
+  ])("never submits a pending approval when the %s closes", async (closedBy) => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    socket.emit(commandApproval());
+    const request = takeServerRequest(client);
+    if (closedBy === "client") client.close();
+    else if (closedBy === "socket") socket.close();
+    else socket.readyState = WebSocket.CLOSING;
+    if (closedBy === "not-open") {
+      expect(() => client.respondCommandApproval(request, "accept", signal)).toThrow(
+        "Codex app-server is not connected",
+      );
+    } else {
+      expect(client.respondCommandApproval(request, "accept", signal)).toBe(false);
+    }
+    expect(socket.sent.some((message) => "result" in message || "error" in message)).toBe(false);
+    client.close();
+  });
+
+  it("bounds retained request identities even when native requests were already resolved", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    for (let id = 0; id < CODEX_HISTORY_ITEM_LIMIT; id += 1) {
+      socket.emit(commandApproval(id));
+      socket.emit({
+        method: "serverRequest/resolved",
+        params: { threadId: THREAD_ID, requestId: id },
+      });
+      client.drainInbound();
+    }
+    expect(socket.readyState).toBe(WebSocket.OPEN);
+    socket.emit(commandApproval(CODEX_HISTORY_ITEM_LIMIT));
+    expect(socket.readyState).toBe(WebSocket.CLOSED);
+    expect(socket.sent.some((message) => "result" in message || "error" in message)).toBe(false);
   });
 
   it("removes abort listeners after sequential successful requests", async () => {

@@ -311,7 +311,7 @@ export function parseTask(text: string): TaskEvent {
 
 export interface PermissionResolution {
   requestId: string;
-  behavior: "allow" | "deny";
+  behavior: "allow" | "deny" | "pending" | "resolved";
   /** For an AskUserQuestion allow (#42), the answers the client sent, keyed by question text. Present
    *  only when the frame carried them — a plain permission allow/deny has none. Lets the resolved card
    *  render WHAT was answered (a faithful transcript of the choice), surviving replay from the selected
@@ -322,14 +322,18 @@ export interface PermissionResolution {
 /** Parse a `permission_resolved` replay frame — `{request_id, behavior, answers?}` — tolerating bad
  *  JSON. The relay emits this when a permission is answered. A non-durable host records/replays it via
  *  `catch_up`; a durable broker retains/replays the sealed frame directly. Either lets reload render the request
- *  as resolved instead of re-prompting (#56). An unknown behavior defaults to "allow" (the relay only
- *  ever emits allow|deny; "" requestId means we couldn't fold it onto a request — caller drops it). */
+ *  as resolved instead of re-prompting (#56). Native pending means only that a choice was submitted;
+ *  resolved means the native request ended, without claiming which peer or decision won. Unknown
+ *  behavior retains the legacy "allow" fallback; an empty requestId is dropped by the caller. */
 export function parsePermissionResolved(text: string): PermissionResolution {
   try {
     const r = JSON.parse(text) as { request_id?: unknown; behavior?: unknown; answers?: unknown };
     const res: PermissionResolution = {
       requestId: typeof r.request_id === "string" ? r.request_id : "",
-      behavior: r.behavior === "deny" ? "deny" : "allow",
+      behavior:
+        r.behavior === "deny" || r.behavior === "pending" || r.behavior === "resolved"
+          ? r.behavior
+          : "allow",
     };
     if (r.answers !== null && typeof r.answers === "object") {
       res.answers = r.answers as Record<string, string | string[]>;
@@ -338,6 +342,23 @@ export function parsePermissionResolved(text: string): PermissionResolution {
   } catch {
     return { requestId: "", behavior: "allow" };
   }
+}
+
+/** Native terminal evidence wins even if an earlier submission frame arrives or replays later. */
+export function foldPermissionResolutions(
+  messages: ReadonlyArray<{ kind: string; text: string }>,
+): Map<string, PermissionResolution["behavior"]> {
+  const resolved = new Map<string, PermissionResolution["behavior"]>();
+  for (const message of messages) {
+    if (message.kind !== "permission_resolved") continue;
+    const resolution = parsePermissionResolved(message.text);
+    if (resolution.requestId === "") continue;
+    const previous = resolved.get(resolution.requestId);
+    if (resolution.behavior === "pending" && previous !== undefined && previous !== "pending")
+      continue;
+    resolved.set(resolution.requestId, resolution.behavior);
+  }
+  return resolved;
 }
 
 /** Parse an `accepted` ack body `{ client_msg_id, seq }` (#113). The host emits it for every inbound

@@ -86,6 +86,16 @@ export const CODEX_CAPABILITIES: DriverCapabilities = {
   attachments: true,
 };
 
+/** Exact Codex 0.153.4 command approvals; every other permission/question remains native-owned. */
+export const CODEX_APPROVAL_CAPABILITIES: DriverCapabilities = {
+  textInput: "plain",
+  status: true,
+  controls: CODEX_CAPABILITIES.controls,
+  attachments: true,
+  structuredPermissions: true,
+  permissionResolution: "native",
+};
+
 /**
  * Everything a driver needs to bridge a harness to the broker. Mirrors the launch surface
  * (RcLaunchOptions in launch.ts) so the MITM driver maps onto it 1:1; non-MITM drivers ignore the

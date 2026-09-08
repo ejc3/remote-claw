@@ -313,12 +313,13 @@ timeout, changed/reused coordinate, ambiguous write, cyclic/oversized history, d
 revert, close, or delete fences only the projection instead of guessing success. Native `active` maps
 to viewer `running`, `idle` maps to `idle`, and `notLoaded` or `systemError` fails closed.
 
-For the measured 0.151 approval and question server requests, the first result or error wins globally. The
-Codex client interface deliberately exposes no response method, so the companion can return neither.
-The supported topology requires a local TUI attached to the exact thread for the entire companion
-lifetime; app-server provides no atomic way to prove that attachment. The TUI solely owns approvals
-and questions. Closing the companion closes only its socket and remote-claw projection, not app-server,
-the TUI, or the native thread.
+For native approval/question requests, the first result or error wins globally. Version 0.151.0 stays
+response-less at the driver boundary. Exact 0.153.4 additionally implements one-shot ordinary
+local-command approvals with native-owned resolution; [§9](#9-permissions) defines the narrow request
+and decision allowlist. Questions and unsupported permission kinds remain native-owned. The supported
+topology still requires a local TUI attached to the exact thread for the entire companion lifetime;
+app-server provides no atomic way to prove that attachment. Closing the companion closes only its socket
+and remote-claw projection, not app-server, the TUI, or the native thread.
 
 The bounded M3b run exercised this exact Codex 0.151.0/Linux arm64 path against an official Remote
 thread through literal `unix://` and `historyMode:"legacy"` full-turn hydration. The attached local TUI
@@ -368,9 +369,11 @@ The private facade maps its already-authenticated viewer input to Claude 2.1.237
 `client_platform:"web_claude_ai"` human ingress class. Without that discriminator Claude acknowledges
 the wire frame, demotes it to peer origin, and drops it at the cross-session kill switch; the label is a
 local protocol compatibility value, not evidence that Anthropic hosts the session.
-Permission resolution uses the private-facade ordering: publish `permission_resolved`, then deliver the
-worker response. Both pumps share the queue so a later native action cannot overtake an earlier frame
-whose publication fails.
+Permission submission uses the same publication-before-mutation ordering: publish `permission_resolved`,
+then deliver the worker response. Under `permissionResolution:"native"`, that first record carries
+`behavior:"pending"`; only the later native resolution publishes `behavior:"resolved"`. Other adapters
+retain their existing allow/deny record. Both pumps share the queue so a later native action cannot
+overtake an earlier frame whose publication fails.
 
 The first required publication failure latches the cause, closes only that session, and rejects queued
 successors before they publish or mutate the worker. One logical publish—including sealing, chunks,
@@ -454,7 +457,8 @@ cannot bypass a disabled button:
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
-| Pinned Codex current | no | yes | yes | no | no | no | yes; images only |
+| Codex 0.151.0 | no | yes | yes | no | no | no | yes; images only |
+| Codex 0.153.4 | ordinary local commands only; native resolution | yes | yes | no | no | no | yes; images only |
 
 Text input on the stable Claude, pinned Codex, and maintained tmux surfaces must be non-empty and non-slash.
 Tmux also accepts attachments as ordinary relay-owned user turns; Codex accepts image groups with an
@@ -467,17 +471,39 @@ not isolate the idle local editor or idle slash/config UI from concurrent browse
 
 A worker `can_use_tool` request becomes `permission_request`. The relay records the request ID before
 publishing it. A matching viewer answer publishes `permission_resolved` before the worker response;
-only explicit `allow` grants, while malformed behavior denies. Worker cancellation, interrupt, or
-teardown clears abandoned gates so presence cannot remain stuck on `needs`.
+only explicit `allow` grants, while malformed behavior denies. Native-resolution mode uses the pending
+and resolved states below. Outside that mode, existing allow/deny records and worker-cancellation,
+interrupt, or teardown gate cleanup remain unchanged.
 
 The supported OpenCode M2 path does not mutate native policy and exposes no browser permission answer;
 OpenCode and its local UI remain authoritative. Its separate positive mirroring opt-in is experimental,
 append-only, and carries documented child-first-tool and competing-local-answer races. “Structured
 permissions false” means native/local handling, not that permissions are disabled.
 
-The pinned Codex companion also exposes no browser permission or question answer. Its app-server client
-has no server-request response method; an attached local Codex TUI is the sole owner of approvals and
-questions.
+Exact Codex 0.153.4/Linux arm64 implements browser decisions only for observed
+`item/commandExecution/requestApproval` records on the selected thread with `kind:"command"` and
+`environmentId:"local"`. Turn/item IDs must be non-empty and at most 256 characters. The complete
+non-empty command is bounded at 16,384 characters, the absolute cwd at 4,096, and the optional reason
+at 4,096. Requests carrying network context or additional permissions remain native-owned. Native
+`availableDecisions` must advertise `accept` plus `decline` or `cancel`; Allow sends only `accept`,
+and Deny prefers `decline`, otherwise `cancel` with a visible turn-cancellation explanation. No input
+rewrite, policy amendment, session grant, stdin/file/network approval, or question answer is supported.
+Version 0.151.0 retains native-only approval ownership.
+
+Each fresh opaque viewer ID maps to one exact connection-owned native callback, not merely its item ID.
+String and number callback IDs stay distinct; changed callback content fences the companion and the
+connection retains at most 10,000 callback identities. A response consumes local authority before its
+single socket write; duplicates, resolved callbacks, and closed projections cannot retry it. Ambiguous
+writes retire only the companion, never native work. Other native clients and the attached TUI retain
+their first-response-wins authority.
+
+These approvals advertise `permissionResolution:"native"`. Broker admission emits encrypted
+`permission_resolved {request_id,behavior:"pending"}` before response submission, not a winning
+decision. Matching native `serverRequest/resolved` removes response authority and emits the neutral
+`behavior:"resolved"`; it does not identify which client or decision won. Live and reloaded viewers
+cannot reopen a resolved card when a delayed pending record arrives. Interrupt admission alone cannot
+discard a live native approval. No new broker record kind, schema, or flag is required. The
+[release record](release-finish-line.md#codex-command-approvals) tracks final acceptance separately.
 
 The tmux adapter likewise leaves permissions and questions in Claude's local pane unless the caller's
 resolved Claude policy explicitly bypasses them. It injects no `PreToolUse` hook, transports no request
@@ -599,7 +625,8 @@ to `turn/interrupt` on the same exact thread. No active turn or a native `-32600
 is a no-op; the companion never retargets or retries. Other unknown failures fence the companion.
 A bounded process-local text FIFO keeps interrupt reachable while text waits for native idle. RPC
 acceptance is not completion: only native status releases the next text turn. Native background
-commands may continue after the model turn is interrupted. Approvals/questions remain TUI-owned.
+commands may continue after the model turn is interrupted. Exact 0.153.4 ordinary command decisions
+use the separate [permission boundary](#9-permissions); all questions remain native-owned.
 
 Tmux advertises every raw control false. The relay rejects those frames, and its injection boundary
 acknowledges a stale or direct control without sending any pane keys. The same viewer/relay/injection
@@ -703,8 +730,9 @@ The active protocol is concentrated in these paths:
   history/SSE/text transport, exact binding, and projection lifecycle.
 - `packages/cli/src/host/rc/opencode/{client,driver,translate}.ts` — pinned exact-session HTTP/SSE
   capture, native admission, marker correlation, and bounded part translation.
-- `packages/cli/src/host/rc/codex/{client,driver}.ts` — pinned app-server client, exact-thread
-  reconciliation, native text/status projection, and response-less server-request boundary.
+- `packages/cli/src/host/rc/codex/{client,driver,approvals}.ts` — pinned app-server client, exact-thread
+  reconciliation, native projection, and exact-0.153.4 one-shot local-command decisions; other native
+  requests stay response-less.
 - `packages/cli/src/host/rc/drivers/{bridge,ready-bridge}.ts` — process-local readiness and broker
   bridge lifecycle shared by current adapters.
 - `apps/web/app/api/{relay,stream,seq,frame-count}/route.ts` — broker API.

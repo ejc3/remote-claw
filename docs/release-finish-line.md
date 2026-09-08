@@ -189,14 +189,14 @@ home-folder UI artifacts, outside Git.
 | Desktop/mobile daily-use finish | Auditing | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | Queued | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers |
-| Screenshot/file input | Codex images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
-| Remote approvals and questions | Queued | Browser decisions reconcile with native/local/provider decisions without weakening permission policy |
+| Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
+| Remote approvals and questions | Codex 0.153.4 ordinary-command approvals implemented and live-accepted | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; other permission kinds and questions remain queued |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
 Future CLI harnesses (for example Grok) should require a native adapter, validated CLI configuration,
-and one explicit metadata/capability entry, reusing broker, encryption, and viewer renderers. A parallel
-small harness-contract change will separate ordering/admission/input semantics from optional feature
-toggles and remove duplicated descriptor metadata. Dispatch stays explicit; no dynamic plugin loader,
+and one explicit metadata/capability entry, reusing broker, encryption, and viewer renderers. The shared
+`HARNESSES` metadata contract now separates ordering/admission/input semantics from optional feature
+toggles and owns descriptor labels. Dispatch stays explicit; no dynamic plugin loader,
 speculative provider protocol, new coordinator, or storage schema is part of this work. Grok itself is
 not claimed supported until a real native seam has been implemented and exercised.
 
@@ -376,6 +376,38 @@ shared native image admission. Focused tests own private files, bounds, cleanup,
 ambiguous-send retention, closure during preparation, and history display. The existing mobile
 capability sentinel owns UI gating; actual native acceptance owns image ingestion and coexistence.
 Native permissions, authenticated browsers, Claude TUI, managed Codex daemon, and tunnel were unchanged.
+
+### Codex command approvals
+
+**Implemented and live-accepted.** Exact Codex 0.153.4/Linux
+arm64 now admits one-shot decisions for ordinary local native commands. The existing managed-socket
+thread, attached TUI, native permission policy, and other clients remain live. Version 0.151.0 keeps
+native-only approvals; this does not graduate questions or full permission parity.
+
+Only `kind:"command"` / `environmentId:"local"` requests with complete bounded command/absolute cwd/
+optional reason, no network/additional-permission context, and advertised `accept` plus `decline` or
+`cancel` qualify. Allow applies once; Deny uses the advertised negative decision and explains turn
+cancellation. Fresh opaque viewer IDs bind exact connection-owned callbacks. Broker admission and
+socket send do not decide the winner: submitted cards remain pending until native resolution closes
+them neutrally. Delayed pending records cannot reopen resolved cards. Ambiguous writes never retry
+and can retire only the companion. No new flag, record kind, schema, policy amendment, session grant,
+stdin/file/network permission, or question response belongs to this slice.
+
+The 2026-09-08 native probe confirmed harmless command accept/decline, cross-client resolution,
+late-subscriber replay, and visibility in the native TUI. Actual acceptance then passed three cases:
+phone Allow executed the harmless command once; desktop Deny used native cancellation and the command
+did not execute; native-TUI Escape won against a held stale phone Allow and that command did not execute.
+Both independent browsers resolved each card neutrally, and reload showed no duplicate or reactivated
+cards. All eight phone/desktop pending/resolved light/dark screenshots were opened and inspected: full
+command, cwd, and reason remained visible without overflow. This slice did not exercise official Remote.
+Evidence and the frozen scope remain outside Git under
+`/home/ubuntu/remote-claw-ui-artifacts/codex-approvals-2026-09-08/`.
+
+Focused client/helper/driver tests own request allowlisting, exact callback identity, bounds, duplicate
+responses, resolution races, and ambiguous-write isolation. The driver-broker test caught a dropped
+native-resolution capability in the shared bridge snapshot before live acceptance; that boundary now
+owns the regression. Relay/parser tests own pending-to-resolved semantics, and the existing browser
+sentinel owns the shared permission-card behavior. No new E2E matrix or coordinator was added.
 
 ### Execution contract
 

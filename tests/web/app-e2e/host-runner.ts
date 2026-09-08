@@ -17,6 +17,7 @@ import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import {
   CLAUDE_NATIVE_CAPABILITIES,
   CLAUDE_NATIVE_HARNESS,
+  CODEX_APPROVAL_CAPABILITIES,
   CODEX_CAPABILITIES,
   CODEX_HARNESS,
   type DriverCapabilities,
@@ -69,6 +70,7 @@ function presetCaps(p: string | undefined): DriverCapabilities {
       attachments: false,
     };
   if (p === "codex") return CODEX_CAPABILITIES;
+  if (p === "codex-approval") return CODEX_APPROVAL_CAPABILITIES;
   return STABLE_MITM_CAPABILITIES;
 }
 
@@ -127,6 +129,9 @@ const relay = new HostRcRelay({
 const ac = new AbortController();
 const commands = createInterface({ input: process.stdin });
 commands.on("line", (line) => {
+  if (line.trim() === "resolve-permission" && capsPreset === "codex-approval") {
+    session.pushUpstream({ type: "control_cancel_request", request_id: "perm-e2e-native" });
+  }
   if (line.trim() === "terminal") {
     session.close();
     void relay.terminalizePresence().then(
@@ -163,8 +168,29 @@ try {
   });
   for (const payload of smoke
     ? smokeScenario()
-    : scenario(withPerm, withAskq, askqMulti, process.env.RC_E2E_RICH_TEXT === "1")) {
+    : scenario(
+        withPerm && capsPreset !== "codex-approval",
+        withAskq,
+        askqMulti,
+        process.env.RC_E2E_RICH_TEXT === "1",
+      )) {
     session.pushUpstream(payload);
+  }
+  if (withPerm && capsPreset === "codex-approval") {
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "perm-e2e-native",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: "Shell",
+        tool_input: {
+          command: "git status --short",
+          cwd: "/work/example project",
+          reason:
+            "Inspect the working tree. Allow applies to this command only. Deny cancels the native turn.",
+        },
+      },
+    });
   }
 } catch (e) {
   console.error(`[host-runner] announce/seed failed (base=${base}):`, e);
