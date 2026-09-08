@@ -24,7 +24,9 @@ app-server text/status companion passed M3a with one local TUI and two browsers.
 exact official Remote thread through the literal managed Unix socket and legacy full-turn hydration;
 its bounded failure result is provider-transport isolation, not per-device unsubscribe. The separate
 [Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) passed clean companion
-restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy.
+restart/backfill and broker-loss isolation on Linux arm64 with 0.151.0/explicit WS and
+0.153.4/managed Unix, both with paginated history. Legacy-history and simultaneous official-Remote
+recovery remain unqualified.
 M4's exact Claude 2.1.237/Linux arm64/Bedrock Sonnet 4.6 tmux acceptance is also complete for its
 lower-fidelity local-pane/two-browser boundary. A browser turn stayed queued while an active model turn
 held a native permission modal, both browsers departed, local approval completed the native turn, the
@@ -337,7 +339,9 @@ The separate 2026-09-07 recovery run passed clean companion restart and broker-l
 projection of the same supplied native thread, reads old native text as observation, and never consumes
 the retired projection's commands or reconstructs its pending mutations. Two browsers recovered history
 once and completed a fresh turn; broker loss stopped only the companion while a local TUI turn still
-completed. Managed-Unix/legacy recovery and simultaneous official-Remote recovery remain unclaimed.
+completed. On 2026-09-08, the same retained sentinel passed on exact 0.153.4/Linux arm64 through managed
+Unix with native-reported paginated history; no production recovery change was needed. Legacy-history
+recovery and simultaneous official-Remote recovery remain unclaimed.
 Current 0.153.4 and read-only command-activity acceptance is tracked separately in the
 [release roadmap](release-finish-line.md); it does not broaden these historical 0.151.0 results.
 

@@ -60,9 +60,10 @@ per-device unsubscribe. A separate 2026-09-07
 [Codex recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) now covers the same
 version/platform through explicit-port loopback WebSocket with paginated history: a packed CLI,
 attached local TUI, and two browsers survived fresh-projection restart/backfill without replaying
-native mutations; broker loss retired only the companion while local work completed. Recovery through
-managed Unix/legacy history or alongside official Remote, stable projection identity, and richer
-controls were outside that recovery run. The current code accepts exact Codex 0.151.0 and 0.153.4 on
+native mutations; broker loss retired only the companion while local work completed. The same retained
+sentinel also passed on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
+paginated history, without a production change. Legacy-history recovery, simultaneous official Remote
+recovery, stable projection identity, and richer controls remain outside these runs. The current code accepts exact Codex 0.151.0 and 0.153.4 on
 Linux arm64
 and also projects completed `commandExecution` as read-only `Shell` calls and bounded results,
 including failed/declined/nonzero-exit outcomes. Browser mutations are non-empty non-slash text,

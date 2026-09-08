@@ -25,9 +25,9 @@ credentials.
 > browser turn remained live while provider transport was disabled. This proves provider-transport
 > isolation, not per-device unsubscribe. A separate
 > [Codex recovery follow-on](docs/release-finish-line.md#codex-recovery--complete) now proves
-> fresh-projection restart/backfill and broker-loss isolation on explicit-port loopback WebSocket
-> with paginated history. Recovery through managed Unix/legacy history or alongside official Remote,
-> stable projection identity, and richer controls were outside that recovery run.
+> fresh-projection restart/backfill and broker-loss isolation on 0.151.0/explicit-loopback WebSocket
+> and 0.153.4/managed Unix, both with paginated history. Legacy-history recovery, simultaneous official
+> Remote recovery, and stable projection identity remain unclaimed.
 > The current Codex implementation accepts exact 0.151.0 and 0.153.4 on Linux arm64 and also displays
 > completed shell commands and bounded results as read-only activity. Browser mutations are ordinary
 > non-empty non-slash text, images with an optional caption, and interrupt. Exact 0.153.4 also implements
@@ -65,7 +65,7 @@ The intended surface matrix is:
 | Agent surface | Local native UI | Official provider collaboration | remote-claw browsers | Current truth |
 | --- | --- | --- | --- | --- |
 | Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; M1's exact-2.1.237 native companion passed local TUI, literal official web UI on the user's phone, two-browser, fresh-projection restart, broker-loss, packed-install, and exact-SHA deployed-broker acceptance |
-| Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket. A separate [loopback/paginated recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) adds fresh-projection restart/backfill and broker-loss isolation; per-device Remote unsubscribe remains unclaimed |
+| Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket. Separate [recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) adds fresh-projection restart/backfill and broker-loss isolation on 0.151.0/explicit WS and 0.153.4/managed Unix, both with paginated history; legacy and simultaneous official-Remote recovery and per-device Remote unsubscribe remain unclaimed |
 | OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | M2 complete for exact OpenCode 1.17.5 on Linux arm64 with the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux compatibility | Terminal pane | Not claimed by this fallback | Multiple browsers | M4 complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed CLI, local pane, two browsers, reload, non-empty non-slash text plus attachments, active-turn native-modal isolation, browser departure, and broker-loss isolation; idle-editor concurrency, raw controls, ordering, and native application remain lower fidelity or unsupported |
 
@@ -151,8 +151,8 @@ Other supported and experimental paths have narrower current claims:
   0.153.4 adds one-shot ordinary local-command decisions and bounded native choice forms, while
   unsupported permissions/questions remain native-owned. M3b's exact official-Remote/TUI/two-browser coexistence and provider-transport
   isolation gate is complete. The separate
-  [Codex recovery result](docs/release-finish-line.md#codex-recovery--complete) covers only explicit-port
-  loopback WebSocket with paginated history. Current text/image/interrupt, command-approval, and question work is tracked
+  [Codex recovery result](docs/release-finish-line.md#codex-recovery--complete) covers 0.151.0/explicit-port
+  loopback WebSocket and 0.153.4/managed Unix, both with paginated history. Current text/image/interrupt, command-approval, and question work is tracked
   separately in the [release roadmap](docs/release-finish-line.md); other controls remain disabled.
 - tmux captures transcripts and injects ordinary non-empty non-slash text plus attachments when no
   higher-fidelity native seam is available. Node loads a private tmux buffer before a fixed helper
@@ -388,12 +388,12 @@ unsubscribe.
 
 To restart only the companion, repeat its invocation with the same exact thread UUID and open the
 fresh projection in the viewer. The new projection observes native history without replaying retired
-browser commands. The separate 2026-09-07
+browser commands. The separate 2026-09-07 and 2026-09-08
 [recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) passed with a packed CLI,
-local SQLite broker, attached TUI, and two browsers on explicit-port loopback WebSocket with paginated
-history. Broker loss retired only the companion while a local TUI turn completed. This recovery result
-does not cover managed Unix/legacy history, simultaneous official Remote, stable projection identity,
-or richer controls.
+local SQLite broker, attached TUI, and two browsers on 0.151.0/explicit-port loopback WebSocket and
+0.153.4/managed Unix, both with paginated history. Broker loss retired only the companion while a local
+TUI turn completed. These recovery results do not cover legacy history, simultaneous official Remote,
+stable projection identity, or richer controls.
 
 ## Development gates
 

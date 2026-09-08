@@ -1,7 +1,8 @@
-// One opt-in cross-process outcome: packed companion restart and broker-loss isolation on exact
-// Codex 0.151.0/Linux arm64, explicit loopback WS + paginated thread, local TUI and two real browsers.
+// One opt-in cross-process outcome: packed companion restart and broker-loss isolation on supported
+// Codex/Linux arm64, managed Unix or explicit loopback WS, local TUI and two real browsers.
 // Deterministic driver tests own reconciliation details; they cannot prove installed/native/browser
-// wiring or local TUI survival. The observer below only initializes and reads the supplied thread.
+// wiring or local TUI survival. The observer only joins/reads the supplied thread; it never answers
+// native requests or mutates native work. This test does not exercise the official Remote client.
 import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
@@ -10,6 +11,13 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
 import { type BrowserContext, expect, type Page, test } from "@playwright/test";
+import {
+  assertCodexCompatibility,
+  CodexAppServerClient,
+  codexAppServerVersion,
+  isCodexThreadId,
+  normalizeCodexAppServerUrl,
+} from "../../../packages/cli/src/host/rc/codex/client.js";
 
 const exec = promisify(execFile);
 const required = (name: string): string => {
@@ -46,19 +54,14 @@ test("Codex: fresh projection after companion restart; native TUI survives broke
   if (process.env.RC_CODEX_RECOVERY_LIVE !== "1")
     throw new Error("RC_CODEX_RECOVERY_LIVE=1 is required");
   const cli = required("CLI");
-  const nativeURL = new URL(required("URL"));
+  const nativeURL = normalizeCodexAppServerUrl(required("URL"));
   const threadId = required("THREAD");
   const cwd = required("CWD");
   const tmuxSocket = required("TMUX_SOCKET");
   const tmuxTarget = required("TMUX_TARGET");
   expect(isAbsolute(cli)).toBe(true);
   expect(`${process.platform}-${process.arch}`).toBe("linux-arm64");
-  expect(nativeURL.protocol).toBe("ws:");
-  expect(["127.0.0.1", "[::1]"]).toContain(nativeURL.hostname);
-  expect(nativeURL.port).not.toBe("");
-  expect(nativeURL.pathname + nativeURL.search + nativeURL.hash).toBe("/");
-  expect(nativeURL.username + nativeURL.password).toBe("");
-  expect(threadId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  expect(isCodexThreadId(threadId)).toBe(true);
   const tmux = async (...args: string[]): Promise<string> =>
     (await exec("tmux", ["-S", tmuxSocket, ...args])).stdout;
   const capture = (): Promise<string> => tmux("capture-pane", "-p", "-S", "-", "-t", tmuxTarget);
@@ -99,74 +102,53 @@ test("Codex: fresh projection after companion restart; native TUI survives broke
       }),
     ]);
   };
-  const observer = new WebSocket(nativeURL);
-  let requestId = 0;
-  const rpc = <T>(method: string, params: object): Promise<T> =>
-    new Promise((resolve, reject) => {
-      const id = ++requestId;
-      const cleanup = (): void => {
-        clearTimeout(timer);
-        observer.removeEventListener("message", onMessage);
-      };
-      const onMessage = (event: MessageEvent): void => {
-        const value = JSON.parse(String(event.data)) as { id?: number; result: T; error?: unknown };
-        if (value.id !== id) return;
-        cleanup();
-        if (value.error) reject(new Error(`native read failed: ${method}`));
-        else resolve(value.result);
-      };
-      const timer = setTimeout(() => {
-        cleanup();
-        reject(new Error(`native read timed out: ${method}`));
-      }, 15_000);
-      observer.addEventListener("message", onMessage);
-      observer.send(JSON.stringify({ id, method, params }));
-    });
-  const nativeItems = async (): Promise<NativeItem[]> => {
-    const items: NativeItem[] = [];
-    let cursor: string | null = null;
-    do {
-      const page: { data: NativeItem[]; nextCursor: string | null } = await rpc(
-        "thread/items/list",
-        {
-          threadId,
-          limit: 100,
-          sortDirection: "asc",
-          ...(cursor ? { cursor } : {}),
-        },
-      );
-      items.push(
-        ...page.data.filter(({ item }) => ["userMessage", "agentMessage"].includes(item.type)),
-      );
-      cursor = page.nextCursor;
-      expect(items.length).toBeLessThan(1_000);
-    } while (cursor);
-    return items;
-  };
-  const idle = async (): Promise<boolean> => {
-    const result = await rpc<{
-      thread: { id: string; historyMode: string; status: { type: string } };
-    }>("thread/read", { threadId, includeTurns: false });
-    expect(result.thread.id).toBe(threadId);
-    expect(result.thread.historyMode).toBe("paginated");
-    return result.thread.status.type === "idle";
-  };
+  const observer = new CodexAppServerClient(nativeURL);
+  const observerAbort = new AbortController();
+  const signal = observerAbort.signal;
   try {
-    await new Promise<void>((resolve, reject) => {
-      observer.addEventListener("open", () => resolve(), { once: true });
-      observer.addEventListener(
-        "error",
-        () => reject(new Error("native observer could not connect")),
-        { once: true },
-      );
+    const initialized = await observer.initialize(signal);
+    assertCodexCompatibility(initialized);
+    const resumed = await observer.resume(threadId, signal);
+    expect(resumed.thread.id).toBe(threadId);
+    expect(resumed.thread.canAcceptDirectInput).toBe(true);
+    expect(["active", "idle"]).toContain(resumed.thread.status.type);
+    const historyMode = resumed.thread.historyMode;
+    await test.info().attach("codex-native-tuple", {
+      body: JSON.stringify({
+        version: codexAppServerVersion(initialized.userAgent),
+        platform: `${process.platform}-${process.arch}`,
+        transport: nativeURL === "unix://" ? "managed-unix" : "loopback-ws",
+        historyMode,
+      }),
+      contentType: "application/json",
     });
-    const initialized = await rpc<{ userAgent: string; platformOs: string }>("initialize", {
-      clientInfo: { name: "remote-claw-recovery-observer", version: "0.0.0" },
-      capabilities: { experimentalApi: true },
-    });
-    expect(initialized.userAgent.split(" ")[0]).toMatch(/\/0\.151\.0$/);
-    expect(initialized.platformOs).toBe("linux");
-    observer.send(JSON.stringify({ method: "initialized" }));
+    const nativeItems = async (): Promise<NativeItem[]> => {
+      const items: NativeItem[] = [];
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+      for (let pageNo = 0; pageNo < 1_000; pageNo += 1) {
+        const page =
+          historyMode === "legacy"
+            ? await observer.listTurnItems(threadId, cursor, signal)
+            : await observer.listItems(threadId, cursor, signal);
+        items.push(
+          ...page.data.filter(({ item }) => ["userMessage", "agentMessage"].includes(item.type)),
+        );
+        observer.drainInbound();
+        expect(items.length).toBeLessThan(1_000);
+        if (page.nextCursor === null) return items;
+        expect(page.nextCursor).not.toBe("");
+        expect(seen.has(page.nextCursor)).toBe(false);
+        seen.add(page.nextCursor);
+        cursor = page.nextCursor;
+      }
+      throw new Error("dedicated Codex recovery thread exceeded the history page limit");
+    };
+    const idle = async (): Promise<boolean> => {
+      const turnId = await observer.activeTurn(threadId, signal);
+      observer.drainInbound();
+      return turnId === null;
+    };
     await waitFor(idle);
     await exec(cli, ["--rc-identity", "--rc-json", "--rc-file", identity]);
     const pass = (
@@ -194,7 +176,7 @@ test("Codex: fresh projection after companion restart; native TUI survives broke
           "--rc-driver",
           "codex",
           "--rc-codex-url",
-          nativeURL.href,
+          nativeURL,
           "--rc-codex-thread",
           threadId,
         ],
@@ -329,6 +311,7 @@ test("Codex: fresh projection after companion restart; native TUI survives broke
     await Promise.all(contexts.map((context) => context.close().catch(() => {})));
     await Promise.all(children.map((child) => terminate(child).catch(() => {})));
     await closeProxy().catch(() => {});
+    observerAbort.abort();
     observer.close();
     await rm(scratch, { recursive: true, force: true });
   }

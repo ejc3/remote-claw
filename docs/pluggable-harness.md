@@ -37,8 +37,10 @@ sending browser. A browser-B turn completed while an ephemeral provider transpor
 daemon, TUI, companion, and browsers stayed live before provider transport restored to connected. This
 is provider-transport isolation, not per-device unsubscribe. The separate
 [Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) passed clean companion
-restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy.
-Those historical Codex results remain exact 0.151.0 evidence; current-version, command-activity, and
+restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated history. Those historical
+Codex results remain exact 0.151.0 evidence. The same sentinel separately passed on 2026-09-08 for
+exact 0.153.4/Linux arm64 through managed Unix with native-reported paginated history. Legacy-history
+and simultaneous official-Remote recovery remain unqualified. Current-version, command-activity, and
 interrupt/image, command-approval, and question acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
 remain disabled.
 Every current `Session` binding remains process-local.
