@@ -202,7 +202,9 @@ restored. Exact provider repeats are no-ops; a changed event identity, reused se
 behind the committed high-water mark closes the projection. Opposite-source client/worker replicas with
 the same provider user UUID and normalized text are one logical prompt whichever source arrives first;
 optional worker identity enrichment is validated but need not be byte-identical. Attachment-bearing
-user replicas remain non-projectable even if a later worker echo rewrites their text.
+user replicas remain non-projectable even if a later worker echo rewrites their text. The supported
+browser image path instead uses ordinary string text with host-generated file references; it does not
+enable provider `file_attachments` or generic non-string user content.
 
 The exact history/stream endpoint supplies native session binding. An optional user payload
 `session_id` must match that canonical `cse_*`; only client observations may instead use the official
@@ -220,6 +222,11 @@ browser prompt UUID still fences the projection. Browser text uses one UUID and 
 broker admission and provider POST. A seq-less
 `{native_pending:true}` acceptance means only that the host admitted the command. Provider history/SSE
 then publishes the canonical accepted coordinate and user row in provider order. One serialized writer
+also prepares authenticated image groups as private native upload files and submits their references
+through the same ordinary `postEvent`. Correlation uses the complete native text before display strips
+only the exact generated reference-group form. Names/caption therefore survive live projection and
+fresh-history backfill without changing provider order or receipt semantics. See [Attachments](#10-attachments).
+The writer
 fences the projection after a rejected or outcome-unknown POST, before any successor. It also accepts
 the allowlisted session-scoped Interrupt described in [control verbs](#11-compatibility-control-verbs),
 without enabling status or other control families. Accepted provider events and browser mutations share
@@ -443,7 +450,7 @@ cannot bypass a disabled button:
 | Driver | Structured permissions | Status | Interrupt | Set model | Set mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
-| Claude native companion | no | no | yes; session-scoped | no | no | no | no |
+| Claude native companion | no | no | yes; session-scoped | no | no | no | yes; images only |
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
@@ -524,6 +531,29 @@ answer a gate.
 The attachment path carries image bytes inside an E2E `attachment` message, split into bounded chunks.
 The existing composer prepares grouped JPEG images plus one optional caption. The broker never receives
 plaintext bytes, and drivers whose attachment capability is false reject the path.
+
+Claude-native accepts the same whole-group encrypted image input: 1–24 PNG/JPEG/WebP/GIF images,
+at most 16 MiB of base64 per image and a 48 MiB encoded payload/pending URL bound, with an optional
+non-slash caption. It writes each prepared group into a fresh
+`~/.remote-claw-uploads/remote-claw-native-<UUID>/` directory (mode `0700`), using exclusive numbered image
+files (mode `0600`). Browser-provided URLs or host paths are never used as upload targets. Ordinary
+`postEvent` text contains these generated references followed by sanitized `📎` names/caption; the
+native client, permission policy, canonical ordering, and receipts are unchanged.
+
+The store reserves decoded-image bytes before filesystem work, with a 256 MiB budget per companion
+instance/run. This is not a global disk quota and resets for a new companion. Partial preparation and
+prepared-but-never-submitted files are discarded and their reservation released. After any POST
+attempt, files are retained even on rejection, ambiguous outcome, shutdown, or broker loss because
+native Claude may ingest them later. Operators should remove them only when the native session no
+longer needs them; the companion runs no upload garbage collector. Raw Session image slots are released
+after preparation or on failure/closure.
+
+Display stripping is pure and limited to the exact generated reference-group syntax under the configured
+private uploads root: one shared UUID directory, sequential numbered image paths, and matching sanitized label
+count. It reads no files and applies equally to live/history projection. Full native text remains the
+correlation input; ordinary provider references are preserved. This adds neither general files, image
+previews, provider `file_attachments` projection, nor remote permissions/status. The
+[current image acceptance](release-finish-line.md#claude-native-images--complete) is separate from M1.
 
 Codex accepts images only, not general files. Before native admission the host validates the whole
 group: 1–24 PNG/JPEG/WebP/GIF images, at most 16 MiB of base64 per image, a 48 MiB plaintext payload,

@@ -42,11 +42,15 @@ milestone as the entire product or delete working adapter foundations merely bec
 ### Claude Code
 
 M1's original text/coexistence result is complete and remains historical. Current native-companion code
-also projects read-only tool activity and supports one-shot session-scoped Interrupt. Stop has no native
+also projects read-only tool activity and supports host-owned image uploads plus one-shot session-scoped
+Interrupt. Images reuse ordinary native text references and canonical receipts; only generated
+references are hidden in the displayed names/caption. Attempted upload files are retained under a
+256 MiB decoded-image budget per companion run, not a global quota. See the separate
+[image acceptance](release-finish-line.md#claude-native-images--complete). Stop has no native
 turn coordinate and can affect newer peer work if delayed; the companion waits for matching canonical
 worker success before later browser text without advertising idle status. Current acceptance belongs
 to the [release roadmap](release-finish-line.md), not a rewrite of M1. The structured critical path
-remains outside Claude; permissions, questions, modes, slash commands, attachments, end, and truthful
+remains outside Claude; permissions, questions, modes, slash commands, general files, image previews, end, and truthful
 status may graduate later one family at a time.
 Keep the private replacement relay as a separately labeled mode for environments that do not need the
 official client.
