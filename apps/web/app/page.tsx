@@ -47,6 +47,7 @@ import {
   parseToolResult,
   parseToolUse,
   type Question,
+  questionAnswerKey,
   sanitizeInput,
   summarizeActivity,
   type ToolInput,
@@ -1306,6 +1307,7 @@ export function Transcript(props: {
   const codex = announce?.harness?.agent === "codex" && announce.harness.mode === "app-server";
   const nativeCommandApprovals =
     codex && interaction.structuredPermissions && caps?.permissionResolution === "native";
+  const nativeQuestions = nativeCommandApprovals && caps?.structuredQuestions === true;
   // Rolling deploys can still surface an older tmux host with either the historical permission mirror
   // or explicit bypass. Only a new, exact local-posture tuple earns the local-ownership claim.
   const tmuxText = isTmuxGatedTextSurface(announce?.harness, caps);
@@ -1318,7 +1320,9 @@ export function Transcript(props: {
     ? "This harness or input policy is not supported. Update remote-claw to enable controls."
     : interaction.structuredPermissions
       ? nativeCommandApprovals
-        ? "Command approvals can be answered here. Questions and other approvals stay in Codex."
+        ? nativeQuestions
+          ? "Command approvals and supported questions can be answered here. Other approvals stay in Codex."
+          : "Command approvals can be answered here. Questions and other approvals stay in Codex."
         : null
       : codex
         ? "Approvals and questions stay in the local Codex TUI."
@@ -1833,6 +1837,7 @@ export function Transcript(props: {
               permissionsLocal={permissionsLocal}
               permissionAgent={permissionAgent}
               nativePermissionResolution={caps?.permissionResolution === "native"}
+              nativeQuestionsSupported={caps?.structuredQuestions === true}
               hostConnected={connected}
               resolved={resolved}
               resolvedAnswers={resolvedAnswers}
@@ -2032,7 +2037,9 @@ export function Transcript(props: {
                         ? "Permission prompts stay in OpenCode"
                         : "Permission prompts stay in the local terminal"
                     : nativeCommandApprovals
-                      ? "Command approvals here; questions and other approvals stay in Codex"
+                      ? nativeQuestions
+                        ? "Command approvals and supported questions here; other approvals stay in Codex"
+                        : "Command approvals here; questions and other approvals stay in Codex"
                       : "Permission prompts can be answered here"
           }
           branch={announce?.git?.branch ?? null}
@@ -2634,6 +2641,7 @@ export function Bubble({
   permissionsLocal,
   permissionAgent = "Claude",
   nativePermissionResolution = false,
+  nativeQuestionsSupported = false,
   hostConnected,
   resolved,
   resolvedAnswers,
@@ -2644,6 +2652,7 @@ export function Bubble({
   permissionsLocal: boolean;
   permissionAgent?: string;
   nativePermissionResolution?: boolean;
+  nativeQuestionsSupported?: boolean;
   hostConnected: boolean;
   resolved: ReadonlyMap<string, PermissionResolution["behavior"]>;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
@@ -2709,6 +2718,7 @@ export function Bubble({
           permissionsLocal={permissionsLocal}
           permissionAgent={permissionAgent}
           nativePermissionResolution={nativePermissionResolution}
+          nativeQuestionsSupported={nativeQuestionsSupported}
           hostConnected={hostConnected}
           resolved={resolved}
           resolvedAnswers={resolvedAnswers}
@@ -2753,6 +2763,7 @@ function PermissionRow({
   permissionsLocal,
   permissionAgent,
   nativePermissionResolution,
+  nativeQuestionsSupported,
   hostConnected,
   resolved,
   resolvedAnswers,
@@ -2763,6 +2774,7 @@ function PermissionRow({
   permissionsLocal: boolean;
   permissionAgent: string;
   nativePermissionResolution: boolean;
+  nativeQuestionsSupported: boolean;
   hostConnected: boolean;
   resolved: ReadonlyMap<string, PermissionResolution["behavior"]>;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
@@ -2802,6 +2814,21 @@ function PermissionRow({
     },
     [req.requestId, onGrant, canGrant, confirmed, nativePermissionResolution],
   );
+
+  // A native form must never become a generic Allow/Deny prompt if it is malformed or unsupported.
+  if (
+    req.nativeQuestions &&
+    (req.questions.length === 0 || !nativePermissionResolution || !nativeQuestionsSupported)
+  ) {
+    return (
+      <div className="perm perm-local-only">
+        <div className="perm-head">{permissionAgent} question unavailable here</div>
+        <div className="perm-local-note">
+          Answer this question in the native {permissionAgent} interface.
+        </div>
+      </div>
+    );
+  }
 
   // Supported native/local permission surfaces keep permission/question interaction in their own TUI.
   // A replayed compatibility frame must never resurrect remote Allow/Deny controls or present a
@@ -2843,6 +2870,7 @@ function PermissionRow({
         req={req}
         onGrant={onGrant}
         canGrant={canGrant}
+        permissionAgent={permissionAgent}
         hostConnected={hostConnected}
         resolved={resolved}
         resolvedAnswers={resolvedAnswers}
@@ -2915,18 +2943,21 @@ interface ParsedPermission {
   requestId: string;
   toolUseId: string;
   questions: Question[];
+  nativeQuestions: boolean;
 }
 
 /**
  * AskUserQuestion (#42): render each multiple-choice question + options; on submit, send the chosen
  * labels back as `updatedInput.answers` keyed by question text, with the request's `tool_use_id` — the
- * exact shape real claude expects (verified live via --rc-trace). Single-select picks one label;
- * multiSelect toggles an array. Survives reload via the replayed `resolved` map (#56).
+ * exact shape real claude expects (verified live via --rc-trace). Native forms use stable question IDs
+ * and only single selection; they remain pending until neutral native resolution. Legacy multiSelect
+ * toggles an array. Resolution survives reload through the replayed map (#56).
  */
 function QuestionCard({
   req,
   onGrant,
   canGrant,
+  permissionAgent,
   hostConnected,
   resolved,
   resolvedAnswers,
@@ -2934,15 +2965,15 @@ function QuestionCard({
   req: ParsedPermission;
   onGrant: GrantFn;
   canGrant: boolean;
+  permissionAgent: string;
   hostConnected: boolean;
   resolved: ReadonlyMap<string, PermissionResolution["behavior"]>;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
-  const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
-  // A per-question freeform answer — ALWAYS available so the user can "type your own" instead of being
-  // limited to the listed options (real Claude Code always offers this). An arbitrary string is a valid
-  // answer end to end: session.ts passes `answers` through with no membership check (#42 freeform).
-  const [freeform, setFreeform] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState(() => new Map<string, string | string[]>());
+  // Legacy Claude always offers freeform; native forms expose it only when explicitly advertised.
+  // Map keys preserve native IDs such as __proto__ and constructor without inherited object values.
+  const [freeform, setFreeform] = useState(() => new Map<string, string>());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Which way this card was resolved locally (null = unanswered). Tracks deny too, so a Dismiss doesn't
@@ -2955,6 +2986,13 @@ function QuestionCard({
 
   // The replayed answer survives reload; the local optimistic value covers the gap before it lands.
   const loggedBehavior = resolved.get(req.requestId);
+  const nativeState = req.nativeQuestions
+    ? loggedBehavior === "resolved"
+      ? "resolved"
+      : loggedBehavior !== undefined || sentBehavior !== null
+        ? "pending"
+        : null
+    : null;
   const resolvedBehavior =
     loggedBehavior === "allow" || loggedBehavior === "deny" ? loggedBehavior : sentBehavior;
   const done = resolvedBehavior != null;
@@ -2963,30 +3001,32 @@ function QuestionCard({
   const doneAnswers = resolvedAnswers.get(req.requestId) ?? sentAnswers;
 
   const pick = (q: Question, label: string) => {
+    const key = questionAnswerKey(q);
     // Single-select: picking an option clears this question's freeform box (options ⟂ freeform).
-    if (!q.multiSelect) setFreeform((f) => (f[q.question] ? { ...f, [q.question]: "" } : f));
+    if (!q.multiSelect) setFreeform((f) => new Map(f).set(key, ""));
     setAnswers((a) => {
-      if (!q.multiSelect) return { ...a, [q.question]: label };
-      const cur = Array.isArray(a[q.question]) ? (a[q.question] as string[]) : [];
-      return {
-        ...a,
-        [q.question]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label],
-      };
+      if (!q.multiSelect) return new Map(a).set(key, label);
+      const value = a.get(key);
+      const cur = Array.isArray(value) ? value : [];
+      return new Map(a).set(
+        key,
+        cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label],
+      );
     });
   };
   const onFreeform = (q: Question, val: string) => {
-    setFreeform((f) => ({ ...f, [q.question]: val }));
+    const key = questionAnswerKey(q);
+    setFreeform((f) => new Map(f).set(key, val));
     // Single-select: typing clears any picked option so the two never both count.
     if (!q.multiSelect && val.trim() !== "")
       setAnswers((a) => {
-        if (!(q.question in a)) return a;
-        const n = { ...a };
-        delete n[q.question];
+        const n = new Map(a);
+        n.delete(key);
         return n;
       });
   };
   const isPicked = (q: Question, label: string) => {
-    const v = answers[q.question];
+    const v = answers.get(questionAnswerKey(q));
     return Array.isArray(v) ? v.includes(label) : v === label;
   };
   // The effective answer: freeform text wins for single-select; for multiSelect the trimmed freeform
@@ -2994,36 +3034,49 @@ function QuestionCard({
   // diverge. undefined ⇒ unanswered. Memoized so submit can depend on it directly.
   const finalAnswer = useCallback(
     (q: Question): string | string[] | undefined => {
-      const ft = (freeform[q.question] ?? "").trim();
+      const key = questionAnswerKey(q);
+      const ft = (freeform.get(key) ?? "").trim();
+      if (req.nativeQuestions && (ft.length > 16_384 || (ft !== "" && !q.allowFreeText)))
+        return undefined;
       if (!q.multiSelect) {
         if (ft !== "") return ft;
-        const v = answers[q.question];
+        const v = answers.get(key);
         return typeof v === "string" ? v : undefined;
       }
-      const picked = Array.isArray(answers[q.question]) ? (answers[q.question] as string[]) : [];
+      const value = answers.get(key);
+      const picked = Array.isArray(value) ? value : [];
       const merged = ft !== "" ? [...picked, ft] : picked;
       return merged.length > 0 ? merged : undefined;
     },
-    [answers, freeform],
+    [answers, freeform, req.nativeQuestions],
   );
   const answered = (q: Question) => finalAnswer(q) !== undefined;
   const allAnswered = req.questions.every(answered);
 
   const submit = useCallback(async () => {
-    if (!canGrant || req.requestId === "" || deciding.current || !allAnswered) return;
+    if (
+      !canGrant ||
+      req.requestId === "" ||
+      deciding.current ||
+      !allAnswered ||
+      nativeState !== null
+    )
+      return;
     deciding.current = true;
     setBusy(true);
     setErr(null);
     try {
       // Build the outgoing map from finalAnswer so a freeform-only answer is sent (the raw `answers`
-      // state holds only option picks). Keyed by question text — the shape claude expects.
-      const out: Record<string, string | string[]> = {};
-      for (const q of req.questions) {
-        const a = finalAnswer(q);
-        if (a !== undefined) out[q.question] = a;
-      }
+      // state holds only option picks). Native IDs are distinct even when prompts repeat. fromEntries
+      // creates own data properties for IDs such as __proto__, rather than invoking object setters.
+      const out: Record<string, string | string[]> = Object.fromEntries(
+        req.questions.flatMap((q) => {
+          const answer = finalAnswer(q);
+          return answer === undefined ? [] : [[questionAnswerKey(q), answer]];
+        }),
+      );
       await onGrant(req.requestId, "allow", { answers: out, toolUseId: req.toolUseId });
-      setSentAnswers(out);
+      if (!req.nativeQuestions) setSentAnswers(out);
       setSentBehavior("allow");
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -3031,11 +3084,21 @@ function QuestionCard({
     } finally {
       setBusy(false);
     }
-  }, [req.requestId, req.toolUseId, req.questions, finalAnswer, allAnswered, onGrant, canGrant]);
+  }, [
+    req.requestId,
+    req.toolUseId,
+    req.questions,
+    req.nativeQuestions,
+    finalAnswer,
+    allAnswered,
+    onGrant,
+    canGrant,
+    nativeState,
+  ]);
 
   // Decline a question you don't want to answer — rides the same path as a permission Deny (#42 review).
   const dismiss = useCallback(async () => {
-    if (!canGrant || req.requestId === "" || deciding.current) return;
+    if (!canGrant || req.requestId === "" || deciding.current || req.nativeQuestions) return;
     deciding.current = true;
     setBusy(true);
     setErr(null);
@@ -3048,7 +3111,20 @@ function QuestionCard({
     } finally {
       setBusy(false);
     }
-  }, [req.requestId, req.toolUseId, onGrant, canGrant]);
+  }, [req.requestId, req.toolUseId, req.nativeQuestions, onGrant, canGrant]);
+
+  if (nativeState !== null) {
+    return (
+      <div className="perm perm-q">
+        <div className="perm-resolved" data-behavior={nativeState}>
+          <UiIcon name={nativeState === "pending" ? "info" : "check"} size={16} />
+          {nativeState === "pending"
+            ? `Submitted — waiting for ${permissionAgent} confirmation`
+            : `Resolved by ${permissionAgent}`}
+        </div>
+      </div>
+    );
+  }
 
   if (done) {
     const denied = resolvedBehavior === "deny";
@@ -3080,10 +3156,16 @@ function QuestionCard({
         <span className="perm-icon">
           <UiIcon name="question" size={18} />
         </span>
-        <span className="perm-label">Claude is asking</span>
+        <span className="perm-label">{permissionAgent} is asking</span>
       </div>
+      {req.nativeQuestions && (
+        <div className="perm-local-note">
+          Your answers may authorize tool actions in {permissionAgent}. Review the full questions
+          before submitting.
+        </div>
+      )}
       {req.questions.map((q) => (
-        <div className="q-block" key={`${q.header}:${q.question}`}>
+        <div className="q-block" key={q.id ?? `${q.header}:${q.question}`}>
           {q.header !== "" && <div className="q-header">{q.header}</div>}
           <div className="q-text">{q.question}</div>
           <div className="q-options">
@@ -3094,7 +3176,7 @@ function QuestionCard({
                 className="q-option"
                 data-selected={isPicked(q, o.label)}
                 aria-pressed={isPicked(q, o.label)}
-                disabled={!canGrant}
+                disabled={!canGrant || busy}
                 onClick={() => pick(q, o.label)}
               >
                 <span className="q-option-label">{o.label}</span>
@@ -3102,29 +3184,34 @@ function QuestionCard({
               </button>
             ))}
           </div>
-          <textarea
-            className="q-freeform"
-            rows={1}
-            placeholder={q.multiSelect ? "Add your own answer…" : "Or type your own answer…"}
-            value={freeform[q.question] ?? ""}
-            disabled={!canGrant}
-            onChange={(e) => onFreeform(q, e.target.value)}
-            onKeyDown={(e) => {
-              // Cmd/Ctrl+Enter submits when every question is answered (parity with the composer).
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && allAnswered) void submit();
-            }}
-            aria-label={`Type your own answer for: ${q.question}`}
-          />
+          {(!req.nativeQuestions || q.allowFreeText === true) && (
+            <textarea
+              className="q-freeform"
+              rows={1}
+              placeholder={q.multiSelect ? "Add your own answer…" : "Or type your own answer…"}
+              value={freeform.get(questionAnswerKey(q)) ?? ""}
+              disabled={!canGrant || busy}
+              maxLength={req.nativeQuestions ? 16_384 : undefined}
+              onChange={(e) => onFreeform(q, e.target.value)}
+              onKeyDown={(e) => {
+                // Cmd/Ctrl+Enter submits when every question is answered (parity with the composer).
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter" && allAnswered) void submit();
+              }}
+              aria-label={`Type your own answer for: ${q.question}`}
+            />
+          )}
         </div>
       ))}
       <div className="perm-actions">
-        <Button
-          variant="secondary"
-          className="perm-deny"
-          label="Dismiss"
-          isDisabled={busy || req.requestId === "" || !canGrant}
-          onClick={() => void dismiss()}
-        />
+        {!req.nativeQuestions && (
+          <Button
+            variant="secondary"
+            className="perm-deny"
+            label="Dismiss"
+            isDisabled={busy || req.requestId === "" || !canGrant}
+            onClick={() => void dismiss()}
+          />
+        )}
         <Button
           variant="secondary"
           className="perm-allow q-submit"
@@ -3167,6 +3254,7 @@ function parsePermission(text: string): ParsedPermission {
       requestId: typeof p.request_id === "string" ? p.request_id : "",
       toolUseId: typeof p.tool_use_id === "string" ? p.tool_use_id : "",
       questions: parseQuestions(p.tool_input),
+      nativeQuestions: Object.hasOwn(input, "nativeQuestions"),
     };
   } catch {
     return {
@@ -3177,6 +3265,7 @@ function parsePermission(text: string): ParsedPermission {
       requestId: "",
       toolUseId: "",
       questions: [],
+      nativeQuestions: false,
     };
   }
 }

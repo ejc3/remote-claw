@@ -303,6 +303,9 @@ export function parseCapabilities(raw: unknown, harness?: Harness): Capabilities
       : undefined;
   return {
     structuredPermissions: bool(c.structuredPermissions, legacyDefaults),
+    ...(typeof c.structuredQuestions === "boolean"
+      ? { structuredQuestions: c.structuredQuestions }
+      : {}),
     ...(textInput !== undefined ? { textInput } : {}),
     ...(permissionPosture !== undefined ? { permissionPosture } : {}),
     ...(c.permissionResolution === "native" ? { permissionResolution: "native" as const } : {}),

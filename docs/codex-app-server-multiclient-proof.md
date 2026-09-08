@@ -12,15 +12,18 @@ or simultaneous official Remote. The earlier `0.146.0` observations below remain
 **Current implementation:** the version gate accepts exact `0.151.0` and `0.153.4` on Linux arm64.
 Besides native text/status, completed `commandExecution` items now become read-only `Shell` calls and
 bounded results, including failed/declined/nonzero-exit outcomes. Browser mutations are ordinary
-non-empty non-slash text, image groups with an optional non-slash caption, and interrupt; the client
-still has no approval-response API. Images reuse the encrypted composer payload and host-constructed
+non-empty non-slash text, image groups with an optional non-slash caption, and interrupt. Exact 0.153.4
+also implements one-shot ordinary local-command approvals and bounded non-secret blocking choice
+forms; their dedicated response APIs use exact connection-owned callbacks and native-confirmed
+resolution. Version 0.151.0 approvals/questions and unsupported request shapes stay native-owned.
+Images reuse the encrypted composer payload and host-constructed
 inline data URLs, with full ordered input digests and bounded transient retention. Native image URLs
 and paths are never fetched; the viewer shows names/caption or an image-count placeholder.
 Interrupt
 targets one observed active native turn without retargeting or retrying, and remains reachable while
 text waits for native idle. Background commands may outlive the interrupted model turn. Other controls,
 general files, streaming partials, file changes, other tool families, and task lifecycle are unsupported.
-Current-version/activity/interrupt/image acceptance lives in the [release roadmap](release-finish-line.md),
+Current-version/activity/interrupt/image/approval/question acceptance lives in the [release roadmap](release-finish-line.md),
 separately from the historical results below.
 
 ## M3a product result

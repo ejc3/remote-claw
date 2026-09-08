@@ -411,6 +411,18 @@ describe("parseGit", () => {
 // cannot satisfy the exact stable-Claude tuple; missing mutation booleans stay enabled, so a partial
 // vector remains on the compatibility surface and only an explicit false disables a mutation. (#149)
 describe("parseCapabilities", () => {
+  it("preserves explicit question support without upgrading older or malformed hosts", () => {
+    for (const structuredQuestions of [true, false]) {
+      expect(parseCapabilities({ structuredQuestions })?.structuredQuestions).toBe(
+        structuredQuestions,
+      );
+    }
+    for (const structuredQuestions of [undefined, null, "true", 1, {}]) {
+      expect(parseCapabilities({ structuredQuestions })?.structuredQuestions).toBeUndefined();
+    }
+    expect(parseCapabilities({ structuredPermissions: true })?.structuredQuestions).toBeUndefined();
+  });
+
   it("retains only the exact native permission-resolution contract", () => {
     expect(parseCapabilities({ permissionResolution: "native" })?.permissionResolution).toBe(
       "native",

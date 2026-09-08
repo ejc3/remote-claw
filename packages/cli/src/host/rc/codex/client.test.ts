@@ -467,6 +467,71 @@ describe("Codex app-server boundary", () => {
     client.close();
   });
 
+  it("sends a bounded native question response through the same one-shot callback ownership", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    const native = {
+      ...commandApproval("question-callback"),
+      method: "item/tool/requestUserInput",
+    };
+    socket.emit(native);
+    const request = takeServerRequest(client);
+    const answers = Object.fromEntries([
+      ["__proto__", { answers: ["First"], unwanted: "not forwarded" }],
+    ]);
+    expect(client.respondUserInput(structuredClone(request), answers, signal)).toBe(false);
+    expect(() => client.respondCommandApproval(request, "accept", signal)).toThrow(
+      "unsupported Codex command approval response",
+    );
+    expect(client.respondUserInput(request, answers, signal)).toBe(true);
+    expect(socket.sent.at(-1)).toEqual({
+      id: "question-callback",
+      result: { answers: Object.fromEntries([["__proto__", { answers: ["First"] }]]) },
+    });
+    expect(client.respondUserInput(request, answers, signal)).toBe(false);
+    socket.emit(native);
+    expect(client.drainInbound()).toEqual([]);
+    socket.emit(commandApproval());
+    const command = takeServerRequest(client);
+    expect(() => client.respondUserInput(command, answers, signal)).toThrow(
+      "unsupported Codex user input response",
+    );
+    expect(client.respondCommandApproval(command, "decline", signal)).toBe(true);
+    client.close();
+  });
+
+  it("rejects malformed native answer envelopes before consuming a live question", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    socket.emit({ ...commandApproval(), method: "item/tool/requestUserInput" });
+    const request = takeServerRequest(client);
+    for (const answers of [
+      null,
+      [],
+      {},
+      { choice: "First" },
+      { choice: { answers: [] } },
+      { choice: { answers: ["First", "Second"] } },
+      { choice: { answers: [null] } },
+      { choice: { answers: [" "] } },
+      { choice: { answers: ["x".repeat(16_385)] } },
+      { "": { answers: ["First"] } },
+      { ["q".repeat(257)]: { answers: ["First"] } },
+      Object.fromEntries(["a", "b", "c", "d"].map((id) => [id, { answers: ["First"] }])),
+    ]) {
+      expect(() =>
+        client.respondUserInput(request, answers as Record<string, { answers: string[] }>, signal),
+      ).toThrow("unsupported Codex user input response");
+    }
+    expect(socket.sent.some((message) => "result" in message)).toBe(false);
+    expect(client.respondUserInput(request, { choice: { answers: ["First"] } }, signal)).toBe(true);
+    client.close();
+  });
+
   it("only a matching native thread and request ID resolves an already queued approval", async () => {
     const socket = new FakeSocket();
     const client = new CodexAppServerClient("unix://", () => socket);

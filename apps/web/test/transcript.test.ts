@@ -10,6 +10,7 @@ import {
   parseTask,
   parseToolResult,
   parseToolUse,
+  questionAnswerKey,
   sanitizeInput,
   summarizeActivity,
   toolHint,
@@ -143,6 +144,88 @@ describe("parseQuestions", () => {
     expect(parseQuestions({ command: "ls" })).toEqual([]);
     expect(parseQuestions(null)).toEqual([]);
     expect(parseQuestions({ questions: "nope" })).toEqual([]);
+  });
+});
+
+describe("native question parsing", () => {
+  const question = {
+    id: "__proto__",
+    header: "",
+    question: "Choose a path",
+    options: [{ label: "Blue", description: "" }],
+    multiSelect: false,
+    allowFreeText: false,
+  };
+  const parse = (questions: unknown[], nativeQuestions: unknown = true) =>
+    parseQuestions({ nativeQuestions, questions });
+
+  it("keeps repeated prompts distinct by exact IDs and preserves free-text permissions", () => {
+    const questions = parse([question, { ...question, id: "constructor", allowFreeText: true }]);
+    expect(questions).toHaveLength(2);
+    expect(questions.map(questionAnswerKey)).toEqual(["__proto__", "constructor"]);
+    expect(questions.map((q) => q.question)).toEqual(["Choose a path", "Choose a path"]);
+    expect(questions.map((q) => q.allowFreeText)).toEqual([false, true]);
+    expect(
+      questionAnswerKey({ question: "Legacy prompt", header: "", options: [], multiSelect: false }),
+    ).toBe("Legacy prompt");
+  });
+
+  it.each([
+    { id: "" },
+    { id: "x".repeat(257) },
+    { header: "x".repeat(257) },
+    { question: "" },
+    { question: "x".repeat(16_385) },
+    { multiSelect: true },
+    { allowFreeText: "true" },
+    { options: null },
+    { options: [] },
+    {
+      options: [
+        { label: "Blue", description: "" },
+        { label: "Blue", description: "again" },
+      ],
+    },
+    { options: [{ label: "", description: "" }] },
+    { options: [{ label: "x".repeat(1025), description: "" }] },
+    { options: [{ label: "Blue", description: "x".repeat(4097) }] },
+    { options: [{ label: "Blue", description: null }] },
+  ])("rejects the entire group for malformed or unsupported native field case %#", (patch) => {
+    expect(parse([question, { ...question, id: "second", ...patch }])).toEqual([]);
+  });
+
+  it("rejects duplicate IDs, out-of-bounds group/option counts, and malformed native markers", () => {
+    expect(parse([question, question])).toEqual([]);
+    expect(parse([])).toEqual([]);
+    expect(parse(Array.from({ length: 4 }, (_, id) => ({ ...question, id: String(id) })))).toEqual(
+      [],
+    );
+    expect(
+      parse([
+        {
+          ...question,
+          options: Array.from({ length: 21 }, (_, id) => ({ label: String(id), description: "" })),
+        },
+      ]),
+    ).toEqual([]);
+    for (const marker of [false, null, "true", {}]) expect(parse([question], marker)).toEqual([]);
+  });
+
+  it("accepts the exact native field and collection limits without truncation", () => {
+    const bounded = {
+      ...question,
+      header: "h".repeat(256),
+      question: "q".repeat(16_384),
+      options: Array.from({ length: 20 }, (_, id) => ({
+        label: `${id}`.padEnd(1024, "l"),
+        description: "d".repeat(4096),
+      })),
+    };
+    const source = Array.from({ length: 3 }, (_, id) => ({
+      ...bounded,
+      id: `${id}`.padEnd(256, "i"),
+    }));
+    expect(parse(source)).toEqual(source);
   });
 });
 

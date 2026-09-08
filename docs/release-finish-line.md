@@ -190,8 +190,12 @@ home-folder UI artifacts, outside Git.
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | Queued | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers |
 | Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
-| Remote approvals and questions | Codex 0.153.4 ordinary-command approvals implemented and live-accepted | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; other permission kinds and questions remain queued |
+| Remote approvals and questions | Codex 0.153.4 ordinary-command approvals and bounded native choice forms implemented and live-accepted | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
+
+Claude-native approval/question work and new live comparisons are temporarily deferred while the
+user's Claude quota is exhausted. The current order is Codex native questions, Codex official-Remote
+recovery, then shared desktop/mobile daily-use finish; this does not remove Claude from the target.
 
 Future CLI harnesses (for example Grok) should require a native adapter, validated CLI configuration,
 and one explicit metadata/capability entry, reusing broker, encryption, and viewer renderers. The shared
@@ -408,6 +412,45 @@ responses, resolution races, and ambiguous-write isolation. The driver-broker te
 native-resolution capability in the shared bridge snapshot before live acceptance; that boundary now
 owns the regression. Relay/parser tests own pending-to-resolved semantics, and the existing browser
 sentinel owns the shared permission-card behavior. No new E2E matrix or coordinator was added.
+
+### Codex native questions
+
+**Implemented and live-accepted.** Exact Codex 0.153.4/Linux arm64 can project complete blocking,
+non-secret native choice forms through the existing encrypted question card. The bounded surface is
+1–3 questions with 1–20 choices each; only native `isOther` enables free text. Secret, optionless,
+nonblocking, malformed, and all 0.151.0 forms stay native-owned. These are transparent native forms,
+not a planning-only API: the same native method can carry tool-consent wording, and the viewer warns
+that an answer may authorize a tool action. No Dismiss, multiselect, or local auto-resolution timer
+is invented, and no separate policy-amendment/session-grant API is added; displayed choices retain
+their native semantics. Full bounds live in [the protocol](protocol.md#codex-native-choice-forms).
+
+Fresh viewer IDs bind exact connection-owned callbacks. Replies use native question IDs even when
+display wording repeats, submit the whole group once, and remain pending until native resolution
+closes all cards neutrally. Neither broker admission nor socket send claims which answer won.
+`structuredQuestions:true` advertises the surface separately from older command-approval support.
+The local TUI and other native clients keep their own response authority; ambiguity can retire only
+the companion, without a retry or native restart.
+
+The native discovery probe confirmed exact 0.153.4 managed-socket request shape, late-client replay,
+exact-ID answer acceptance, `serverRequest/resolved`, and turn completion. Actual product acceptance
+then passed on 2026-09-08 with the built CLI, production viewer, durable local SQLite broker, attached
+native TUI, and two independent browsers on one managed-socket thread. A phone chose Blue, a desktop
+submitted the native-permitted free text Coral, and native-TUI Enter chose Blue before a held stale
+browser Green answer. All three native turns completed with the expected answer. Both viewers
+resolved neutrally; reload retained three cards with no duplicate or active answer controls. The
+native TUI remained live. All eight phone/desktop light/dark question/resolution artifacts were opened
+and inspected. A long unbroken phone prompt exposed text overflow; six scoped CSS lines fixed wrapping,
+and a layout assertion in the existing browser sentinel now owns that regression. The affected
+question screenshots and a native phone-choice run passed again after that fix. This run
+did not exercise the official Remote browser or establish a new packed-install/recovery result.
+Frozen scope and private evidence remain outside Git in
+`/home/ubuntu/remote-claw-ui-artifacts/codex-questions-2026-09-08/`.
+
+Focused client/helper tests own complete-group allowlisting, key identity, response bounds, duplicate
+or stale answers, and ambiguous-write isolation. The existing driver-broker boundary owns capability
+propagation and answer admission. Parser/UI tests own stable per-question keys, permitted
+input affordances, and truthful pending/resolved states; one transcript browser sentinel owns the
+cross-layer submit/resolve/reload wiring. No new broker schema, coordinator, or E2E matrix is required.
 
 ### Execution contract
 

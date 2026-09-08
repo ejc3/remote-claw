@@ -23,6 +23,7 @@ function renderBubble(
     permissionsLocal?: boolean;
     permissionAgent?: "Claude" | "OpenCode" | "Codex";
     nativePermissionResolution?: boolean;
+    nativeQuestionsSupported?: boolean;
     hostConnected?: boolean;
   } = {},
   resolved: ReadonlyMap<string, PermissionResolution["behavior"]> = new Map(),
@@ -35,6 +36,7 @@ function renderBubble(
       permissionsLocal: opts.permissionsLocal ?? false,
       permissionAgent: opts.permissionAgent ?? "Claude",
       nativePermissionResolution: opts.nativePermissionResolution ?? false,
+      nativeQuestionsSupported: opts.nativeQuestionsSupported ?? false,
       hostConnected: opts.hostConnected ?? true,
       resolved,
       resolvedAnswers: noAnswers,
@@ -271,6 +273,86 @@ describe("stable viewer surface", () => {
     expect(resolved).not.toContain("Denied");
     expect(resolved).not.toContain("perm-actions");
     expect(resolved).not.toContain("waiting for Codex");
+  });
+
+  const nativeQuestionInput = {
+    nativeQuestions: true,
+    questions: [
+      { id: "__proto__", header: "First", allowFreeText: false },
+      { id: "constructor", header: "Second", allowFreeText: true },
+    ].map((q) => ({
+      ...q,
+      question: "Choose a path",
+      options: [{ label: "Blue", description: "Blue path" }],
+      multiSelect: false,
+    })),
+  };
+  const nativeQuestionMessage = (tool_input: unknown = nativeQuestionInput): Message => ({
+    kind: "permission_request",
+    seq: 8,
+    msgId: "native-question",
+    text: JSON.stringify({
+      request_id: "native-question",
+      tool_name: "AskUserQuestion",
+      tool_input,
+    }),
+  });
+  const nativeQuestionOpts = {
+    permissionAgent: "Codex" as const,
+    nativePermissionResolution: true,
+    nativeQuestionsSupported: true,
+  };
+
+  it("renders native question IDs safely, only advertised free text, and no invented Dismiss", () => {
+    const html = renderBubble(nativeQuestionMessage(), nativeQuestionOpts);
+    expect(html).toContain("Codex is asking");
+    expect(html).toContain("Your answers may authorize tool actions in Codex");
+    expect(html.match(/class="q-block"/g)).toHaveLength(2);
+    expect(html.match(/class="q-freeform"/g)).toHaveLength(1);
+    expect(html).toContain('maxLength="16384"');
+    expect(html).not.toContain(">Dismiss<");
+    expect(html).not.toContain('data-selected="true"');
+    expect(html).not.toContain("Claude is asking");
+  });
+
+  it("keeps native question submissions pending and resolutions neutral without publishing answers", () => {
+    for (const behavior of ["pending", "resolved"] as const) {
+      const html = renderBubble(
+        nativeQuestionMessage(),
+        nativeQuestionOpts,
+        new Map([["native-question", behavior]]),
+      );
+      expect(html).toContain(
+        behavior === "pending" ? "Submitted — waiting for Codex confirmation" : "Resolved by Codex",
+      );
+      expect(html).not.toContain("Answered");
+      expect(html).not.toContain("Dismissed");
+      expect(html).not.toContain("q-answer");
+      expect(html).not.toContain("perm-actions");
+      expect(html).not.toContain("q-options");
+    }
+  });
+
+  it("never degrades a malformed or unsupported native question form into Allow/Deny", () => {
+    for (const input of [
+      { ...nativeQuestionInput, nativeQuestions: false },
+      { ...nativeQuestionInput, questions: [] },
+      { ...nativeQuestionInput, questions: [...nativeQuestionInput.questions, { id: "invalid" }] },
+    ]) {
+      const html = renderBubble(nativeQuestionMessage(input), nativeQuestionOpts);
+      expect(html).toContain("Codex question unavailable here");
+      expect(html).not.toContain("perm-actions");
+      expect(html).not.toContain("q-options");
+    }
+    for (const unsupported of [
+      { nativeQuestionsSupported: false },
+      { nativePermissionResolution: false },
+    ]) {
+      const html = renderBubble(nativeQuestionMessage(), { ...nativeQuestionOpts, ...unsupported });
+      expect(html).toContain("Answer this question in the native Codex interface.");
+      expect(html).not.toContain("perm-actions");
+      expect(html).not.toContain("q-options");
+    }
   });
 
   it("labels only host receipt, and gives ambiguous publication the frozen disclosure", () => {
