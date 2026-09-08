@@ -64,7 +64,7 @@ for official ordering, rendering, busy-state behavior, and local/official-client
 | --- | --- | --- |
 | `--rc-app` / `runRcLaunch` | A synthetic RC backend bridged to the encrypted broker; durable, text-only, fail-stop supported path | Anthropic registration and official-client coexistence |
 | `--rc-trace` / `runRcTrace` | Transparent pass-through to Anthropic with redacted protocol tracing | Projection to the broker and remote mutation |
-| `--rc-app … --rc-driver=claude-native --remote-control` | Launch ordinary Claude, bind its exact successful bridge request, reconcile live SSE/history, and project provider-ordered text plus read-only worker tool calls/textual results with fail-stop text writes; the literal official-client coexistence acceptance passed | Later controls, platforms, and versions are separate tranches |
+| `--rc-app … --rc-driver=claude-native --remote-control` | Launch ordinary Claude, bind its exact successful bridge request, reconcile live SSE/history, and project provider-ordered text plus read-only worker tool activity; current code also supports one-shot session Interrupt and private image-file references through ordinary text | Historical M1 accepted literal official-client coexistence; current image/Interrupt acceptance lives in the release roadmap; other controls, general files, platforms, and versions remain separate |
 | `--rc-app … --rc-driver=claude-native --rc-native-session <cse_…>` | Attach a fresh projection to one explicitly named, already-running native session without starting an interactive Claude session or proxy, forwarding Claude arguments, or discovering a session; the pinned-version probe still runs | Stable same-row identity; the caller must supply the exact native ID |
 | `--rc-driver=tmux` plus Claude's `--remote-control` | One bounded lower-fidelity run preserved the provider session while a local pane, Anthropic API client, and two browsers exchanged text | Structured event semantics, independent peer ordering, supported-version matrix, and official Claude app UI acceptance |
 | `AnthropicRcClient` | Typed session listing, bounded history with `next_cursor`/`resume_cursor`, client-side SSE readiness, and one-user-event POST | Cross-platform credential sources and any later control semantics |
@@ -90,7 +90,10 @@ The experiment must keep these invariants:
   retried or converted into a second command; outcome-unknown remains distinct from rejection.
 - History/SSE event dedup uses provider event identity and sequence. The one narrow logical-prompt
   exception correlates opposite-source client/worker replicas by the provider's user UUID and normalized
-  text, never timing; attachment-bearing replicas remain non-projectable.
+  text, never timing; attachment-bearing replicas remain non-projectable. Current browser image uploads
+  use ordinary text references instead; full native text still correlates the prompt before display
+  strips the exact generated reference-group form. The [image follow-on](release-finish-line.md#claude-native-images--complete)
+  does not add generic provider attachment projection or rewrite the first vertical below.
 - Unknown event/control/attachment shapes are retained for diagnosis or ignored for projection; they
   are not guessed into supported actions.
 - The remote-claw broker remains zero-knowledge. Anthropic is not zero-knowledge: it receives native

@@ -403,10 +403,17 @@ success releases later browser text; HTTP admission and generic results do not i
 has no exact-turn target, so a delayed Stop may affect newer native/peer work. It is never retried,
 including after a 401; response timeout or unknown/rejected outcome fences only the companion.
 See [control semantics](protocol.md#11-compatibility-control-verbs).
-The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text and Interrupt;
-permissions, status, other controls, and attachments remain disabled. This surface is Linux-only and
+Image groups reuse the encrypted composer boundary. The host prepares private, exclusive upload files
+and ordinary native text references; provider ordering and full-text correlation stay unchanged.
+Only the generated reference-group form is stripped for display, retaining sanitized names/caption
+on live/history projection. Raw image slots are released after preparation, but attempted files remain
+for native ingestion even after companion loss. The 256 MiB decoded-image budget is per companion run,
+not a global or cross-restart quota. See [upload bounds and retention](protocol.md#10-attachments).
+The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text, images, and Interrupt;
+permissions, status, other controls, general files, and image previews remain disabled. This surface is Linux-only and
 pins exact Claude 2.1.237. The [release roadmap](release-finish-line.md) owns current Interrupt acceptance,
-separately from historical M1.
+separately from historical M1. [Image acceptance](release-finish-line.md#claude-native-images--complete)
+also remains a separate follow-on, not a rewrite of M1.
 
 ### 10.5 Pinned OpenCode text/interrupt/status companion
 
@@ -498,7 +505,7 @@ have narrower, truthfully labeled guarantees.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
-| Claude native companion | Structured text projection and read-only tool activity over ordinary Anthropic RC; current code adds one-shot session-scoped Interrupt, separately from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; no other controls, remote permission/question responses, attachments, or status |
+| Claude native companion | Structured text projection, host-owned image uploads, read-only tool activity, and one-shot session-scoped Interrupt over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; no other controls, remote permission/question responses, general files, image previews, or status |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
 | Codex | Current code accepts exact 0.151.0 and 0.153.4/Linux arm64 with text/images/interrupt/status and read-only completed command activity; historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0 | One explicit thread and attached local-TUI precondition; current-version/activity/interrupt/image acceptance is tracked in the release roadmap; general files, managed-Unix/legacy recovery, per-device unsubscribe, and other browser controls remain unclaimed |

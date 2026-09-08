@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Frame, FrameHeader } from "@remote-claw/clawsec";
@@ -18,11 +18,19 @@ import type {
 } from "./client.js";
 import { type ClaudeNativeClient, ClaudeNativeDriver, type ClaudeNativeProxy } from "./driver.js";
 import { AnthropicRcError } from "./errors.js";
+import { NativeImageStore } from "./images.js";
 
 const ID = new Uint8Array(16);
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const CERTS_DIR = mkdtempSync(join(tmpdir(), "rc-native-driver-"));
+const IMAGE_DATA =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jv1sAAAAASUVORK5CYII=";
+const IMAGES = ["first.png", "second.png"].map((name) => ({
+  name,
+  url: `data:image/png;base64,${IMAGE_DATA}`,
+}));
+const IMAGE_DISPLAY = "📎 first.png, 📎 second.png\nDescribe both";
 
 function haveOpenssl(): boolean {
   try {
@@ -272,7 +280,9 @@ interface Harness {
   stop(): Promise<void>;
 }
 
-async function startHarness(options: { projectionCoordinateCap?: number } = {}): Promise<Harness> {
+async function startHarness(
+  options: { projectionCoordinateCap?: number; imageStore?: NativeImageStore } = {},
+): Promise<Harness> {
   const native = new FakeNativeClient();
   const broker = new FakeBroker();
   const brokerState = { creations: 0 };
@@ -302,6 +312,7 @@ async function startHarness(options: { projectionCoordinateCap?: number } = {}):
     certsDir: CERTS_DIR,
     claudeBin: "claude-fixture",
     client: native,
+    imageStore: options.imageStore ?? new NativeImageStore(join(CERTS_DIR, "default-images")),
     reconnectDelayMs: 0,
     ...(options.projectionCoordinateCap === undefined
       ? {}
@@ -362,6 +373,7 @@ async function startAttachHarness(options: {
   native: FakeNativeClient;
   broker: FakeBroker;
   nativeSessionId: string;
+  imageStore?: NativeImageStore;
 }): Promise<AttachHarness> {
   const parent = new AbortController();
   const announcementFloor = options.broker.announcements.length;
@@ -388,6 +400,7 @@ async function startAttachHarness(options: {
     certsDir: "",
     claudeBin: "must-not-spawn",
     client: options.native,
+    imageStore: options.imageStore ?? new NativeImageStore(join(CERTS_DIR, "default-images")),
     reconnectDelayMs: 0,
     proxyFactory: () => {
       proxyCalls += 1;
@@ -1051,8 +1064,10 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
   it.each([
     "ack-before-sse",
     "sse-before-ack",
-  ] as const)("correlates browser UUID/clientMsgId when provider order is %s", async (order) => {
-    const harness = await startHarness();
+  ] as const)("correlates an image group when provider order is %s, including fresh history", async (order) => {
+    const imageRoot = mkdtempSync(join(CERTS_DIR, "images-"));
+    const harness = await startHarness({ imageStore: new NativeImageStore(imageRoot) });
+    const pushed = vi.spyOn(harness.session, "pushUserInput");
     const acknowledgement = Promise.withResolvers<void>();
     harness.native.postImpl = async (_nativeId, input) => {
       if (order === "sse-before-ack") {
@@ -1075,16 +1090,39 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     try {
       await bindReady(harness, "cse_browser");
       harness.broker.push(
-        inbound(harness, "user", "browser-in", "hello native", "browser-coordinate"),
+        inbound(
+          harness,
+          "attachment",
+          "browser-in",
+          JSON.stringify({
+            images: IMAGES.map(({ name }) => ({ name, mime: "image/png", data: IMAGE_DATA })),
+            caption: "Describe both",
+          }),
+          "browser-coordinate",
+        ),
       );
       await waitFor(() => harness.native.postCalls.length === 1);
+      const input = harness.native.postCalls[0]?.input;
+      if (input === undefined) throw new Error("missing provider post");
+      const paths = [...input.message.content.matchAll(/@"([^"]+)"/g)].map(
+        (match) => match[1] ?? "",
+      );
+      expect(paths).toHaveLength(2);
+      for (const path of paths) {
+        expect(path.startsWith(`${imageRoot}/remote-claw-native-`)).toBe(true);
+        expect(readFileSync(path)).toEqual(Buffer.from(IMAGE_DATA, "base64"));
+      }
+      expect(input.message.content).toBe(
+        `${paths.map((path) => `@"${path}"`).join(" ")}\n${IMAGE_DISPLAY}`,
+      );
+      expect(input.message.content).not.toContain("data:image");
+      expect(pushed).toHaveBeenCalledTimes(1);
+      expect(pushed.mock.results[0]?.value.images).toBeUndefined();
 
       if (order === "ack-before-sse") {
         acknowledgement.resolve();
         await tick();
         expect(harness.broker.content).toEqual([]);
-        const input = harness.native.postCalls[0]?.input;
-        if (input === undefined) throw new Error("missing provider post");
         harness.native.streams[0]?.push(
           userEvent(
             "evt_browser",
@@ -1105,17 +1143,154 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       expect(harness.broker.content).toEqual([
         expect.objectContaining({
           header: expect.objectContaining({ recordKind: "user", seq: 0 }),
-          text: "hello native",
+          text: IMAGE_DISPLAY,
         }),
       ]);
       expect(acceptedBodies(harness)).toEqual([
         { client_msg_id: "browser-coordinate", native_pending: true },
         { client_msg_id: "browser-coordinate", seq: 0 },
       ]);
+      const freshNative = new FakeNativeClient();
+      const freshBroker = new FakeBroker();
+      freshNative.historyImpl = async () => ({
+        data: [
+          userEvent(
+            "evt_browser",
+            "1",
+            input.uuid,
+            input.message.content,
+            "cse_browser",
+            "client",
+            input.timestamp,
+          ),
+        ],
+        nextCursor: null,
+      });
+      const fresh = await startAttachHarness({
+        native: freshNative,
+        broker: freshBroker,
+        nativeSessionId: "cse_browser",
+        imageStore: new NativeImageStore(imageRoot),
+      });
+      try {
+        await fresh.ready();
+        await waitFor(() => freshBroker.content.length === 1);
+        expect(freshBroker.content[0]?.text).toBe(IMAGE_DISPLAY);
+        expect(freshNative.postCalls).toEqual([]);
+      } finally {
+        await fresh.stop();
+      }
+      expect(paths.every((path) => existsSync(path))).toBe(true);
     } finally {
       acknowledgement.resolve();
       await harness.stop();
     }
+  });
+
+  it("fences changed native image references before projecting a browser receipt", async () => {
+    const imageRoot = mkdtempSync(join(CERTS_DIR, "images-"));
+    const imageStore = new NativeImageStore(imageRoot);
+    const harness = await startHarness({ imageStore });
+    try {
+      await bindReady(harness, "cse_changed_images");
+      const event = harness.session.pushUserInput(IMAGE_DISPLAY, {
+        images: IMAGES,
+        clientMsgId: "changed-images",
+      });
+      await waitFor(() => harness.native.postCalls.length === 1);
+      const input = harness.native.postCalls[0]?.input;
+      if (input === undefined) throw new Error("missing provider post");
+      const changed = input.message.content.replace('/1.png"', '/1.gif"');
+      expect(changed).not.toBe(input.message.content);
+      // Display normalization must never substitute for exact native-input correlation.
+      expect(imageStore.displayText(changed)).toBe(IMAGE_DISPLAY);
+      harness.native.streams[0]?.push(
+        userEvent(
+          "evt_ack_0",
+          "1",
+          input.uuid,
+          changed,
+          "cse_changed_images",
+          "client",
+          input.timestamp,
+        ),
+      );
+      await waitFor(() => harness.session.closed);
+      expect(harness.broker.content).toEqual([]);
+      expect(acceptedBodies(harness)).toEqual([]);
+      expect(event.images).toBeUndefined();
+      expect(harness.native.postCalls).toHaveLength(1);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("discards prepared images when the projection closes before the native POST", async () => {
+    const imageRoot = mkdtempSync(join(CERTS_DIR, "images-"));
+    const imageStore = new NativeImageStore(imageRoot);
+    const prepared = Promise.withResolvers<Awaited<ReturnType<NativeImageStore["prepare"]>>>();
+    const continuePreparation = Promise.withResolvers<void>();
+    const prepare = imageStore.prepare.bind(imageStore);
+    vi.spyOn(imageStore, "prepare").mockImplementation(async (...args) => {
+      const result = await prepare(...args);
+      prepared.resolve(result);
+      await continuePreparation.promise;
+      return result;
+    });
+    const harness = await startHarness({ imageStore });
+    try {
+      await bindReady(harness, "cse_closed_images");
+      const event = harness.session.pushUserInput(IMAGE_DISPLAY, { images: IMAGES });
+      const result = await prepared.promise;
+      const paths = [...result.text.matchAll(/@"([^"]+)"/g)].map((match) => match[1] ?? "");
+      expect(paths).toHaveLength(2);
+      expect(paths.every((path) => existsSync(path))).toBe(true);
+      const discard = vi.spyOn(result, "discard");
+      harness.session.close("broker lost during image preparation");
+      continuePreparation.resolve();
+      await waitFor(() => discard.mock.calls.length === 1);
+      await waitFor(() => paths.every((path) => !existsSync(path)));
+      expect(harness.native.postCalls).toEqual([]);
+      expect(event.images).toBeUndefined();
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      continuePreparation.resolve();
+      await harness.stop();
+    }
+  });
+
+  it("retains attempted image files after an ambiguous native POST and fences queued input", async () => {
+    const imageRoot = mkdtempSync(join(CERTS_DIR, "images-"));
+    const harness = await startHarness({ imageStore: new NativeImageStore(imageRoot) });
+    const outcome = Promise.withResolvers<RcPostAck>();
+    harness.native.postImpl = async () => outcome.promise;
+    let paths: string[] = [];
+    try {
+      await bindReady(harness, "cse_unknown_images");
+      const event = harness.session.pushUserInput(IMAGE_DISPLAY, { images: IMAGES });
+      await waitFor(() => harness.native.postCalls.length === 1);
+      const input = harness.native.postCalls[0]?.input;
+      if (input === undefined) throw new Error("missing provider post");
+      paths = [...input.message.content.matchAll(/@"([^"]+)"/g)].map((match) => match[1] ?? "");
+      expect(paths).toHaveLength(2);
+      expect(event.images).toBeUndefined();
+      const queued = harness.session.pushUserInput(IMAGE_DISPLAY, { images: IMAGES });
+      outcome.reject(
+        AnthropicRcError.network("postEvent", { retryable: false, outcomeUnknown: true }),
+      );
+      await waitFor(() => harness.session.closed);
+      expect(harness.native.postCalls).toHaveLength(1);
+      expect(harness.broker.content).toEqual([]);
+      expect(event.images).toBeUndefined();
+      expect(queued.images).toBeUndefined();
+      expect(paths.every((path) => existsSync(path))).toBe(true);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      outcome.resolve({ eventId: "unused", sequenceNum: "1", duplicate: false });
+      await harness.stop();
+    }
+    expect(paths.every((path) => existsSync(path))).toBe(true);
   });
 
   it.each([

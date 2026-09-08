@@ -96,7 +96,10 @@ describe("RC_HELP banner", () => {
   it("exposes the bounded Claude native companion separately from the private relay", () => {
     expect(RC_HELP).toMatch(/mitm \| claude-native \| tmux \| opencode/);
     expect(RC_HELP).toContain("Claude native companion (--rc-driver=claude-native)");
-    expect(RC_HELP).toContain("Linux/Claude 2.1.237 text/interrupt companion");
+    expect(RC_HELP).toContain("Linux/Claude 2.1.237 text/image/interrupt companion");
+    expect(RC_HELP).toMatch(/Images become private host-owned\s+upload files/);
+    expect(RC_HELP).toContain("256 MiB decoded-image budget is per companion run");
+    expect(RC_HELP).toContain("not a global or cross-restart disk quota");
     expect(RC_HELP).toMatch(/Literal official-client coexistence acceptance passed/);
     expect(RC_HELP).toContain("session-scoped Interrupt");
     expect(RC_HELP).toContain("a delayed Stop may affect newer work");

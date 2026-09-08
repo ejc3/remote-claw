@@ -731,7 +731,7 @@ test.describe("capability gating (#149)", () => {
     await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
   });
 
-  test("the native Claude companion supports text and interrupt without a private-relay warning", async ({
+  test("the native Claude companion supports text, images and interrupt without a private-relay warning", async ({
     page,
     seedHost,
   }) => {
@@ -745,7 +745,7 @@ test.describe("capability gating (#149)", () => {
     await expect(page.locator(".perms-bypassed")).toHaveCount(0);
     await expect(page.locator(".local-input-disclosure")).toHaveCount(0);
     await expect(page.getByTestId("composer-mode")).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Attach photos" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Attach photos" })).toBeEnabled();
 
     const composer = page.getByRole("textbox", { name: "Message" });
     await composer.fill("   ");

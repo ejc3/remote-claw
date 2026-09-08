@@ -341,6 +341,42 @@ correlation and changed-byte fencing. General files, lossless originals, transcr
 Claude-native uploads, remote approval decisions, and official Codex Remote browser acceptance remain
 outside this slice. Neither supported version's permission policy changed.
 
+### Claude-native images — complete
+
+Current exact Claude 2.1.237/Linux arm64 accepts the existing encrypted phone/desktop image composer
+through ordinary native `postEvent` text with host-created image references. No provider upload API,
+broker schema, permission response, or private replacement session was added. The native local TUI
+and official Claude browser remain active. Full transmitted text, UUID, timestamp, and native event
+identity retain the existing correlation boundary; HTTP admission does not create a canonical receipt.
+Only our exact generated reference prefix is hidden for display, keeping sanitized names and caption
+identical in live messages and fresh-history projections. Generic provider attachment blocks, general
+files, transcript image previews, remote approvals, and status inference remain outside this slice.
+
+On 2026-09-08 a native probe read a harmless host-owned PNG and displayed its attachment in the
+official browser. Actual acceptance then sent one image from a phone viewer (390×844), followed by a
+two-image group from desktop (1440×1000), through the real encrypted SQLite broker and companion.
+Claude correctly described the blue circle/printed 518 and green square/printed 963. The native TUI,
+official logged-in browser, and both remote-claw viewers displayed the results. Reload and a separate
+fresh companion projection retained one user/assistant message per send without replaying native
+mutations. All four completed phone/desktop light/dark screenshots were opened and inspected.
+Evidence and diagnostic sources remain outside Git in
+`/home/ubuntu/remote-claw-ui-artifacts/claude-images-2026-09-08/`.
+
+Files are private, exclusive, host-generated uploads under `~/.remote-claw-uploads/`, with a
+256 MiB cumulative decoded-byte limit per companion run, not a global or cross-restart disk quota.
+Never-submitted/partial preparations are removed; after any submission attempt the files remain
+available even if the companion exits or the outcome is unknown. Remove them only once the native
+session no longer needs them. Raw pending image bytes are released after preparation. The first live
+attempt rejected this host's group-writable Claude uploads directory before native submission; using
+remote-claw's own private root fixed the integration without changing Claude directory permissions.
+The focused unsafe-root regression already owns this failure, so no additional E2E matrix was added.
+
+The owning code is `anthropic/images.ts`, the existing native driver, capability advertisement, and
+shared native image admission. Focused tests own private files, bounds, cleanup, reference correlation,
+ambiguous-send retention, closure during preparation, and history display. The existing mobile
+capability sentinel owns UI gating; actual native acceptance owns image ingestion and coexistence.
+Native permissions, authenticated browsers, Claude TUI, managed Codex daemon, and tunnel were unchanged.
+
 ### Execution contract
 
 Every implementation tranche starts from current <code>origin/main</code> and freezes five things before

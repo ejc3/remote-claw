@@ -869,15 +869,20 @@ describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
 
 describe("HostRcRelay provider-ordered text boundaries", () => {
   it.each([
-    false,
-    true,
-  ])("admits complete Codex image groups without canonical receipt or filesystem references (chunked=%s)", async (chunked) => {
+    { surface: "Codex", relayFor: codexRelayOf, chunked: false },
+    { surface: "Codex", relayFor: codexRelayOf, chunked: true },
+    { surface: "Claude native", relayFor: nativeRelayOf, chunked: false },
+    { surface: "Claude native", relayFor: nativeRelayOf, chunked: true },
+  ])("admits complete $surface image groups without canonical receipt or filesystem references (chunked=$chunked)", async ({
+    relayFor,
+    chunked,
+  }) => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();
     client.reportedDurable = true;
     const push = vi.spyOn(session, "pushUserInput");
     const ac = new AbortController();
-    const served = codexRelayOf(session, client).serve(ac.signal);
+    const served = relayFor(session, client).serve(ac.signal);
     await waitFor(() => client.streamStarts.length === 1);
     const img = { name: "../../a.png", mime: "image/png", data: "YWJj" };
     for (const [i, payload] of [

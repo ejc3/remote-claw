@@ -25,6 +25,7 @@ import {
   type RcUserEventInput,
 } from "./client.js";
 import { AnthropicRcError } from "./errors.js";
+import { NativeImageStore } from "./images.js";
 
 const HISTORY_PAGE_LIMIT = 100;
 const HISTORY_PAGE_CAP = 1_000;
@@ -77,6 +78,8 @@ export interface ClaudeNativeDriverOptions {
   reconnectDelayMs?: number;
   /** Test seam for the shared retained provider-event/browser-mutation ceiling. */
   projectionCoordinateCap?: number;
+  /** Private image preparation seam; production uses remote-claw's owned uploads tree. */
+  imageStore?: NativeImageStore;
 }
 
 interface NativeConnection {
@@ -167,6 +170,7 @@ class NativeReconciler {
   readonly #budget: ProjectionBudget;
   readonly #trace: Tracer;
   readonly #onControlResponse: (event: AnthropicRcEvent) => void;
+  readonly #images: NativeImageStore;
   readonly #seenEvents = new Map<string, AnthropicRcEvent>();
   readonly #usersByUuid = new Map<string, UserObservation>();
   #lastSequence: bigint | null = null;
@@ -178,6 +182,7 @@ class NativeReconciler {
     budget: ProjectionBudget,
     trace: Tracer,
     onControlResponse: (event: AnthropicRcEvent) => void,
+    images: NativeImageStore,
   ) {
     this.#session = session;
     this.#nativeId = nativeId;
@@ -185,6 +190,7 @@ class NativeReconciler {
     this.#budget = budget;
     this.#trace = trace;
     this.#onControlResponse = onControlResponse;
+    this.#images = images;
   }
 
   accept(event: AnthropicRcEvent): void {
@@ -297,7 +303,7 @@ class NativeReconciler {
         type: "user",
         uuid: event.eventId,
         local_prompt: true,
-        message: { role: "user", content: user.text },
+        message: { role: "user", content: this.#images.displayText(user.text) },
         ...(mutation?.clientMsgId !== undefined ? { client_msg_id: mutation.clientMsgId } : {}),
       });
       return;
@@ -347,6 +353,7 @@ export class ClaudeNativeDriver implements Driver {
   readonly #mutations = new Map<string, BrowserMutation>();
   readonly #writeGate = new WriteGate();
   readonly #projectionCoordinateCap: number;
+  readonly #images: NativeImageStore;
   #pendingInterrupt: PendingInterrupt | null = null;
 
   constructor(ctx: DriverContext, options: ClaudeNativeDriverOptions) {
@@ -355,6 +362,7 @@ export class ClaudeNativeDriver implements Driver {
     this.#client = options.client ?? new AnthropicRcClient();
     this.#trace = (ctx.tracer ?? NOOP_TRACER).child({ driver: "claude-native" });
     this.#projectionCoordinateCap = options.projectionCoordinateCap ?? PROJECTION_COORDINATE_CAP;
+    this.#images = options.imageStore ?? new NativeImageStore();
     if (
       !Number.isSafeInteger(this.#projectionCoordinateCap) ||
       this.#projectionCoordinateCap <= 0
@@ -490,6 +498,7 @@ export class ClaudeNativeDriver implements Driver {
       budget,
       this.#trace,
       (event) => this.#observeInterruptResponse(event),
+      this.#images,
     );
 
     // Subscribe first, then read all bounded ascending history. This closes the snapshot gap: live
@@ -671,44 +680,66 @@ export class ClaudeNativeDriver implements Driver {
       // Session closure precedes asynchronous bridge teardown. Reconciliation may finish first, so
       // recheck the fence after its wait and immediately before the irreversible native write.
       if (session.closed) return;
-      const input = downstreamInput(event);
-      const mutation: BrowserMutation = {
-        uuid: input.uuid,
-        timestamp: input.timestamp,
-        text: input.message.content,
-        ...(typeof event.payload.client_msg_id === "string"
-          ? { clientMsgId: event.payload.client_msg_id }
-          : {}),
-        ackEventId: null,
-        observedEventId: null,
-      };
-      if (this.#mutations.has(mutation.uuid)) {
-        throw new NativeProjectionError("browser mutation UUID was reused");
-      }
-      budget.claim();
-      this.#mutations.set(mutation.uuid, mutation);
-
-      let acknowledgement: RcPostAck;
+      let prepared: Awaited<ReturnType<NativeImageStore["prepare"]>> | undefined;
+      let attempted = false;
       try {
-        acknowledgement = await this.#client.postEvent(nativeId, input, { signal });
-      } catch (error) {
-        if (AnthropicRcError.is(error) && error.outcomeUnknown) {
-          throw new NativeProjectionError("native text outcome is unknown; projection fenced");
+        const input = downstreamInput(event);
+        if (event.images !== undefined) {
+          prepared = await this.#images.prepare(event.images, input.message.content, signal);
+          input.message.content = prepared.text;
+          session.releaseImages(event);
+          // Capture may have paused for reconciliation while files were being written.
+          await this.#writeGate.wait(signal);
         }
-        throw new NativeProjectionError("native text was rejected; projection fenced");
+        // Image preparation crosses asynchronous filesystem boundaries. A closed projection must not
+        // submit files to the independently running native session.
+        if (signal.aborted || session.closed) return;
+        const mutation: BrowserMutation = {
+          uuid: input.uuid,
+          timestamp: input.timestamp,
+          text: input.message.content,
+          ...(typeof event.payload.client_msg_id === "string"
+            ? { clientMsgId: event.payload.client_msg_id }
+            : {}),
+          ackEventId: null,
+          observedEventId: null,
+        };
+        if (this.#mutations.has(mutation.uuid)) {
+          throw new NativeProjectionError("browser mutation UUID was reused");
+        }
+        budget.claim();
+        this.#mutations.set(mutation.uuid, mutation);
+
+        let acknowledgement: RcPostAck;
+        try {
+          attempted = true;
+          acknowledgement = await this.#client.postEvent(nativeId, input, { signal });
+        } catch (error) {
+          if (AnthropicRcError.is(error) && error.outcomeUnknown) {
+            throw new NativeProjectionError("native text outcome is unknown; projection fenced");
+          }
+          throw new NativeProjectionError("native text was rejected; projection fenced");
+        }
+        mutation.ackEventId = acknowledgement.eventId;
+        if (
+          mutation.observedEventId !== null &&
+          mutation.observedEventId !== acknowledgement.eventId
+        ) {
+          throw new NativeProjectionError(
+            "provider acknowledgement disagrees with observed history",
+          );
+        }
+        session.ack(event.eventId);
+        this.#trace.debug("native text acknowledged", {
+          duplicate: acknowledgement.duplicate,
+          sequence: acknowledgement.sequenceNum,
+        });
+      } finally {
+        session.releaseImages(event);
+        // Native Claude may ingest later, even after broker loss or an ambiguous POST. Only images
+        // that were never submitted can be removed here; attempted files remain native uploads.
+        if (!attempted) await prepared?.discard();
       }
-      mutation.ackEventId = acknowledgement.eventId;
-      if (
-        mutation.observedEventId !== null &&
-        mutation.observedEventId !== acknowledgement.eventId
-      ) {
-        throw new NativeProjectionError("provider acknowledgement disagrees with observed history");
-      }
-      session.ack(event.eventId);
-      this.#trace.debug("native text acknowledged", {
-        duplicate: acknowledgement.duplicate,
-        sequence: acknowledgement.sequenceNum,
-      });
     }
   }
 
