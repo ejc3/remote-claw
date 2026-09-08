@@ -24,7 +24,10 @@ provider-origin message appeared once in both remote-claw browsers, browser-orig
 the same native thread, and another browser turn completed after the provider transport disconnected.
 The 2026-09-07 Codex recovery follow-on is also complete for explicit-loopback WebSocket attachment
 with paginated history: packed companion restart rebuilt a fresh projection without replay, and broker
-loss left the local TUI usable. Managed-Unix/legacy recovery is not part of that result.
+loss left the local TUI usable. The separate 2026-09-08
+[managed recovery result](#codex-recovery--complete) passed the same outcome on exact
+0.153.4/Linux arm64 through managed Unix with paginated history. Legacy recovery and simultaneous
+official-Remote recovery remain untested.
 Viewer UI-1 is also complete: routine contiguous tool/task events now collapse into an exact-count
 activity row with a responsive detail sheet, while errors and other already-visible non-routine rows
 remain first-class. This does not claim background-task lifecycle semantics the adapters do not expose.
@@ -148,7 +151,7 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 | Claude trace | Normal Anthropic RC and official-client control with protocol observation | It does not project to or accept commands from remote-claw browsers |
 | Claude native companion | M1 complete on Linux with exact Claude 2.1.237: exact launch/attach binding, provider-ordered text, host-only OAuth, local TUI, literal official web UI on the user's phone, two browsers, ambiguity fencing, fresh-projection restart, broker-loss isolation, packed install, and exact-SHA deployed-broker evidence | Later controls, platforms, and versions remain separate capability tranches, not M1 blockers |
 | OpenCode | M2 complete for Linux arm64, exact OpenCode 1.17.5, the pinned Bedrock Sonnet model, one explicit live session, non-empty non-slash text, interrupt, native/local permissions, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete | Later versions, platforms, models, permission graduation, and richer controls are separate tranches |
-| Codex | M3a and M3b complete for exact 0.151.0/Linux arm64: explicit UUIDv7, local TUI plus two browsers, native-ordered text/status, TUI-only approvals/questions, explicit-loopback and literal managed-`unix://` attachment, same-thread ChatGPT Remote text coexistence, and provider-transport isolation. The explicit-WS/paginated recovery follow-on also passed fresh-projection restart/backfill and broker-loss isolation | Managed-Unix/legacy recovery, stable projection identity, per-device Remote unsubscribe, richer controls/content, and other versions/platforms remain separate results |
+| Codex | M3a and M3b complete for exact 0.151.0/Linux arm64: explicit UUIDv7, local TUI plus two browsers, native-ordered text/status, TUI-only approvals/questions, explicit-loopback and literal managed-`unix://` attachment, same-thread ChatGPT Remote text coexistence, and provider-transport isolation. Recovery passed fresh-projection restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated | Legacy and simultaneous official-Remote recovery, stable projection identity, per-device Remote unsubscribe, richer controls/content, and other versions/platforms remain separate results |
 | tmux | M4 complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed install, private pane, two browsers, reload, non-empty non-slash text plus attachments held behind an active turn and its native modal, queued completion after browser departure, and broker-loss isolation | Idle editor/slash/config UI concurrency is unsupported; other versions/platforms/providers, native peer ordering, exactly-once native application, raw browser controls, slash commands, and provider-native/official-client coexistence remain unclaimed |
 | Bedrock/accountless | M5 complete for one tools-disabled text round-trip on exact Linux arm64 / Claude 2.1.237 / `us-east-1` / `anthropic.claude-opus-4-8` / temporary IMDSv2 SigV4, plus the already-qualified OpenCode M2 tuple | Each newly advertised capability, version, platform, model, region, credential source, or adapter tuple needs its own bounded gate |
 
@@ -168,7 +171,7 @@ Cartesian-product marathon, and the viewer-parity lane may continue without reop
 | M2 — complete | Supported OpenCode text/interrupt adapter | The second structured adapter and its bounded real-user acceptance are green |
 | M3a — complete | Codex TUI plus remote-claw browsers | Exact 0.151.0/Linux arm64 text/status companion and bounded real-user acceptance are green |
 | M3b — complete | Codex Remote same-thread coexistence | The official Remote thread, local TUI, companion, and two browsers exchanged text; a browser turn still completed after provider-transport disconnect |
-| Codex recovery — complete | Same-thread fresh-projection restart and native work after broker loss | Packed CLI, local TUI and two browsers passed on exact 0.151.0/Linux arm64 with explicit WS/paginated history |
+| Codex recovery — complete for tested tuples | Same-thread fresh-projection restart and native work after broker loss | Packed CLI, local TUI and two browsers passed on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated |
 | UI-1 — complete | Compact activity rollup and detail sheet | Exact transcript event counts and chronological details reduce routine noise without inventing task status |
 | OpenCode status — complete | Viewer-visible read-only MAIN running/idle status | Startup/live/reconnect/child/error behavior has focused ownership, and the separate real-TUI/two-browser running-to-idle acceptance passed |
 | M4 — complete | Maintained, honest tmux fallback | Exact accepted tuple is green without widening the structured critical path or claiming provider-native coexistence |
@@ -188,14 +191,16 @@ home-folder UI artifacts, outside Git.
 | Native work visibility, Claude first | Claude tools and Codex completed commands implemented and live-accepted | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
 | Desktop/mobile daily-use finish | Auditing | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
-| Codex official-Remote recovery | Queued | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers |
+| Codex official-Remote recovery | Managed Unix/paginated recovery passed; official Remote pending external availability | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers; the current result excludes the official client |
 | Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
 | Remote approvals and questions | Codex 0.153.4 ordinary-command approvals and bounded native choice forms implemented and live-accepted | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
 Claude-native approval/question work and new live comparisons are temporarily deferred while the
-user's Claude quota is exhausted. The current order is Codex native questions, Codex official-Remote
-recovery, then shared desktop/mobile daily-use finish; this does not remove Claude from the target.
+user's Claude quota is exhausted. Codex native questions and managed Unix/paginated recovery are
+complete; next is shared desktop/mobile daily-use finish. Official-Remote recovery waits for a literal
+same-thread Remote client to be available, not merely a logged-in cloud-Codex page. These sequencing
+decisions do not remove Claude or official Remote from the target.
 
 Future CLI harnesses (for example Grok) should require a native adapter, validated CLI configuration,
 and one explicit metadata/capability entry, reusing broker, encryption, and viewer renderers. The shared
@@ -748,8 +753,21 @@ the cross-process outcome stays live while the detailed race is tested cheaply i
 live attempt found only a harness input-delivery issue: immediate Enter left a pasted prompt in the TUI
 editor. Waiting for the draft and allowing a short input settle fixed the harness; the rerun passed.
 Existing routing, schemas, permissions, controls, native-version support, and stable projection identity
-were unchanged. This result does not claim managed-Unix/legacy recovery, a crash/restart of app-server,
-or simultaneous official-Remote recovery.
+were unchanged. That 0.151.0 result did not claim managed-Unix/legacy recovery, a crash/restart of
+app-server, or simultaneous official-Remote recovery.
+
+**Current managed run (2026-09-08).** The same sentinel passed on exact 0.153.4/Linux arm64 through
+literal `unix://` with native-reported `historyMode:"paginated"`: packed CLI, built SQLite/viewer,
+dedicated TUI, and phone/desktop browsers passed fresh-projection restart, unchanged native history,
+duplicate-free backfill, and a fresh browser turn. After every broker-proxy connection closed, only the
+companion exited with status 1 and a fresh TUI turn completed. Both screenshots were inspected;
+the run took 12.2 seconds, 41 seconds including the build. Only the retained test changed to reuse
+production client/URL/version/history helpers and record the observed tuple; no production recovery
+or policy change was needed. The daemon, TUI, provider transport, authentication, and logged-in
+browsers were preserved. Evidence is under
+`/home/ubuntu/remote-claw-ui-artifacts/codex-managed-recovery-2026-09-08/`, outside Git. Legacy recovery,
+simultaneous official Remote, native-process crash/restart, and stable projection identity remain
+unqualified; the official client was not attached, and its recovery follow-on awaits external availability.
 
 ### M4 — tmux fallback contract
 
@@ -913,8 +931,9 @@ Milestones may ship independently with truthful labels. M1 proves its Claude-nat
 pinned OpenCode text/interrupt row, M3a plus M3b prove only the pinned Codex app-server/ChatGPT
 Remote text/status coexistence row described above. OpenCode's read-only status follow-on is a current
 implemented and accepted capability; it does not rewrite M2. M4 proves only the pinned lower-fidelity
-tmux row. Codex's explicit-WS/paginated recovery follow-on is also accepted. Broader tuples and controls,
-including managed-Unix/legacy recovery, additional
+tmux row. Codex recovery is also accepted on 0.151.0/explicit WS/paginated and
+0.153.4/managed Unix/paginated. Broader tuples and controls, including legacy and simultaneous
+official-Remote recovery, additional
 Bedrock/account tuples, viewer parity, and the full product remain separate outcomes.
 Line count, fixture count, and proof machinery are not success metrics. The metric is supported user
 surfaces working safely with the smallest maintainable implementation.
