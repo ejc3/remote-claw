@@ -117,6 +117,10 @@ class FakeCodexClient implements CodexClient {
     decision: "accept" | "decline" | "cancel";
   }> = [];
   approvalError: Error | null = null;
+  readonly questionCalls: Array<{
+    request: CodexServerRequest;
+    answers: Record<string, { answers: string[] }>;
+  }> = [];
   externalThreadRunning = true;
   resumeResult: CodexResumeResult = {
     thread: {
@@ -203,6 +207,16 @@ class FakeCodexClient implements CodexClient {
 
   drainInbound(): CodexInbound[] {
     return this.buffered.splice(0);
+  }
+
+  respondUserInput(
+    request: CodexServerRequest,
+    answers: Record<string, { answers: string[] }>,
+    signal: AbortSignal,
+  ): boolean {
+    if (signal.aborted) return false;
+    this.questionCalls.push({ request, answers });
+    return true;
   }
 
   async *inbound(signal: AbortSignal): AsyncGenerator<CodexInbound> {
@@ -436,6 +450,29 @@ function approvalViewerId(session: Session): string {
   const id = upstream(session, "control_request")[0]?.request_id;
   if (typeof id !== "string") throw new Error("missing approval viewer ID");
   return id;
+}
+
+function nativeQuestion(): CodexServerRequest {
+  return {
+    id: "native-question-callback",
+    method: "item/tool/requestUserInput",
+    params: {
+      threadId: THREAD_ID,
+      turnId: "question-turn",
+      itemId: "question-item",
+      isBlocking: true,
+      questions: [
+        {
+          id: "color",
+          header: "Color",
+          question: "Choose a color",
+          isSecret: false,
+          isOther: true,
+          options: [{ label: "Blue", description: "Blue sample" }],
+        },
+      ],
+    },
+  };
 }
 
 function approvalFrame(
@@ -1148,6 +1185,51 @@ describe("Codex M3a companion", () => {
     await stop(launched.ac, launched.run);
   });
 
+  // Detailed form validation and callback races live at questions/client; this is the thin
+  // Session/relay wiring sentinel, including the capability snapshot used by real browsers.
+  it("routes a native question through the broker and closes only on native resolution", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.153.4";
+    client.resumeResult.thread.status = { type: "active" };
+    const native = nativeQuestion();
+    client.buffered.push({ kind: "request", value: native });
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    await waitFor(() => launched.broker.posts.some((p) => p.recordKind === "permission_request"));
+    const viewerId = approvalViewerId(launched.session);
+    const announce = launched.broker.posts.find((p) => p.recordKind === "session_announce");
+    expect(JSON.parse(announce?.text ?? "{}")).toMatchObject({
+      capabilities: { structuredQuestions: true, permissionResolution: "native" },
+    });
+    const answer = {
+      ...approvalFrame(launched.identityId, launched.broker.sessionId, viewerId, "allow"),
+      ct: enc(
+        JSON.stringify({ request_id: viewerId, behavior: "allow", answers: { color: "Blue" } }),
+      ),
+    };
+    launched.broker.pushInbound(answer);
+    await waitFor(() => client.questionCalls.length === 1);
+    expect(client.questionCalls).toEqual([
+      { request: native, answers: { color: { answers: ["Blue"] } } },
+    ]);
+    expect(client.questionCalls[0]?.request).toBe(native);
+    expect(client.approvalCalls).toEqual([]);
+    expect(upstream(launched.session, "control_cancel_request")).toEqual([]);
+    expect(launched.session.workerStatus).toBe("running");
+    launched.broker.pushInbound({ ...answer, msgId: "second-viewer-answer" });
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "serverRequest/resolved",
+        params: { threadId: THREAD_ID, requestId: native.id },
+      },
+    });
+    await waitFor(() => upstream(launched.session, "control_cancel_request").length === 1);
+    expect(client.questionCalls).toHaveLength(1);
+    expect(client.externalThreadRunning).toBe(true);
+    await stop(launched.ac, launched.run);
+  });
+
   it.each([
     { label: "older native version", version: "0.151.0", request: commandApproval() },
     {
@@ -1156,10 +1238,11 @@ describe("Codex M3a companion", () => {
       request: commandApproval({ threadId: OTHER_THREAD_ID }),
     },
     {
-      label: "native question",
+      label: "malformed native question",
       version: "0.153.4",
       request: { ...commandApproval(), method: "item/tool/requestUserInput" },
     },
+    { label: "older-version native question", version: "0.151.0", request: nativeQuestion() },
   ])("leaves $label owned by native clients", async ({ version, request }) => {
     const client = new FakeCodexClient();
     client.nativeVersion = version;
@@ -1173,6 +1256,7 @@ describe("Codex M3a companion", () => {
     const response = launched.session.pushControlResponse(String(request.id), "allow");
     await waitFor(() => ack.mock.calls.some(([id]) => id === response.eventId));
     expect(client.approvalCalls).toEqual([]);
+    expect(client.questionCalls).toEqual([]);
     if (version === "0.151.0") {
       const announce = launched.broker.posts.find((post) => post.recordKind === "session_announce");
       expect(JSON.parse(announce?.text ?? "{}")).toMatchObject({

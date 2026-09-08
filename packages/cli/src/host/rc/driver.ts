@@ -86,7 +86,7 @@ export const CODEX_CAPABILITIES: DriverCapabilities = {
   attachments: true,
 };
 
-/** Exact Codex 0.153.4 command approvals; every other permission/question remains native-owned. */
+/** Exact Codex 0.153.4 command approvals and bounded blocking, non-secret native choice forms. */
 export const CODEX_APPROVAL_CAPABILITIES: DriverCapabilities = {
   textInput: "plain",
   status: true,
@@ -94,6 +94,7 @@ export const CODEX_APPROVAL_CAPABILITIES: DriverCapabilities = {
   attachments: true,
   structuredPermissions: true,
   permissionResolution: "native",
+  structuredQuestions: true,
 };
 
 /**

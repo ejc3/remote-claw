@@ -74,8 +74,8 @@ export interface CodexItemsPage {
   nextCursor: string | null;
 }
 
-/** Only an explicitly selected, observed command approval can receive a response. Other native
- * requests remain passive; there is no generic result/error or policy-changing response API. */
+/** Only explicitly selected, observed command approvals and supported native input forms can receive
+ * responses. There is no generic result/error or policy-changing response API. */
 export interface CodexClient {
   initialize(signal: AbortSignal): Promise<CodexInitializeResult>;
   resume(threadId: string, signal: AbortSignal): Promise<CodexResumeResult>;
@@ -101,6 +101,11 @@ export interface CodexClient {
   respondCommandApproval(
     request: CodexServerRequest,
     decision: "accept" | "decline" | "cancel",
+    signal: AbortSignal,
+  ): boolean;
+  respondUserInput(
+    request: CodexServerRequest,
+    answers: Record<string, { answers: string[] }>,
     signal: AbortSignal,
   ): boolean;
   drainInbound(): CodexInbound[];
@@ -245,7 +250,7 @@ export function normalizeCodexAppServerUrl(raw: string): string {
   return url.origin;
 }
 
-/** A tiny JSON-RPC client with one-shot replies restricted to observed command approvals. Native
+/** A tiny JSON-RPC client with one-shot replies for observed command approvals and input forms. Native
  * serverRequest/resolved, not a socket write, owns resolution of the first-response-wins race. */
 export class CodexAppServerClient implements CodexClient {
   readonly #url: string;
@@ -518,6 +523,56 @@ export class CodexAppServerClient implements CodexClient {
     decision: "accept" | "decline" | "cancel",
     signal: AbortSignal,
   ): boolean {
+    return this.#respondToRequest(request, "item/commandExecution/requestApproval", signal, () => {
+      const available = request.params.availableDecisions;
+      if (
+        (decision !== "accept" && decision !== "decline" && decision !== "cancel") ||
+        (available !== undefined &&
+          available !== null &&
+          (!Array.isArray(available) || !available.includes(decision)))
+      ) {
+        throw new CodexAppServerError("unsupported Codex command approval response");
+      }
+      return { decision };
+    });
+  }
+
+  /** The host form adapter validates offered choices. Copy only bounded answer envelopes here;
+   * extra viewer fields cannot become native configuration or a different response family. */
+  respondUserInput(
+    request: CodexServerRequest,
+    answers: Record<string, { answers: string[] }>,
+    signal: AbortSignal,
+  ): boolean {
+    return this.#respondToRequest(request, "item/tool/requestUserInput", signal, () => {
+      const entries = Object.entries(record(answers) ?? {});
+      if (entries.length < 1 || entries.length > 3) {
+        throw new CodexAppServerError("unsupported Codex user input response");
+      }
+      const prepared = entries.map(([id, answer]) => {
+        const values = record(answer)?.answers;
+        const value = Array.isArray(values) && values.length === 1 ? values[0] : undefined;
+        if (
+          id.trim() === "" ||
+          id.length > 256 ||
+          typeof value !== "string" ||
+          value.trim() === "" ||
+          value.length > 16_384
+        ) {
+          throw new CodexAppServerError("unsupported Codex user input response");
+        }
+        return [id, { answers: [value] }];
+      });
+      return { answers: Object.fromEntries(prepared) };
+    });
+  }
+
+  #respondToRequest(
+    request: CodexServerRequest,
+    method: "item/commandExecution/requestApproval" | "item/tool/requestUserInput",
+    signal: AbortSignal,
+    result: () => Record<string, unknown>,
+  ): boolean {
     if (signal.aborted) throw aborted();
     if (
       record(request) === null ||
@@ -526,17 +581,14 @@ export class CodexAppServerClient implements CodexClient {
     ) {
       return false;
     }
-    const available = request.params.availableDecisions;
+    const label = method === "item/tool/requestUserInput" ? "user input" : "command approval";
     if (
       this.#serverRequests.get(request.id)?.fingerprint !== requestFingerprint(request) ||
-      request.method !== "item/commandExecution/requestApproval" ||
-      (decision !== "accept" && decision !== "decline" && decision !== "cancel") ||
-      (available !== undefined &&
-        available !== null &&
-        (!Array.isArray(available) || !available.includes(decision)))
+      request.method !== method
     ) {
-      throw new CodexAppServerError("unsupported Codex command approval response");
+      throw new CodexAppServerError(`unsupported Codex ${label} response`);
     }
+    const response = result();
     const socket = this.#socket;
     if (socket === null || socket.readyState !== WebSocket.OPEN) {
       throw new CodexAppServerError("Codex app-server is not connected");
@@ -544,10 +596,10 @@ export class CodexAppServerClient implements CodexClient {
     // Consume before the irreversible write, including a write that throws after partial delivery.
     this.#liveServerRequests.delete(request.id);
     try {
-      socket.send(JSON.stringify({ id: request.id, result: { decision } }));
+      socket.send(JSON.stringify({ id: request.id, result: response }));
     } catch {
       this.#protocolFailure();
-      throw new CodexAppServerError("Codex command approval submission failed");
+      throw new CodexAppServerError(`Codex ${label} submission failed`);
     }
     return true;
   }

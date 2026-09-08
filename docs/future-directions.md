@@ -97,7 +97,11 @@ text waits for native idle. The current image follow-on reuses encrypted compose
 inline image inputs, with bounded transient retention and no file upload or URL fetch. It does not
 add general-file support or native-image previews. A separate exact-0.153.4 implementation permits
 one-shot ordinary local-command approvals with native resolution; it excludes policy changes, session
-grants, stdin/file/network permissions, and questions. Version 0.151.0 approvals remain native-owned.
+grants, stdin/file/network permissions, and questions. A separate 0.153.4 form adapter implements
+complete non-secret blocking groups of 1–3 questions with 1–20 choices each, free text only when
+native `isOther` permits it, and native-confirmed resolution. These transparent forms may authorize
+tool actions; they are not planning-only and add no separate policy/session-grant API. Unsupported
+forms and all 0.151.0 approvals/questions remain native-owned.
 Current acceptance is tracked in the
 [release roadmap](release-finish-line.md), without rewriting the historical 0.151.0 results.
 Other controls, general files, streaming partials, file

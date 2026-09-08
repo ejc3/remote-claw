@@ -1177,6 +1177,12 @@ summary:focus-visible,
 .q-block {
   margin: 16px 0 0 28px;
 }
+.q-header,
+.q-text,
+.q-option-label,
+.q-option-desc {
+  overflow-wrap: anywhere;
+}
 .q-header {
   font-size: 10px;
   text-transform: uppercase;

@@ -21,7 +21,7 @@ export interface SeedResult {
   sessionId: string;
   /** Close the real Session and publish its production session_terminal marker. */
   terminalize: () => Promise<void>;
-  /** End the scripted native command request through its production cancellation projection. */
+  /** End the scripted native command/question through its production cancellation projection. */
   resolvePermission: () => Promise<void>;
 }
 export type SeedHost = (opts?: {
@@ -44,7 +44,8 @@ export type SeedHost = (opts?: {
     | "tmux-legacy-skip"
     | "opencode"
     | "codex"
-    | "codex-approval";
+    | "codex-approval"
+    | "codex-questions";
   /** Harness preset (RC_E2E_HARNESS) for the agent+mode badge (#164). Unset is the private MITM relay;
    * `native-rc` is the companion attached to Anthropic's ordinary Remote Control session. */
   harness?: "native-rc" | "tmux" | "opencode" | "codex";

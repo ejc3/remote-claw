@@ -315,8 +315,9 @@ to viewer `running`, `idle` maps to `idle`, and `notLoaded` or `systemError` fai
 
 For native approval/question requests, the first result or error wins globally. Version 0.151.0 stays
 response-less at the driver boundary. Exact 0.153.4 additionally implements one-shot ordinary
-local-command approvals with native-owned resolution; [§9](#9-permissions) defines the narrow request
-and decision allowlist. Questions and unsupported permission kinds remain native-owned. The supported
+local-command approvals and bounded native choice forms with native-owned resolution;
+[§9](#9-permissions) defines the narrow request and response allowlists. Unsupported permission/question
+shapes remain native-owned. The supported
 topology still requires a local TUI attached to the exact thread for the entire companion lifetime;
 app-server provides no atomic way to prove that attachment. Closing the companion closes only its socket
 and remote-claw projection, not app-server, the TUI, or the native thread.
@@ -458,7 +459,7 @@ cannot bypass a disabled button:
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | Codex 0.151.0 | no | yes | yes | no | no | no | yes; images only |
-| Codex 0.153.4 | ordinary local commands only; native resolution | yes | yes | no | no | no | yes; images only |
+| Codex 0.153.4 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
 
 Text input on the stable Claude, pinned Codex, and maintained tmux surfaces must be non-empty and non-slash.
 Tmux also accepts attachments as ordinary relay-owned user turns; Codex accepts image groups with an
@@ -480,7 +481,7 @@ OpenCode and its local UI remain authoritative. Its separate positive mirroring 
 append-only, and carries documented child-first-tool and competing-local-answer races. “Structured
 permissions false” means native/local handling, not that permissions are disabled.
 
-Exact Codex 0.153.4/Linux arm64 implements browser decisions only for observed
+The exact Codex 0.153.4/Linux arm64 command-approval path implements browser decisions only for observed
 `item/commandExecution/requestApproval` records on the selected thread with `kind:"command"` and
 `environmentId:"local"`. Turn/item IDs must be non-empty and at most 256 characters. The complete
 non-empty command is bounded at 16,384 characters, the absolute cwd at 4,096, and the optional reason
@@ -504,6 +505,36 @@ decision. Matching native `serverRequest/resolved` removes response authority an
 cannot reopen a resolved card when a delayed pending record arrives. Interrupt admission alone cannot
 discard a live native approval. No new broker record kind, schema, or flag is required. The
 [release record](release-finish-line.md#codex-command-approvals) tracks final acceptance separately.
+
+### Codex native choice forms
+
+Exact 0.153.4/Linux arm64 also implements a separate `item/tool/requestUserInput` path. Only complete
+`isBlocking:true` groups of 1–3 questions qualify, each with `isSecret:false`, an explicit boolean
+`isOther`, and 1–20 options. Question IDs are unique and non-empty; IDs and headers are bounded to
+256 characters, question text to 16,384, option labels to 1,024, and descriptions to 4,096. Labels are
+non-empty and unique within each question; headers and descriptions may be empty. Thread, turn, and
+item IDs must also be non-empty and at most 256 characters. A malformed member rejects the entire
+group. Secret, optionless/null, nonblocking, and unsupported forms remain native-owned.
+
+The existing `AskUserQuestion` projection carries `nativeQuestions:true`, native question `id`s,
+`multiSelect:false`, and `allowFreeText` derived only from `isOther`. The native response is
+`{answers:{[questionId]:{answers:[value]}}}` under the exact original callback ID. Each question needs
+one non-empty answer of at most 16,384 characters: an exact offered label, or free text only when
+`isOther` permits it. Answers are keyed by native IDs, not potentially repeated question wording;
+ordinary object-property names cannot change that mapping. There is no invented Dismiss, multiselect,
+automatic timer, or separate policy-amendment/session-grant API; displayed choices retain their native
+semantics. The native schema does not distinguish planning
+questions from tool-consent forms, so the viewer discloses that an answer may authorize a tool action.
+
+`structuredQuestions:true` explicitly advertises the form surface alongside
+`permissionResolution:"native"`; absent/malformed question capability does not upgrade an older
+approval-only host. The form shares exact callback ownership, consume-before-write, no ambiguous
+retry, and neutral native resolution with command approvals. Browser submission means pending, not
+Answered; neither that state nor native resolution publishes the browser's answer as the winning
+choice. The existing encrypted permission records and viewer card are reused. See the
+[question release record](release-finish-line.md#codex-native-questions) for acceptance status.
+
+### Native/local tmux permissions
 
 The tmux adapter likewise leaves permissions and questions in Claude's local pane unless the caller's
 resolved Claude policy explicitly bypasses them. It injects no `PreToolUse` hook, transports no request
@@ -626,7 +657,7 @@ is a no-op; the companion never retargets or retries. Other unknown failures fen
 A bounded process-local text FIFO keeps interrupt reachable while text waits for native idle. RPC
 acceptance is not completion: only native status releases the next text turn. Native background
 commands may continue after the model turn is interrupted. Exact 0.153.4 ordinary command decisions
-use the separate [permission boundary](#9-permissions); all questions remain native-owned.
+and bounded native choice forms use the separate [permission boundary](#9-permissions).
 
 Tmux advertises every raw control false. The relay rejects those frames, and its injection boundary
 acknowledges a stale or direct control without sending any pane keys. The same viewer/relay/injection
@@ -730,8 +761,9 @@ The active protocol is concentrated in these paths:
   history/SSE/text transport, exact binding, and projection lifecycle.
 - `packages/cli/src/host/rc/opencode/{client,driver,translate}.ts` — pinned exact-session HTTP/SSE
   capture, native admission, marker correlation, and bounded part translation.
-- `packages/cli/src/host/rc/codex/{client,driver,approvals}.ts` — pinned app-server client, exact-thread
-  reconciliation, native projection, and exact-0.153.4 one-shot local-command decisions; other native
+- `packages/cli/src/host/rc/codex/{client,driver,approvals,questions}.ts` — pinned app-server client, exact-thread
+  reconciliation, native projection, and exact-0.153.4 one-shot local-command decisions and bounded
+  native choice forms; other native
   requests stay response-less.
 - `packages/cli/src/host/rc/drivers/{bridge,ready-bridge}.ts` — process-local readiness and broker
   bridge lifecycle shared by current adapters.

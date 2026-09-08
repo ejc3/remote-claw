@@ -214,21 +214,32 @@ export interface QuestionOption {
 
 /** One AskUserQuestion question — its header, prompt, choices, and whether multiple may be picked. */
 export interface Question {
+  /** Native questions answer by stable ID, never by their possibly repeated displayed prompt. */
+  id?: string;
   question: string;
   header: string;
   options: QuestionOption[];
   multiSelect: boolean;
+  allowFreeText?: boolean;
 }
 
 /**
  * Parse an AskUserQuestion tool input into its questions (#42). The real shape (captured via
  * --rc-trace) is `{questions:[{question, header, options:[{label, description}], multiSelect}]}`.
- * Defensive: drops malformed entries (a question with no prompt or no options) so the UI never renders
- * an unanswerable card. Returns [] for anything that isn't a questions array.
+ * Legacy inputs drop malformed entries. Explicit native forms are bounded and all-or-nothing, retain
+ * stable IDs, and expose only the advertised free-text option. Returns [] for an unsupported form.
  */
 export function parseQuestions(toolInput: unknown): Question[] {
   const raw = (toolInput as { questions?: unknown } | null)?.questions;
   if (!Array.isArray(raw)) return [];
+  if (
+    toolInput !== null &&
+    typeof toolInput === "object" &&
+    Object.hasOwn(toolInput, "nativeQuestions")
+  ) {
+    if ((toolInput as { nativeQuestions: unknown }).nativeQuestions !== true) return [];
+    return parseNativeQuestions(raw);
+  }
   return raw
     .map((q): Question => {
       const qq = (typeof q === "object" && q !== null ? q : {}) as Record<string, unknown>;
@@ -249,6 +260,55 @@ export function parseQuestions(toolInput: unknown): Question[] {
       };
     })
     .filter((q) => q.question !== "" && q.options.length > 0);
+}
+
+/** The native form is all-or-nothing: silently dropping a question would change the submitted answer. */
+function parseNativeQuestions(raw: unknown[]): Question[] {
+  if (raw.length < 1 || raw.length > 3) return [];
+  const questions: Question[] = [];
+  const ids = new Set<string>();
+  const bounded = (value: unknown, max: number, nonblank = false): value is string =>
+    typeof value === "string" && value.length <= max && (!nonblank || value.trim() !== "");
+  for (const value of raw) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
+    const q = value as Record<string, unknown>;
+    if (
+      !bounded(q.id, 256, true) ||
+      ids.has(q.id) ||
+      !bounded(q.header, 256) ||
+      !bounded(q.question, 16_384, true) ||
+      q.multiSelect !== false ||
+      typeof q.allowFreeText !== "boolean" ||
+      !Array.isArray(q.options) ||
+      q.options.length < 1 ||
+      q.options.length > 20
+    )
+      return [];
+    const options: QuestionOption[] = [];
+    const labels = new Set<string>();
+    for (const option of q.options) {
+      if (option === null || typeof option !== "object" || Array.isArray(option)) return [];
+      const o = option as Record<string, unknown>;
+      if (!bounded(o.label, 1024, true) || labels.has(o.label) || !bounded(o.description, 4096))
+        return [];
+      labels.add(o.label);
+      options.push({ label: o.label, description: o.description });
+    }
+    ids.add(q.id);
+    questions.push({
+      id: q.id,
+      header: q.header,
+      question: q.question,
+      options,
+      multiSelect: false,
+      allowFreeText: q.allowFreeText,
+    });
+  }
+  return questions;
+}
+
+export function questionAnswerKey(question: Question): string {
+  return question.id ?? question.question;
 }
 
 export interface ToolResult {

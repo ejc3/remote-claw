@@ -75,12 +75,18 @@ text still waits for native idle, not interrupt RPC acceptance. Native backgroun
 the interrupted model turn. Exact 0.153.4 also implements one-shot ordinary local-command approvals;
 0.151.0 keeps all approvals native-owned. Only complete bounded command/cwd/optional reason, native
 `kind:"command"` / `environmentId:"local"`, and advertised `accept` plus `decline` or `cancel` qualify.
-No network/additional permissions, stdin, file approvals, questions, policy amendments, or session grants
-are answered. Fresh opaque viewer IDs bind exact connection-owned native requests; broker admission
+The command path never answers network/additional permissions, stdin, file approvals, or questions,
+and never amends policy or grants session-wide authority. The separate 0.153.4 question path admits
+complete non-secret blocking forms of 1–3 questions with 1–20 choices each; only native `isOther`
+enables free text. These transparent forms may authorize tool actions and are not planning-only.
+Secret, optionless, nonblocking, malformed, and all 0.151.0 questions stay native-owned; no invented
+Dismiss or multiselect is sent. Fresh opaque viewer IDs bind exact connection-owned native requests;
+answers use native question IDs rather than display wording. Broker admission
 means pending, and only native resolution closes the card without claiming which peer won. Ambiguous
 writes never retry or stop native work. Other controls, general files, streaming partials, file
 changes, and task lifecycle remain unsupported. The [release roadmap](docs/release-finish-line.md)
-owns current-version/activity/interrupt/image and command-approval acceptance; the historical results above remain exact 0.151.0
+owns current-version/activity/interrupt/image, command-approval, and question acceptance; the bounded
+question phone/desktop/native-TUI run passed. The historical results above remain exact 0.151.0
 evidence. The attachment path
 accepts literal `unix://` only as Codex's same-user managed control socket
 (`$CODEX_HOME/app-server-control/app-server-control.sock`, falling back to `~/.codex`), while retaining

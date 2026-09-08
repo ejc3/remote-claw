@@ -505,7 +505,29 @@ Both browsers resolved neutrally without duplicate/reactivated cards after reloa
 phone/desktop pending/resolved light/dark screenshots were inspected. The
 [release record](release-finish-line.md#codex-command-approvals) owns the evidence. This covers actual
 native ingestion and peer resolution, not official Remote or an exhaustive shape matrix.
-Questions, stdin/file/network permissions, policy/session grants, and 0.151.0 approvals stay native-owned.
+Stdin/file/network permissions, policy/session grants, and 0.151.0 approvals stay native-owned;
+questions have their own bounded surface below.
+
+### Codex native questions
+
+Exact 0.153.4 non-secret blocking choice forms reuse the existing question projection and
+native-resolution lifecycle. Focused client/helper tests own complete-group bounds and rejection,
+stable native question IDs (including repeated wording and ordinary object-property names), offered
+choices versus explicitly permitted free text, one-attempt callback ownership, stale/native-winner
+responses, and ambiguous-write isolation. Driver-broker tests own `structuredQuestions` propagation
+and answers remaining reachable behind queued text. Viewer parser/UI tests own whole-group rendering,
+per-question state, provider-neutral wording, no invented Dismiss/multiselect, and pending/neutral
+resolved states without claiming the winning answer. The one transcript browser sentinel covers only
+the causal submit/resolve/reload wiring through the encrypted relay.
+
+Live acceptance passed on 2026-09-08: phone choice, desktop native-permitted free text, native-TUI
+winner against a held stale browser answer, and neutral resolution/reload in two browsers. Its bounded
+native run owns behavior that mocks cannot establish: the real managed-socket callback and native
+peer arbitration. It used the built CLI and production viewer with local durable SQLite, not the
+official Remote browser. The [release record](release-finish-line.md#codex-native-questions) owns
+details; phone/desktop light/dark screenshots stay in home-folder artifacts, outside Git.
+Secret, optionless, nonblocking, malformed, and all
+0.151.0 forms remain native-owned; unsupported shapes need deterministic rejection, not live model runs.
 
 ### Codex recovery follow-on
 

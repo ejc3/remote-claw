@@ -69,6 +69,9 @@ function snapshotAnnouncement(announcement: BridgeAnnouncement): BridgeAnnouncem
           },
     capabilities: {
       structuredPermissions: announcement.capabilities.structuredPermissions,
+      ...(announcement.capabilities.structuredQuestions !== undefined
+        ? { structuredQuestions: announcement.capabilities.structuredQuestions }
+        : {}),
       ...(announcement.capabilities.permissionResolution === "native"
         ? { permissionResolution: "native" as const }
         : {}),

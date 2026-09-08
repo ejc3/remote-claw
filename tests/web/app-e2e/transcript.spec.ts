@@ -201,6 +201,60 @@ test("a native command approval waits for provider resolution and stays inactive
   await expect(permission).not.toContainText("Allowed");
 });
 
+// The native adapter tests own response validity and ownership; this is the one real UI/broker
+// sentinel for independent question IDs, permitted free text, and neutral resolution after reload.
+test("native questions submit independently and stay neutral after provider resolution and reload", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass, resolvePermission } = await seedHost({
+    askq: true,
+    caps: "codex-questions",
+    harness: "codex",
+  });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(page.locator(".local-input-disclosure")).toContainText(
+    "Command approvals and supported questions can be answered here.",
+  );
+  const card = page.locator(".perm.perm-q");
+  await expect(card).toContainText("Codex is asking");
+  await expect(card).toContainText("Your answers may authorize tool actions in Codex");
+  await expect(card.getByRole("button", { name: "Dismiss", exact: true })).toHaveCount(0);
+  const first = card.locator(".q-block").nth(0);
+  const second = card.locator(".q-block").nth(1);
+  // A real native phone run exposed unbroken prompt IDs overflowing the card. Browser layout is
+  // the cheapest faithful owner: exercise the shipped CSS, not a source-string styling assertion.
+  const prompt = first.locator(".q-text");
+  await prompt.evaluate((node) => {
+    node.textContent = "unbroken".repeat(40);
+  });
+  expect(await prompt.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await prompt.evaluate((node) => {
+    node.textContent = "Choose a path";
+  });
+  await expect(first.locator(".q-freeform")).toHaveCount(0);
+  const submit = card.getByRole("button", { name: "Submit", exact: true });
+  await first.getByRole("button", { name: "Blue Blue path", exact: true }).click();
+  await expect(second.locator('.q-option[aria-pressed="true"]')).toHaveCount(0);
+  await expect(submit).toBeDisabled();
+  await second.locator(".q-freeform").fill("UI custom answer");
+  await expect(submit).toBeEnabled();
+  await submit.click();
+  await expect(card.locator(".perm-resolved")).toContainText(
+    "Submitted — waiting for Codex confirmation",
+  );
+  await expect(card.locator(".perm-actions, .q-options, .q-answer")).toHaveCount(0);
+  await resolvePermission();
+  await expect(card.locator(".perm-resolved")).toContainText("Resolved by Codex");
+  await page.reload();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(card.locator(".perm-resolved")).toContainText("Resolved by Codex");
+  await expect(card.locator(".perm-actions, .q-options, .q-answer")).toHaveCount(0);
+  await expect(card).not.toContainText("Answered");
+});
+
 test("an AskUserQuestion renders a question UI and submits answers (#42)", async ({
   page,
   seedHost,

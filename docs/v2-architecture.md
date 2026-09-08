@@ -34,7 +34,7 @@ What exists today:
 | Claude native collaboration plus multiple remote-claw browsers | M1 complete on Linux/exact-2.1.237: structured provider-ordered text, local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and exact-SHA deployed-broker acceptance |
 | OpenCode server adapter | M2 complete for exact 1.17.5/Linux arm64, the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux fallback | M4 complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: maintained lower-fidelity local-pane/two-browser fallback; browser input is held behind an active model turn and its permission/question modal, reload/departure/broker-loss passed, and the shared idle editor/slash/config UI must not be used concurrently; no independent peer ordering or provider-native/official-client claim |
-| Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation. A separate explicit-WS/paginated run accepted clean companion restart/backfill and broker-loss isolation. Current code also accepts exact 0.153.4, with images, read-only command activity, interrupt, and one-shot ordinary local-command approvals; the approval slice's final acceptance is tracked separately. Managed-Unix/legacy recovery, per-device unsubscribe, and other controls remain unclaimed |
+| Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation. A separate explicit-WS/paginated run accepted clean companion restart/backfill and broker-loss isolation. Current code also accepts exact 0.153.4, with images, read-only command activity, interrupt, one-shot ordinary local-command approvals, and bounded native choice forms; each slice's acceptance is tracked separately. Managed-Unix/legacy recovery, per-device unsubscribe, and other controls remain unclaimed |
 | Bedrock and no-Anthropic-account launch | M5 complete for one tools-disabled text round-trip on exact Linux arm64 / Claude 2.1.237 / `us-east-1` / `anthropic.claude-opus-4-8` / temporary IMDSv2 SigV4; separate from adapter fidelity |
 
 The current private relay is useful product infrastructure, but no single adapter is the whole
@@ -472,9 +472,10 @@ gets seq-less pending admission; its final acknowledgement waits for the exact n
 the host client ID and text. A 15-second correlation deadline and bounded history/dedup fence ambiguous
 or contradictory outcomes. Native active/idle status is advertised. Browser mutations are non-empty
 non-slash text, image groups with an optional non-slash caption, and interrupt. Exact 0.153.4 also
-implements one-shot ordinary local-command approvals; 0.151.0 approvals, all questions, other controls,
-and general files remain native-owned or disabled. A bounded local text FIFO keeps interrupt and
-approval responses reachable while text waits for native idle.
+implements one-shot ordinary local-command approvals and bounded native choice forms; 0.151.0
+approvals/questions, unsupported request shapes, other controls, and general files remain native-owned
+or disabled. A bounded local text FIFO keeps interrupt and approval/question responses reachable while
+text waits for native idle.
 Interrupt targets one validated active turn on the exact thread and never retargets or retries a stale
 request. Its RPC acceptance does not release queued text; native status does. Background commands may
 outlive the model turn. See [control semantics](protocol.md#11-compatibility-control-verbs).
@@ -489,11 +490,17 @@ items project text or an image-count placeholder, not previews. See [image limit
 Native approval/question requests are first-response-wins. The exact-0.153.4 helper admits only local
 `kind:"command"` requests with complete bounded command/absolute cwd/optional reason, no network or
 additional permissions, and advertised `accept` plus `decline` or `cancel`. Fresh opaque viewer IDs bind
-exact connection-owned callbacks; the only response API sends one advertised command decision, never a
+exact connection-owned callbacks; its command-response API sends one advertised decision, never a
 generic error, input/policy amendment, or session grant. Broker admission produces pending, not a winning
 decision; provider resolution removes authority and closes the card neutrally, including after reload
-or delayed pending delivery. Ambiguous writes never retry. Questions, stdin/file/network approvals,
-and 0.151.0 approvals remain native-owned. See [permission semantics](protocol.md#9-permissions).
+or delayed pending delivery. Ambiguous writes never retry. Stdin/file/network approvals and 0.151.0
+approvals remain native-owned. The separate question adapter admits complete non-secret blocking forms
+of 1–3 questions with 1–20 choices each, with free text only when native `isOther` allows it. These are
+transparent native forms that may authorize tool actions, not a planning-only API. Responses use stable
+native question IDs and the same one-attempt/native-resolution lifecycle; no Dismiss, multiselect, or
+timer is invented. `structuredQuestions:true` advertises this separately from command approvals.
+Unsupported forms and all 0.151.0 questions stay native-owned. See
+[permission and form semantics](protocol.md#9-permissions).
 Closing or failing the projection closes only the companion socket and remote-claw session, never the
 app-server, TUI, or native thread. The writer rechecks session closure after waiting for native idle,
 immediately before sending, so a parked prompt cannot escape a projection already closed by the relay.
@@ -502,7 +509,7 @@ restoring pending mutations or consuming the retired projection's command stream
 acceptance below covers explicit WS/paginated history only.
 The historical M3a/M3b/recovery runs remain exact 0.151.0 evidence; the
 [release roadmap](release-finish-line.md) owns current-version, command-activity, interrupt/image, and
-command-approval acceptance.
+command-approval and question acceptance.
 
 ## 11. Agent adapters and inference connectors
 
@@ -516,7 +523,7 @@ have narrower, truthfully labeled guarantees.
 | Claude native companion | Structured text projection, host-owned image uploads, read-only tool activity, and one-shot session-scoped Interrupt over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; no other controls, remote permission/question responses, general files, image previews, or status |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
-| Codex | Current code accepts exact 0.151.0 and 0.153.4/Linux arm64 with text/images/interrupt/status and read-only completed command activity; exact 0.153.4 also implements one-shot ordinary local-command approvals. Historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0 | One explicit thread and attached local-TUI precondition; current-version/activity/interrupt/image/approval acceptance is tracked in the release roadmap; other permissions/questions, general files, managed-Unix/legacy recovery, per-device unsubscribe, and other browser controls remain unclaimed |
+| Codex | Current code accepts exact 0.151.0 and 0.153.4/Linux arm64 with text/images/interrupt/status and read-only completed command activity; exact 0.153.4 also implements one-shot ordinary local-command approvals and bounded native choice forms. Historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0 | One explicit thread and attached local-TUI precondition; current-version/activity/interrupt/image/approval/question acceptance is tracked in the release roadmap; unsupported permissions/questions, general files, managed-Unix/legacy recovery, per-device unsubscribe, and other browser controls remain unclaimed |
 | Bedrock inference | Maintained exact-tuple MITM connector | Replaces Anthropic inference while preserving the private local RC facade; other tuples remain unqualified |
 | Accountless mode | Maintained for the exact M5 Bedrock tuple | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
 

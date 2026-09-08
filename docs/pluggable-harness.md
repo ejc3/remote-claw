@@ -13,7 +13,7 @@ Five drivers exist:
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
 - `codex` — the exact 0.151.0 or 0.153.4/Linux arm64 app-server companion: text, images, and interrupt,
   native status, and read-only completed shell commands/results; exact 0.153.4 also implements one-shot
-  ordinary local-command approvals.
+  ordinary local-command approvals and bounded non-secret blocking choice forms.
 
 The private MITM remains the supported Claude beta. The native companion has passed its structured
 API-path, local Graduate, literal official web UI coexistence, and separate exact-SHA
@@ -39,7 +39,7 @@ is provider-transport isolation, not per-device unsubscribe. The separate
 [Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) passed clean companion
 restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy.
 Those historical Codex results remain exact 0.151.0 evidence; current-version, command-activity, and
-interrupt/image and command-approval acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
+interrupt/image, command-approval, and question acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
 remain disabled.
 Every current `Session` binding remains process-local.
 
@@ -275,13 +275,25 @@ Exact 0.153.4 additionally admits ordinary local `commandExecution/requestApprov
 `codex/approvals.ts`: complete bounded command/absolute cwd/optional reason, `kind:"command"`,
 `environmentId:"local"`, no network/additional-permission context, and advertised `accept` plus
 `decline` or `cancel`. Fresh opaque viewer IDs map to exact connection-owned native request objects;
-the client exposes only a one-shot command-decision method, not a generic result/error API. Allow
+the command-response API exposes only one-shot decisions, not a generic result/error API. Allow
 cannot amend input or policy; Deny uses the advertised negative decision and discloses turn cancellation.
 Native resolution removes authority and closes the card neutrally; broker admission or socket send
 means pending, never that our choice won. Unknown writes fence only the companion without retry.
 Version 0.151.0 approvals and all unsupported permissions/questions remain native-owned. Keep the
 local TUI attached. The [release roadmap](release-finish-line.md#codex-command-approvals) records the
 native probe and passed phone/desktop acceptance without claiming official Remote approval coverage.
+
+The separate `codex/questions.ts` adapter admits complete non-secret blocking native choice forms
+on exact 0.153.4: 1–3 questions, 1–20 choices each, and free text only when native `isOther` allows it.
+The existing `AskUserQuestion` projection carries stable native question IDs and explicit input
+affordances. Its dedicated response API sends one answer per ID, with no generic error, invented
+Dismiss/multiselect, or separate policy-amendment/session-grant API. Displayed choices retain their
+native semantics. These are transparent native forms that may authorize tool actions;
+the schema does not identify a planning-only subset. They share the command path's connection-owned
+one-attempt response and native-confirmed resolution, without sharing command-decision semantics.
+`structuredQuestions:true` separately advertises this support; an older approval-only host cannot
+acquire it through a viewer upgrade. See [form bounds](protocol.md#codex-native-choice-forms) and
+[acceptance status](release-finish-line.md#codex-native-questions).
 
 The Claude MITM has a stronger pre-write replay fence described in
 [protocol.md](protocol.md#41-private-facade), but it likewise does not claim native
@@ -328,7 +340,7 @@ attached for the projection lifetime.
 | Capture | authenticated RC event batches | subscribe-before-history provider reconciliation | tail main and sub-agent JSONL | history plus coalesced SSE parts | resume subscription, `historyMode`-selected bounded text/completed-command history, then buffered/live notifications |
 | Remote text | Claude downstream SSE | serialized provider event POST | non-empty non-slash private-buffer text; helper/flock gates pane paste + Enter against active native turns | `prompt_async` | serialized `turn/start`, correlated to completed native user item |
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
-| Permission behavior | stable surface disabled | native/local; never projected or answered | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4: one-shot ordinary local-command decisions with native resolution; 0.151.0 and all other permissions/questions remain native-owned |
+| Permission behavior | stable surface disabled | native/local; never projected or answered | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4: one-shot ordinary local-command decisions and bounded native choice forms with native resolution; 0.151.0 and unsupported permissions/questions remain native-owned |
 | Status advertised | yes | no | no | yes | yes |
 | Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on explicit WS/paginated history |
 
@@ -342,7 +354,7 @@ The exact advertised viewer capabilities are:
 | Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
 | `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | `codex` 0.151.0 | no | yes | yes | no | no | no | yes; images only |
-| `codex` 0.153.4 | ordinary local commands only; native resolution | yes | yes | no | no | no | yes; images only |
+| `codex` 0.153.4 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
 
 See [tmux-driver.md](tmux-driver.md) and [opencode-driver.md](opencode-driver.md) for adapter-specific
 limitations.

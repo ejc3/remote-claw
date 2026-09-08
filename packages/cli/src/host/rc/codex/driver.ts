@@ -24,6 +24,7 @@ import {
   isCodexThreadId,
   parseCodexStatus,
 } from "./client.js";
+import { CodexUserQuestions } from "./questions.js";
 
 // One native item per page keeps retained inline images from combining into an oversized frame.
 // Preserve the existing roughly 100k raw-item scan budget, independently of projected item limits.
@@ -328,6 +329,7 @@ export class CodexDriver implements Driver {
   readonly #browserTurns = new BrowserTurnQueue();
   #lastInterruptedTurn: string | null = null;
   #approvals: CodexCommandApprovals | null = null;
+  #questions: CodexUserQuestions | null = null;
 
   constructor(ctx: DriverContext, options: CodexDriverOptions) {
     this.#ctx = ctx;
@@ -362,9 +364,10 @@ export class CodexDriver implements Driver {
     try {
       const initialized = await this.#client.initialize(signal);
       assertCodexCompatibility(initialized, this.#options.runtime);
-      // Approval replay/resolution was exercised on this exact version, not the older text tuple.
+      // Approval/question replay and resolution belong to this exact version, not the older tuple.
       if (codexAppServerVersion(initialized.userAgent) === "0.153.4") {
         this.#approvals = new CodexCommandApprovals(session, this.#options.threadId, this.#client);
+        this.#questions = new CodexUserQuestions(session, this.#options.threadId, this.#client);
       }
       const resumed = await this.#client.resume(this.#options.threadId, signal);
       if (
@@ -464,12 +467,14 @@ export class CodexDriver implements Driver {
   ): void {
     if (inbound.kind === "request") {
       this.#approvals?.observe(inbound.value);
+      this.#questions?.observe(inbound.value);
       return;
     }
     const { method, params } = inbound.value;
     if (params.threadId !== this.#options.threadId) return;
     if (method === "serverRequest/resolved") {
       this.#approvals?.resolve(params);
+      this.#questions?.resolve(params);
       return;
     }
     if (method === "item/completed") {
@@ -526,7 +531,10 @@ export class CodexDriver implements Driver {
         if (request?.subtype === "interrupt") await this.#interruptCurrent(session, signal);
         // Initialize and every other control remain local no-ops.
       }
-      if (event.eventType === "control_response") this.#approvals?.respond(event.payload, signal);
+      if (event.eventType === "control_response") {
+        this.#approvals?.respond(event.payload, signal);
+        this.#questions?.respond(event.payload, signal);
+      }
       session.ack(event.eventId);
     }
   }
