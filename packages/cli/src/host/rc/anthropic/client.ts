@@ -11,7 +11,7 @@ const MAX_REQUEST_TIMEOUT_MS = 2_147_483_647;
 const MAX_JSON_BYTES = 1024 * 1024;
 const MAX_SSE_FRAME_CHARS = 1024 * 1024;
 const MAX_EVENT_METADATA_CHARS = 512;
-const MAX_USER_CONTENT_CHARS = 100_000;
+export const MAX_USER_CONTENT_CHARS = 100_000;
 const DECIMAL_SEQUENCE = /^\d+$/;
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype) as object;
 

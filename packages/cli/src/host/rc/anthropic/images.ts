@@ -11,6 +11,7 @@ import {
   safeAttachmentName,
 } from "../relay.js";
 import type { HostImage } from "../session.js";
+import { MAX_USER_CONTENT_CHARS } from "./client.js";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 
@@ -85,12 +86,21 @@ export class NativeImageStore {
       decodedBytes += bytes.byteLength;
       return { bytes, ext: extForMime(mime) };
     });
+    const directory = join(this.#root, `remote-claw-native-${randomUUID()}`);
+    const plannedPaths = decoded.map((image, index) =>
+      join(directory, `${index + 1}.${image.ext}`),
+    );
+    const text = `${plannedPaths.map((path) => `@"${path}"`).join(" ")}\n${displayText}`;
+    // The typed client rejects oversized text before its transport is invoked. Enforce that exact
+    // limit, including references, before files exist so local rejection cannot orphan uploads.
+    if (text.length > MAX_USER_CONTENT_CHARS) {
+      throw new Error("native image message exceeds native text limit");
+    }
     if (this.#reservedBytes + decodedBytes > this.#byteLimit) {
       throw new Error("native image storage byte limit exceeded");
     }
     // Reserve synchronously before filesystem awaits so concurrent preparations cannot overbook.
     this.#reservedBytes += decodedBytes;
-    const directory = join(this.#root, `remote-claw-native-${randomUUID()}`);
     const files: string[] = [];
     let createdDirectory = false;
     let discarded: Promise<void> | undefined;
@@ -117,7 +127,8 @@ export class NativeImageStore {
       createdDirectory = true;
       for (const [index, image] of decoded.entries()) {
         checkAbort(signal);
-        const path = join(directory, `${index + 1}.${image.ext}`);
+        const path = plannedPaths[index];
+        if (path === undefined) throw new Error("missing prepared image path");
         const file = await open(path, "wx", 0o600);
         files.push(path);
         try {
@@ -127,7 +138,7 @@ export class NativeImageStore {
         }
       }
       checkAbort(signal);
-      return { text: `${files.map((path) => `@"${path}"`).join(" ")}\n${displayText}`, discard };
+      return { text, discard };
     } catch (error) {
       await discard();
       throw error;

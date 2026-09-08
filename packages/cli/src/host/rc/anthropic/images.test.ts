@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MAX_ATTACHMENT_B64, MAX_ATTACHMENT_TOTAL_BYTES } from "../relay.js";
+import { MAX_USER_CONTENT_CHARS } from "./client.js";
 import { NativeImageStore } from "./images.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => ({
@@ -118,6 +119,23 @@ describe("NativeImageStore", () => {
     }
     expect(() => new NativeImageStore(directory, -1)).toThrow("configuration");
     expect(await fs.readdir(directory)).toEqual([]);
+  });
+
+  it("counts generated references in the native text limit before writing or reserving bytes", async () => {
+    const directory = await root();
+    const input = image("image.png", "image/png", "a");
+    const store = new NativeImageStore(directory, 1);
+    const probe = await store.prepare([input], "📎 image.png\n", signal());
+    const prefixLength = probe.text.length - "📎 image.png\n".length;
+    await probe.discard();
+    const maximum = "📎 image.png\n".padEnd(MAX_USER_CONTENT_CHARS - prefixLength, "a");
+    await expect(store.prepare([input], `${maximum}a`, signal())).rejects.toThrow(
+      "native text limit",
+    );
+    expect(await fs.readdir(directory)).toEqual([]);
+    const accepted = await store.prepare([input], maximum, signal());
+    expect(accepted.text).toHaveLength(MAX_USER_CONTENT_CHARS);
+    await accepted.discard();
   });
 
   it("refuses symlink and writable roots without changing their posture", async () => {
