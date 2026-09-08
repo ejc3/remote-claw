@@ -8,13 +8,14 @@ import type { BrokerClient } from "../../../broker/client.js";
 import type { DriverContext } from "../driver.js";
 import type { MitmOptions } from "../mitm.js";
 import type { Session } from "../session.js";
-import type {
-  AnthropicRcEvent,
-  RcEventPage,
-  RcInterruptEventInput,
-  RcPostAck,
-  RcSseItem,
-  RcUserEventInput,
+import {
+  type AnthropicRcEvent,
+  MAX_USER_CONTENT_CHARS,
+  type RcEventPage,
+  type RcInterruptEventInput,
+  type RcPostAck,
+  type RcSseItem,
+  type RcUserEventInput,
 } from "./client.js";
 import { type ClaudeNativeClient, ClaudeNativeDriver, type ClaudeNativeProxy } from "./driver.js";
 import { AnthropicRcError } from "./errors.js";
@@ -1220,6 +1221,26 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       expect(acceptedBodies(harness)).toEqual([]);
       expect(event.images).toBeUndefined();
       expect(harness.native.postCalls).toHaveLength(1);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("rejects an oversized image caption before files or POST and releases pending image bytes", async () => {
+    const imageRoot = join(mkdtempSync(join(CERTS_DIR, "images-")), "pending");
+    const harness = await startHarness({ imageStore: new NativeImageStore(imageRoot) });
+    try {
+      await bindReady(harness, "cse_oversized_images");
+      const event = harness.session.pushUserInput(
+        `${IMAGE_DISPLAY}\n${"a".repeat(MAX_USER_CONTENT_CHARS)}`,
+        { images: IMAGES },
+      );
+      await waitFor(() => harness.session.closed);
+      expect(harness.native.postCalls).toEqual([]);
+      expect(existsSync(imageRoot)).toBe(false);
+      expect(event.images).toBeUndefined();
+      expect(harness.broker.content).toEqual([]);
       expect(harness.isRunSettled()).toBe(false);
     } finally {
       await harness.stop();
