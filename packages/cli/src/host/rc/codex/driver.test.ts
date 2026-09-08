@@ -10,6 +10,7 @@ import {
   type CodexInbound,
   type CodexItemsPage,
   type CodexResumeResult,
+  type CodexServerRequest,
   type CodexThreadItem,
 } from "./client.js";
 import { CodexDriver } from "./driver.js";
@@ -95,6 +96,7 @@ function completed(item: CodexThreadItem, threadId = THREAD_ID, turnId = "turn-1
 
 class FakeCodexClient implements CodexClient {
   initializeCalls = 0;
+  nativeVersion = CODEX_APP_SERVER_VERSION;
   readonly resumeCalls: string[] = [];
   readonly listCalls: Array<{ threadId: string; cursor: string | undefined }> = [];
   readonly turnListCalls: Array<{ threadId: string; cursor: string | undefined }> = [];
@@ -110,6 +112,11 @@ class FakeCodexClient implements CodexClient {
   activeTurnId: string | null = null;
   activeTurnBarrier: Promise<void> | null = null;
   interruptError: Error | null = null;
+  readonly approvalCalls: Array<{
+    request: CodexServerRequest;
+    decision: "accept" | "decline" | "cancel";
+  }> = [];
+  approvalError: Error | null = null;
   externalThreadRunning = true;
   resumeResult: CodexResumeResult = {
     thread: {
@@ -135,7 +142,7 @@ class FakeCodexClient implements CodexClient {
   }> {
     this.initializeCalls += 1;
     return {
-      userAgent: `remote-claw-codex/${CODEX_APP_SERVER_VERSION} codex-cli/${CODEX_APP_SERVER_VERSION}`,
+      userAgent: `remote-claw-codex/${this.nativeVersion} codex-cli/${this.nativeVersion}`,
       platformFamily: "unix",
       platformOs: "linux",
     };
@@ -181,6 +188,17 @@ class FakeCodexClient implements CodexClient {
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
     this.interruptCalls.push({ threadId, turnId });
     if (this.interruptError !== null) throw this.interruptError;
+  }
+
+  respondCommandApproval(
+    request: CodexServerRequest,
+    decision: "accept" | "decline" | "cancel",
+    signal: AbortSignal,
+  ): boolean {
+    if (signal.aborted) return false;
+    this.approvalCalls.push({ request, decision });
+    if (this.approvalError !== null) throw this.approvalError;
+    return true;
   }
 
   drainInbound(): CodexInbound[] {
@@ -395,6 +413,50 @@ function interruptFrame(identityId: Uint8Array, sessionId: string, msgId: string
   };
 }
 
+function commandApproval(params: Record<string, unknown> = {}): CodexServerRequest {
+  return {
+    id: "native-approval-callback",
+    method: "item/commandExecution/requestApproval",
+    params: {
+      threadId: THREAD_ID,
+      turnId: "approval-turn",
+      itemId: "approval-command",
+      kind: "command",
+      environmentId: "local",
+      command: "ls /example",
+      cwd: "/example",
+      reason: "Inspect requested directory",
+      availableDecisions: ["accept", "cancel"],
+      ...params,
+    },
+  };
+}
+
+function approvalViewerId(session: Session): string {
+  const id = upstream(session, "control_request")[0]?.request_id;
+  if (typeof id !== "string") throw new Error("missing approval viewer ID");
+  return id;
+}
+
+function approvalFrame(
+  identityId: Uint8Array,
+  sessionId: string,
+  viewerId: string,
+  behavior: "allow" | "deny",
+  msgId = "browser-approval",
+): Frame {
+  return {
+    ...browserFrame(
+      identityId,
+      sessionId,
+      JSON.stringify({ request_id: viewerId, behavior }),
+      msgId,
+    ),
+    recordKind: "permission",
+    msgId,
+  };
+}
+
 function accepted(broker: FakeDurableBroker): Array<Record<string, unknown>> {
   return broker.posts
     .filter((post) => post.recordKind === "accepted")
@@ -488,6 +550,7 @@ describe("Codex M3a companion", () => {
     client.emit({
       kind: "request",
       value: {
+        id: "approval-1",
         method: "item/commandExecution/requestApproval",
         params: { threadId: THREAD_ID, itemId: "approval-1" },
       },
@@ -495,6 +558,7 @@ describe("Codex M3a companion", () => {
     client.emit({
       kind: "request",
       value: {
+        id: "question-1",
         method: "item/tool/requestUserInput",
         params: { threadId: THREAD_ID, itemId: "question-1" },
       },
@@ -659,6 +723,7 @@ describe("Codex M3a companion", () => {
     client.emit({
       kind: "request",
       value: {
+        id: "later-approval",
         method: "item/commandExecution/requestApproval",
         params: { threadId: THREAD_ID, itemId: "later" },
       },
@@ -988,6 +1053,181 @@ describe("Codex M3a companion", () => {
     expect(upstream(launched.session, "user")).toMatchObject([{ message: { content: expected } }]);
     expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("data:image");
     await stop(launched.ac, launched.run);
+  });
+
+  it("answers an exact-version native command once through the broker while text remains parked", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.153.4";
+    client.resumeResult.thread.status = { type: "active" };
+    const native = commandApproval();
+    client.buffered.push({ kind: "request", value: native });
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    await waitFor(() =>
+      launched.broker.posts.some((post) => post.recordKind === "permission_request"),
+    );
+    const viewerId = approvalViewerId(launched.session);
+    const announce = launched.broker.posts.find((post) => post.recordKind === "session_announce");
+    expect(JSON.parse(announce?.text ?? "{}")).toMatchObject({
+      capabilities: { structuredPermissions: true, permissionResolution: "native" },
+    });
+
+    launched.broker.pushInbound(
+      browserFrame(
+        launched.identityId,
+        launched.broker.sessionId,
+        "continue when done",
+        "after-approval",
+      ),
+    );
+    await waitFor(() => accepted(launched.broker).length === 1);
+    expect(client.startCalls).toEqual([]);
+    const answer = approvalFrame(launched.identityId, launched.broker.sessionId, viewerId, "allow");
+    launched.broker.pushInbound(answer);
+    await waitFor(() => client.approvalCalls.length === 1);
+    expect(client.approvalCalls).toEqual([{ request: native, decision: "accept" }]);
+    expect(client.approvalCalls[0]?.request).toBe(native);
+    expect(client.startCalls).toEqual([]);
+    expect(launched.session.workerStatus).toBe("running");
+
+    launched.broker.pushInbound(answer);
+    launched.broker.pushInbound(
+      approvalFrame(
+        launched.identityId,
+        launched.broker.sessionId,
+        viewerId,
+        "deny",
+        "other-browser-answer",
+      ),
+    );
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "serverRequest/resolved",
+        params: { threadId: THREAD_ID, requestId: native.id },
+      },
+    });
+    await waitFor(() => upstream(launched.session, "control_cancel_request").length === 1);
+    expect(client.approvalCalls).toHaveLength(1);
+    expect(client.startCalls).toEqual([]);
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "thread/status/changed",
+        params: { threadId: THREAD_ID, status: { type: "idle" } },
+      },
+    });
+    await waitFor(() => client.startCalls.length === 1);
+    expect(client.startCalls[0]?.text).toBe("continue when done");
+    expect(client.externalThreadRunning).toBe(true);
+    await stop(launched.ac, launched.run);
+  });
+
+  it("does not answer when native resolution wins before the browser control is consumed", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.153.4";
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    const native = commandApproval();
+    client.emit({ kind: "request", value: native });
+    await waitFor(() => upstream(launched.session, "control_request").length === 1);
+    const viewerId = approvalViewerId(launched.session);
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "serverRequest/resolved",
+        params: { threadId: THREAD_ID, requestId: native.id },
+      },
+    });
+    await waitFor(() => upstream(launched.session, "control_cancel_request").length === 1);
+    const ack = vi.spyOn(launched.session, "ack");
+    const response = launched.session.pushControlResponse(viewerId, "allow");
+    await waitFor(() => ack.mock.calls.some(([id]) => id === response.eventId));
+    expect(client.approvalCalls).toEqual([]);
+    expect(launched.session.closed).toBe(false);
+    await stop(launched.ac, launched.run);
+  });
+
+  it.each([
+    { label: "older native version", version: "0.151.0", request: commandApproval() },
+    {
+      label: "different thread",
+      version: "0.153.4",
+      request: commandApproval({ threadId: OTHER_THREAD_ID }),
+    },
+    {
+      label: "native question",
+      version: "0.153.4",
+      request: { ...commandApproval(), method: "item/tool/requestUserInput" },
+    },
+  ])("leaves $label owned by native clients", async ({ version, request }) => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = version;
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    client.emit({ kind: "request", value: request });
+    client.emit(completed(assistantItem("approval-owner-barrier", "native owner remains active")));
+    await waitFor(() => upstream(launched.session, "assistant").length === 1);
+    expect(upstream(launched.session, "control_request")).toEqual([]);
+    const ack = vi.spyOn(launched.session, "ack");
+    const response = launched.session.pushControlResponse(String(request.id), "allow");
+    await waitFor(() => ack.mock.calls.some(([id]) => id === response.eventId));
+    expect(client.approvalCalls).toEqual([]);
+    if (version === "0.151.0") {
+      const announce = launched.broker.posts.find((post) => post.recordKind === "session_announce");
+      expect(JSON.parse(announce?.text ?? "{}")).toMatchObject({
+        capabilities: { structuredPermissions: false },
+      });
+    }
+    expect(client.externalThreadRunning).toBe(true);
+    await stop(launched.ac, launched.run);
+  });
+
+  it("does not answer an open approval after the broker projection closes", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.153.4";
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    client.emit({ kind: "request", value: commandApproval() });
+    await waitFor(() => upstream(launched.session, "control_request").length === 1);
+    const viewerId = approvalViewerId(launched.session);
+    launched.session.pushControlResponse(viewerId, "allow");
+    launched.session.close("injected broker closure before approval response consumption");
+    await expect(within(launched.run)).resolves.toBe(1);
+    expect(client.approvalCalls).toEqual([]);
+    expect(client.closeCalls).toBe(1);
+    expect(client.externalThreadRunning).toBe(true);
+  });
+
+  it("fences only the companion after an ambiguous approval response without retrying or starting queued text", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.153.4";
+    client.resumeResult.thread.status = { type: "active" };
+    client.approvalError = new CodexAppServerError("injected ambiguous approval write");
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    const native = commandApproval();
+    client.emit({ kind: "request", value: native });
+    await waitFor(() => upstream(launched.session, "control_request").length === 1);
+    launched.broker.pushInbound(
+      browserFrame(
+        launched.identityId,
+        launched.broker.sessionId,
+        "must remain parked",
+        "approval-failure-queued",
+      ),
+    );
+    await waitFor(() => accepted(launched.broker).length === 1);
+    const viewerId = approvalViewerId(launched.session);
+    launched.session.pushControlResponse(viewerId, "allow");
+    launched.session.pushControlResponse(viewerId, "allow");
+    await expect(within(launched.run)).resolves.toBe(1);
+    expect(client.approvalCalls).toEqual([{ request: native, decision: "accept" }]);
+    expect(client.startCalls).toEqual([]);
+    expect(client.closeCalls).toBe(1);
+    expect(client.externalThreadRunning).toBe(true);
+    expect(launched.session.closed).toBe(true);
+    expect(launched.broker.posts.some((post) => post.recordKind === "session_terminal")).toBe(true);
   });
 
   it("lets Interrupt pass parked text, deduplicates it, and waits for native idle before continuing", async () => {

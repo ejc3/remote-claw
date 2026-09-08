@@ -72,9 +72,15 @@ input is digest-correlated; only sanitized names/caption or an image-count place
 Raw pending images are bounded and released after native submission settles or the session closes.
 Interrupt binds the latest active native turn once and never retargets or retries; queued
 text still waits for native idle, not interrupt RPC acceptance. Native background commands may outlive
-the interrupted model turn. Other controls, general files, approval responses, streaming partials, file
+the interrupted model turn. Exact 0.153.4 also implements one-shot ordinary local-command approvals;
+0.151.0 keeps all approvals native-owned. Only complete bounded command/cwd/optional reason, native
+`kind:"command"` / `environmentId:"local"`, and advertised `accept` plus `decline` or `cancel` qualify.
+No network/additional permissions, stdin, file approvals, questions, policy amendments, or session grants
+are answered. Fresh opaque viewer IDs bind exact connection-owned native requests; broker admission
+means pending, and only native resolution closes the card without claiming which peer won. Ambiguous
+writes never retry or stop native work. Other controls, general files, streaming partials, file
 changes, and task lifecycle remain unsupported. The [release roadmap](docs/release-finish-line.md)
-owns current-version/activity/interrupt/image acceptance; the historical results above remain exact 0.151.0
+owns current-version/activity/interrupt/image and command-approval acceptance; the historical results above remain exact 0.151.0
 evidence. The attachment path
 accepts literal `unix://` only as Codex's same-user managed control socket
 (`$CODEX_HOME/app-server-control/app-server-control.sock`, falling back to `~/.codex`), while retaining

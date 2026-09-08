@@ -305,6 +305,7 @@ export function parseCapabilities(raw: unknown, harness?: Harness): Capabilities
     structuredPermissions: bool(c.structuredPermissions, legacyDefaults),
     ...(textInput !== undefined ? { textInput } : {}),
     ...(permissionPosture !== undefined ? { permissionPosture } : {}),
+    ...(c.permissionResolution === "native" ? { permissionResolution: "native" as const } : {}),
     status: bool(c.status, false),
     controls: {
       interrupt: bool(ctlRaw.interrupt, legacyDefaults),

@@ -130,7 +130,7 @@ test("Codex: first-class badge, local-input disclosure, and native-only approval
   await expect(disclosure).toContainText("Approvals and questions stay in the local Codex TUI.");
   await expect(disclosure).toBeInViewport();
   await expect(page.getByTestId("composer-mode")).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Attach photos" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Attach photos" })).toBeEnabled();
   await page.screenshot({ path: `${OUT()}/04b-codex-text-only.png`, fullPage: true });
 });
 

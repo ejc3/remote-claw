@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePermissionResolved } from "../app/lib/transcript.js";
+import { foldPermissionResolutions, parsePermissionResolved } from "../app/lib/transcript.js";
 import {
   ANNOUNCE_FUTURE_SKEW_MS,
   type Announce,
@@ -324,7 +324,33 @@ describe("parsePermissionResolved", () => {
     );
   });
 
-  it("defaults an unknown/missing behavior to allow (the relay only emits allow|deny)", () => {
+  it("preserves native submitted and neutral resolved outcomes without inventing a winner", () => {
+    for (const behavior of ["pending", "resolved"] as const) {
+      expect(parsePermissionResolved(JSON.stringify({ request_id: "native-1", behavior }))).toEqual(
+        {
+          requestId: "native-1",
+          behavior,
+        },
+      );
+    }
+  });
+
+  it("never lets a late or replayed native submission reopen a terminal resolution", () => {
+    const frame = (behavior: string) => ({
+      kind: "permission_resolved",
+      text: JSON.stringify({ request_id: "native-1", behavior }),
+    });
+    expect(foldPermissionResolutions([frame("pending")]).get("native-1")).toBe("pending");
+    for (const frames of [
+      [frame("pending"), frame("resolved")],
+      [frame("resolved"), frame("pending")],
+      [frame("pending"), frame("resolved"), frame("pending")],
+    ]) {
+      expect(foldPermissionResolutions(frames).get("native-1")).toBe("resolved");
+    }
+  });
+
+  it("retains the legacy allow fallback for an unknown/missing behavior", () => {
     expect(parsePermissionResolved(JSON.stringify({ request_id: "r3" })).behavior).toBe("allow");
     expect(
       parsePermissionResolved(JSON.stringify({ request_id: "r3", behavior: "weird" })).behavior,
@@ -385,6 +411,15 @@ describe("parseGit", () => {
 // cannot satisfy the exact stable-Claude tuple; missing mutation booleans stay enabled, so a partial
 // vector remains on the compatibility surface and only an explicit false disables a mutation. (#149)
 describe("parseCapabilities", () => {
+  it("retains only the exact native permission-resolution contract", () => {
+    expect(parseCapabilities({ permissionResolution: "native" })?.permissionResolution).toBe(
+      "native",
+    );
+    for (const permissionResolution of [undefined, "remote", true, {}]) {
+      expect(parseCapabilities({ permissionResolution })?.permissionResolution).toBeUndefined();
+    }
+  });
+
   it("parses a well-formed reduced capability set verbatim", () => {
     expect(
       parseCapabilities({

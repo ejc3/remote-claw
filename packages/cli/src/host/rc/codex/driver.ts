@@ -1,9 +1,16 @@
 import { createHash } from "node:crypto";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
-import { CODEX_CAPABILITIES, CODEX_HARNESS, type Driver, type DriverContext } from "../driver.js";
+import {
+  CODEX_APPROVAL_CAPABILITIES,
+  CODEX_CAPABILITIES,
+  CODEX_HARNESS,
+  type Driver,
+  type DriverContext,
+} from "../driver.js";
 import { ReadyBridge } from "../drivers/ready-bridge.js";
 import { toolResultOutput } from "../relay.js";
 import { type HostImage, type RcEvent, RelayCore, type Session } from "../session.js";
+import { CodexCommandApprovals } from "./approvals.js";
 import {
   assertCodexCompatibility,
   CODEX_HISTORY_ITEM_LIMIT,
@@ -13,6 +20,7 @@ import {
   type CodexInbound,
   type CodexThreadItem,
   type CodexThreadStatus,
+  codexAppServerVersion,
   isCodexThreadId,
   parseCodexStatus,
 } from "./client.js";
@@ -309,7 +317,9 @@ class CodexReconciler {
 }
 
 export class CodexDriver implements Driver {
-  readonly capabilities = CODEX_CAPABILITIES;
+  get capabilities() {
+    return this.#approvals === null ? CODEX_CAPABILITIES : CODEX_APPROVAL_CAPABILITIES;
+  }
   readonly #ctx: DriverContext;
   readonly #options: CodexDriverOptions;
   readonly #client: CodexClient;
@@ -317,6 +327,7 @@ export class CodexDriver implements Driver {
   readonly #mutations = new Map<string, BrowserMutation>();
   readonly #browserTurns = new BrowserTurnQueue();
   #lastInterruptedTurn: string | null = null;
+  #approvals: CodexCommandApprovals | null = null;
 
   constructor(ctx: DriverContext, options: CodexDriverOptions) {
     this.#ctx = ctx;
@@ -351,6 +362,10 @@ export class CodexDriver implements Driver {
     try {
       const initialized = await this.#client.initialize(signal);
       assertCodexCompatibility(initialized, this.#options.runtime);
+      // Approval replay/resolution was exercised on this exact version, not the older text tuple.
+      if (codexAppServerVersion(initialized.userAgent) === "0.153.4") {
+        this.#approvals = new CodexCommandApprovals(session, this.#options.threadId, this.#client);
+      }
       const resumed = await this.#client.resume(this.#options.threadId, signal);
       if (
         resumed.thread.id !== this.#options.threadId ||
@@ -372,7 +387,7 @@ export class CodexDriver implements Driver {
         title: this.#ctx.title,
         cwd: this.#ctx.cwd,
         git: this.#ctx.git,
-        capabilities: CODEX_CAPABILITIES,
+        capabilities: this.capabilities,
         harness: CODEX_HARNESS,
       });
       this.#trace.info("Codex thread attached");
@@ -447,11 +462,16 @@ export class CodexDriver implements Driver {
     reconciler: CodexReconciler,
     gate: IdleGate,
   ): void {
-    // App-server approvals and questions are global first-response-wins requests. Remaining completely
-    // silent preserves the native TUI as their sole owner. The client exposes no response API.
-    if (inbound.kind === "request") return;
+    if (inbound.kind === "request") {
+      this.#approvals?.observe(inbound.value);
+      return;
+    }
     const { method, params } = inbound.value;
     if (params.threadId !== this.#options.threadId) return;
+    if (method === "serverRequest/resolved") {
+      this.#approvals?.resolve(params);
+      return;
+    }
     if (method === "item/completed") {
       const item = record(params.item);
       if (
@@ -504,8 +524,9 @@ export class CodexDriver implements Driver {
       if (event.eventType === "control_request") {
         const request = record(event.payload.request);
         if (request?.subtype === "interrupt") await this.#interruptCurrent(session, signal);
-        // Initialize and every other control remain local no-ops. Approval responses stay native.
+        // Initialize and every other control remain local no-ops.
       }
+      if (event.eventType === "control_response") this.#approvals?.respond(event.payload, signal);
       session.ack(event.eventId);
     }
   }

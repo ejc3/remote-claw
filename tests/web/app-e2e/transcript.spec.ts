@@ -164,6 +164,43 @@ test("a granted permission stays resolved after a reload — no re-prompt (#56/#
   await expect(permAfter.getByRole("button", { name: "Allow" })).toHaveCount(0);
 });
 
+// One wiring sentinel owns the real browser/broker/relay presentation transition. Native request
+// ownership/races belong to deterministic Codex tests and the separate real-native acceptance.
+test("a native command approval waits for provider resolution and stays inactive after reload", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass, resolvePermission } = await seedHost({
+    perm: true,
+    caps: "codex-approval",
+    harness: "codex",
+  });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(page.locator(".local-input-disclosure")).toContainText(
+    "Command approvals can be answered here. Questions and other approvals stay in Codex.",
+  );
+
+  const permission = page.locator(".perm", { hasText: "Shell" });
+  await expect(permission).toContainText("git status --short");
+  await expect(permission).toContainText("Working directory: /work/example project");
+  await expect(permission).toContainText("Deny cancels the native turn.");
+  await permission.getByRole("button", { name: "Allow", exact: true }).click();
+  await expect(permission.locator(".perm-resolved")).toContainText(
+    "Submitted — waiting for Codex confirmation",
+  );
+  await expect(permission.locator(".perm-actions")).toHaveCount(0);
+
+  await resolvePermission();
+  await expect(permission.locator(".perm-resolved")).toContainText("Resolved by Codex");
+  await page.reload();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(permission.locator(".perm-resolved")).toContainText("Resolved by Codex");
+  await expect(permission.locator(".perm-actions")).toHaveCount(0);
+  await expect(permission).not.toContainText("Allowed");
+});
+
 test("an AskUserQuestion renders a question UI and submits answers (#42)", async ({
   page,
   seedHost,

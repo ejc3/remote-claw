@@ -144,9 +144,14 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toMatch(/images with an optional non-slash caption/);
     expect(RC_HELP).toMatch(/host-prepared inline bytes, never browser URLs or file paths/);
     expect(RC_HELP).toMatch(/one active turn ID without retargeting or retrying/);
-    expect(RC_HELP).toMatch(/Approvals, questions, model\/mode changes/);
+    expect(RC_HELP).toMatch(
+      /Exact 0\.153\.4 also supports one-shot ordinary local-command approvals/,
+    );
+    expect(RC_HELP).toMatch(/Submitted choices stay pending until native resolution/);
     expect(RC_HELP).toMatch(/Keep a local Codex TUI attached/);
-    expect(RC_HELP).toMatch(/sole owner of approvals\s+and questions/);
+    expect(RC_HELP).toMatch(
+      /Version 0\.151\.0 approvals,\s+other permission kinds, and all questions remain native-owned/,
+    );
     expect(RC_HELP).toMatch(/No forwarded arguments/);
   });
 

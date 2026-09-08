@@ -35,9 +35,11 @@ import {
   diffOf,
   dirname,
   editStat,
+  foldPermissionResolutions,
   groupTranscriptActivity,
   isRoutineActivityMessage,
   isSlashCommand,
+  type PermissionResolution,
   parseAccepted,
   parsePermissionResolved,
   parseQuestions,
@@ -1258,15 +1260,7 @@ export function Transcript(props: {
   // Resolved permissions, folded from replayable permission_resolved frames (#56) — this is the source
   // of truth that survives a reload (PermissionRow's local optimistic decision does not). A durable
   // broker replays them directly; on a non-durable backend the host replays them on catch_up.
-  const resolved = useMemo(() => {
-    const m = new Map<string, "allow" | "deny">();
-    for (const msg of messages) {
-      if (msg.kind !== "permission_resolved") continue;
-      const r = parsePermissionResolved(msg.text);
-      if (r.requestId !== "") m.set(r.requestId, r.behavior);
-    }
-    return m;
-  }, [messages]);
+  const resolved = useMemo(() => foldPermissionResolutions(messages), [messages]);
   // The answers an AskUserQuestion was resolved with (#42), folded from the SAME logged frames so the
   // resolved card can show WHAT was answered (not just "Answered") and it survives reload. Kept separate
   // from `resolved` (behavior-only) so the plain permission path is untouched.
@@ -1310,6 +1304,8 @@ export function Transcript(props: {
   const interaction = viewerInteractionPolicy(announce?.harness, caps);
   const stableClaude = isStableClaudeSurface(announce?.harness, caps);
   const codex = announce?.harness?.agent === "codex" && announce.harness.mode === "app-server";
+  const nativeCommandApprovals =
+    codex && interaction.structuredPermissions && caps?.permissionResolution === "native";
   // Rolling deploys can still surface an older tmux host with either the historical permission mirror
   // or explicit bypass. Only a new, exact local-posture tuple earns the local-ownership claim.
   const tmuxText = isTmuxGatedTextSurface(announce?.harness, caps);
@@ -1321,7 +1317,9 @@ export function Transcript(props: {
   const localInputDisclosure = !interaction.text
     ? "This harness or input policy is not supported. Update remote-claw to enable controls."
     : interaction.structuredPermissions
-      ? null
+      ? nativeCommandApprovals
+        ? "Command approvals can be answered here. Questions and other approvals stay in Codex."
+        : null
       : codex
         ? "Approvals and questions stay in the local Codex TUI."
         : supportedOpenCode
@@ -1834,6 +1832,7 @@ export function Transcript(props: {
               canGrant={canGrantPermissions}
               permissionsLocal={permissionsLocal}
               permissionAgent={permissionAgent}
+              nativePermissionResolution={caps?.permissionResolution === "native"}
               hostConnected={connected}
               resolved={resolved}
               resolvedAnswers={resolvedAnswers}
@@ -2032,7 +2031,9 @@ export function Transcript(props: {
                       : supportedOpenCode
                         ? "Permission prompts stay in OpenCode"
                         : "Permission prompts stay in the local terminal"
-                    : "Permission prompts can be answered here"
+                    : nativeCommandApprovals
+                      ? "Command approvals here; questions and other approvals stay in Codex"
+                      : "Permission prompts can be answered here"
           }
           branch={announce?.git?.branch ?? null}
           currentModel={optimisticModel}
@@ -2632,6 +2633,7 @@ export function Bubble({
   canGrant,
   permissionsLocal,
   permissionAgent = "Claude",
+  nativePermissionResolution = false,
   hostConnected,
   resolved,
   resolvedAnswers,
@@ -2641,8 +2643,9 @@ export function Bubble({
   canGrant: boolean;
   permissionsLocal: boolean;
   permissionAgent?: string;
+  nativePermissionResolution?: boolean;
   hostConnected: boolean;
-  resolved: Map<string, "allow" | "deny">;
+  resolved: ReadonlyMap<string, PermissionResolution["behavior"]>;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
   switch (message.kind) {
@@ -2705,6 +2708,7 @@ export function Bubble({
           canGrant={canGrant}
           permissionsLocal={permissionsLocal}
           permissionAgent={permissionAgent}
+          nativePermissionResolution={nativePermissionResolution}
           hostConnected={hostConnected}
           resolved={resolved}
           resolvedAnswers={resolvedAnswers}
@@ -2748,6 +2752,7 @@ function PermissionRow({
   canGrant,
   permissionsLocal,
   permissionAgent,
+  nativePermissionResolution,
   hostConnected,
   resolved,
   resolvedAnswers,
@@ -2757,12 +2762,13 @@ function PermissionRow({
   canGrant: boolean;
   permissionsLocal: boolean;
   permissionAgent: string;
+  nativePermissionResolution: boolean;
   hostConnected: boolean;
-  resolved: Map<string, "allow" | "deny">;
+  resolved: ReadonlyMap<string, PermissionResolution["behavior"]>;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
   const req = parsePermission(text);
-  const [decision, setDecision] = useState<"allow" | "deny" | null>(null);
+  const [decision, setDecision] = useState<"allow" | "deny" | "pending" | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // A synchronous re-entry guard: `busy` is async React state, so two clicks fired in the same tick
@@ -2778,13 +2784,15 @@ function PermissionRow({
 
   const decide = useCallback(
     async (behavior: "allow" | "deny") => {
-      if (!canGrant || req.requestId === "" || deciding.current) return;
+      if (!canGrant || req.requestId === "" || confirmed !== null || deciding.current) return;
       deciding.current = true;
       setBusy(true);
       setErr(null);
       try {
         await onGrant(req.requestId, behavior);
-        setDecision(behavior); // resolved view replaces the buttons — no further clicks possible
+        // A successful broker POST is not a native decision. Confirmed native resolution above
+        // always wins if it arrived while this submission was in flight.
+        setDecision(nativePermissionResolution ? "pending" : behavior);
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
         deciding.current = false; // failed — let the user retry
@@ -2792,7 +2800,7 @@ function PermissionRow({
         setBusy(false);
       }
     },
-    [req.requestId, onGrant, canGrant],
+    [req.requestId, onGrant, canGrant, confirmed, nativePermissionResolution],
   );
 
   // Supported native/local permission surfaces keep permission/question interaction in their own TUI.
@@ -2844,7 +2852,7 @@ function PermissionRow({
 
   return (
     <div className="perm">
-      <div className="perm-eyebrow">Action required</div>
+      {effective === null && <div className="perm-eyebrow">Action required</div>}
       <div className="perm-head">
         <span className="perm-icon">
           <UiIcon name="shield" size={18} />
@@ -2854,6 +2862,8 @@ function PermissionRow({
         </span>
       </div>
       {req.hint !== "" && <div className="perm-hint">{req.hint}</div>}
+      {req.cwd !== "" && <div className="perm-hint">Working directory: {req.cwd}</div>}
+      {req.reason !== "" && <div className="perm-hint">Reason: {req.reason}</div>}
       {effective === null ? (
         <div className="perm-actions">
           <Button
@@ -2873,8 +2883,17 @@ function PermissionRow({
         </div>
       ) : (
         <div className="perm-resolved" data-behavior={effective}>
-          <UiIcon name={effective === "allow" ? "check" : "error"} size={16} />
-          {effective === "allow" ? "Allowed" : "Denied"}
+          <UiIcon
+            name={effective === "pending" ? "info" : effective === "deny" ? "error" : "check"}
+            size={16}
+          />
+          {effective === "pending"
+            ? `Submitted — waiting for ${permissionAgent} confirmation`
+            : effective === "resolved"
+              ? `Resolved by ${permissionAgent}`
+              : effective === "allow"
+                ? "Allowed"
+                : "Denied"}
         </div>
       )}
       {req.requestId === "" && effective === null && (
@@ -2891,6 +2910,8 @@ function PermissionRow({
 interface ParsedPermission {
   tool: string;
   hint: string;
+  cwd: string;
+  reason: string;
   requestId: string;
   toolUseId: string;
   questions: Question[];
@@ -2914,7 +2935,7 @@ function QuestionCard({
   onGrant: GrantFn;
   canGrant: boolean;
   hostConnected: boolean;
-  resolved: Map<string, "allow" | "deny">;
+  resolved: ReadonlyMap<string, PermissionResolution["behavior"]>;
   resolvedAnswers: Map<string, Record<string, string | string[]>>;
 }) {
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
@@ -2933,7 +2954,9 @@ function QuestionCard({
   const deciding = useRef(false);
 
   // The replayed answer survives reload; the local optimistic value covers the gap before it lands.
-  const resolvedBehavior = resolved.get(req.requestId) ?? sentBehavior;
+  const loggedBehavior = resolved.get(req.requestId);
+  const resolvedBehavior =
+    loggedBehavior === "allow" || loggedBehavior === "deny" ? loggedBehavior : sentBehavior;
   const done = resolvedBehavior != null;
   // What was answered, for the resolved card: the logged frame (survives reload) wins, else the local
   // optimistic copy fills the gap between submit and the frame landing.
@@ -3132,15 +3155,29 @@ function parsePermission(text: string): ParsedPermission {
       tool_input?: unknown;
       tool_use_id?: unknown;
     };
+    const input =
+      p.tool_input !== null && typeof p.tool_input === "object"
+        ? (p.tool_input as Record<string, unknown>)
+        : {};
     return {
       tool: typeof p.tool_name === "string" ? p.tool_name : "tool",
       hint: toolHint(sanitizeInput(p.tool_input)),
+      cwd: typeof input.cwd === "string" ? input.cwd : "",
+      reason: typeof input.reason === "string" ? input.reason : "",
       requestId: typeof p.request_id === "string" ? p.request_id : "",
       toolUseId: typeof p.tool_use_id === "string" ? p.tool_use_id : "",
       questions: parseQuestions(p.tool_input),
     };
   } catch {
-    return { tool: "tool", hint: "", requestId: "", toolUseId: "", questions: [] };
+    return {
+      tool: "tool",
+      hint: "",
+      cwd: "",
+      reason: "",
+      requestId: "",
+      toolUseId: "",
+      questions: [],
+    };
   }
 }
 

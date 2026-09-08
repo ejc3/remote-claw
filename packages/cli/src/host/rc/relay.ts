@@ -495,9 +495,11 @@ export class HostRcRelay {
   #durableCursorsReady = false;
   #preparePromise: Promise<void> | null = null;
 
-  /** Unanswered permission requests (request_id) — drives the announce's `needs` flag (#48/#58) and
-   *  is cleared when the matching inbound `permission` answer arrives (which logs permission_resolved). */
+  /** Open permission requests drive `needs` (#48/#58). Legacy admission clears the gate; native
+   *  decisions retain it until the provider confirms resolution. */
   readonly #openPerms = new Set<string>();
+  /** Native decisions stay open until provider resolution, but each gets at most one browser send. */
+  readonly #submittedPerms = new Set<string>();
   // AskUserQuestion's `questions` array, retained per open gate (keyed by request_id) so the answer can
   // echo it in updatedInput — real claude's tool runs `call({questions, answers})`, so the answer MUST
   // carry both or claude throws "q.map" on undefined questions. Cleared alongside the gate.
@@ -1149,6 +1151,22 @@ export class HostRcRelay {
       if (ev.eventType === "control_cancel_request") {
         const id = ev.payload.request_id;
         if (typeof id === "string") {
+          if (this.#capabilities.permissionResolution === "native") {
+            await this.#publishUnit(async () => {
+              if (!this.#openPerms.delete(id)) return;
+              this.#submittedPerms.delete(id);
+              this.#askqQuestions.delete(id);
+              // The provider confirms answered/cleared, not which client or decision won.
+              await this.#emit(
+                "permission_resolved",
+                null,
+                `permresolved-${id}`,
+                JSON.stringify({ request_id: id, behavior: "resolved" }),
+              );
+              this.#maybeAnnounce();
+            });
+            continue;
+          }
           this.#askqQuestions.delete(id); // symmetric with the other gate-teardown sites
           if (this.#openPerms.delete(id)) {
             this.#trace.debug("gate cancelled by worker", { request_id: id });
@@ -1433,11 +1451,18 @@ export class HostRcRelay {
         }
         const body = JSON.parse(new TextDecoder().decode(plaintext));
         const resolved = await this.#publishUnit(async () => {
-          // Check/delete the gate only at the queue head. That makes a fast answer serialize behind the
+          // Check/consume the gate only at the queue head. That makes a fast answer serialize behind the
           // permission_request unit that registers it, while duplicates/stale ids remain idempotent.
-          if (typeof body.request_id !== "string" || !this.#openPerms.delete(body.request_id)) {
+          if (
+            typeof body.request_id !== "string" ||
+            !this.#openPerms.has(body.request_id) ||
+            this.#submittedPerms.has(body.request_id)
+          ) {
             return false;
           }
+          const nativeResolution = this.#capabilities.permissionResolution === "native";
+          if (nativeResolution) this.#submittedPerms.add(body.request_id);
+          else this.#openPerms.delete(body.request_id);
           // FAIL CLOSED: only an explicit "allow" grants; anything else (deny, or a malformed/absent
           // behavior) → deny, so a garbled answer frame can never auto-approve a tool. A real viewer
           // always sends an explicit "allow"/"deny", so this only changes malformed-frame handling.
@@ -1466,11 +1491,13 @@ export class HostRcRelay {
           await this.#emit(
             "permission_resolved",
             null,
-            `permresolved-${body.request_id}`,
+            `${nativeResolution ? "permsubmitted" : "permresolved"}-${body.request_id}`,
             JSON.stringify(
-              extra.answers
-                ? { request_id: body.request_id, behavior, answers: extra.answers }
-                : { request_id: body.request_id, behavior },
+              nativeResolution
+                ? { request_id: body.request_id, behavior: "pending" }
+                : extra.answers
+                  ? { request_id: body.request_id, behavior, answers: extra.answers }
+                  : { request_id: body.request_id, behavior },
             ),
           );
           this.#assertSessionOpen();
@@ -1721,7 +1748,7 @@ export class HostRcRelay {
         // Interrupting the turn abandons any in-flight can_use_tool gate — its request_id is now
         // unanswerable (the viewer moved on; no `permission` frame will ever arrive). Clear the open
         // gates so `needs` doesn't stay pinned true forever on an idle session. (Adversarial-review fix.)
-        this.#clearOpenPerms();
+        if (this.#capabilities.permissionResolution !== "native") this.#clearOpenPerms();
         break;
       case "set_model":
         if (typeof body.model === "string")
@@ -1750,7 +1777,7 @@ export class HostRcRelay {
         // the same wall — it emits end_session with reason:archived and is rejected identically (captured
         // via --rc-trace; docs/protocol.md §11). So we drive NO worker control_request here; claude is
         // ended at its own terminal (/quit, Ctrl-C). We still clear any open gate so `needs` can't stick.
-        this.#clearOpenPerms();
+        if (this.#capabilities.permissionResolution !== "native") this.#clearOpenPerms();
         break;
     }
   }
@@ -1760,6 +1787,7 @@ export class HostRcRelay {
   #clearOpenPerms(): void {
     if (this.#openPerms.size === 0) return;
     this.#openPerms.clear();
+    this.#submittedPerms.clear();
     this.#askqQuestions.clear();
     this.#maybeAnnounce(); // backgrounded + single-flight: presence never blocks a transcript unit
   }

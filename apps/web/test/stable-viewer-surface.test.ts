@@ -2,6 +2,7 @@ import { formatPass } from "@remote-claw/clawsec";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { foldPermissionResolutions, type PermissionResolution } from "../app/lib/transcript.js";
 import { type Announce, type Message, parseCapabilities, Viewer } from "../app/lib/viewer.js";
 import {
   Bubble,
@@ -21,9 +22,10 @@ function renderBubble(
     canGrant?: boolean;
     permissionsLocal?: boolean;
     permissionAgent?: "Claude" | "OpenCode" | "Codex";
+    nativePermissionResolution?: boolean;
     hostConnected?: boolean;
   } = {},
-  resolved = new Map<string, "allow" | "deny">(),
+  resolved: ReadonlyMap<string, PermissionResolution["behavior"]> = new Map(),
 ): string {
   return renderToStaticMarkup(
     createElement(Bubble, {
@@ -32,6 +34,7 @@ function renderBubble(
       canGrant: opts.canGrant ?? true,
       permissionsLocal: opts.permissionsLocal ?? false,
       permissionAgent: opts.permissionAgent ?? "Claude",
+      nativePermissionResolution: opts.nativePermissionResolution ?? false,
       hostConnected: opts.hostConnected ?? true,
       resolved,
       resolvedAnswers: noAnswers,
@@ -221,6 +224,53 @@ describe("stable viewer surface", () => {
 
     expect(html).toContain("Reconnect to the host before answering");
     expect(html.match(/disabled=""/g)?.length).toBe(2);
+  });
+
+  it("shows full native command context, then pending and neutral resolution without claiming an approval", () => {
+    const request: Message = {
+      kind: "permission_request",
+      seq: 6,
+      msgId: "permission-native",
+      text: JSON.stringify({
+        request_id: "native-command",
+        tool_name: "Shell",
+        tool_input: {
+          command: "git status --short\nprintf 'check complete'",
+          cwd: "/work/my project",
+          reason: "Inspect the working tree before making changes",
+        },
+      }),
+    };
+    const opts = { permissionAgent: "Codex" as const, nativePermissionResolution: true };
+    const initial = renderBubble(request, opts);
+    expect(initial).toContain("git status --short\nprintf &#x27;check complete&#x27;");
+    expect(initial).toContain("Working directory: /work/my project");
+    expect(initial).toContain("Reason: Inspect the working tree before making changes");
+    expect(initial).toContain(">Allow<");
+    expect(initial).toContain(">Deny<");
+
+    const stateFrame = (behavior: "pending" | "resolved") => ({
+      kind: "permission_resolved",
+      text: JSON.stringify({ request_id: "native-command", behavior }),
+    });
+    const pending = renderBubble(request, opts, foldPermissionResolutions([stateFrame("pending")]));
+    expect(pending).toContain("Submitted — waiting for Codex confirmation");
+    expect(pending).not.toContain("Allowed");
+    expect(pending).not.toContain("Denied");
+    expect(pending).not.toContain("perm-actions");
+
+    // A fresh render models reload: only logged native evidence remains, including a late pending
+    // frame that must not re-enable the already resolved command.
+    const resolved = renderBubble(
+      request,
+      opts,
+      foldPermissionResolutions([stateFrame("resolved"), stateFrame("pending")]),
+    );
+    expect(resolved).toContain("Resolved by Codex");
+    expect(resolved).not.toContain("Allowed");
+    expect(resolved).not.toContain("Denied");
+    expect(resolved).not.toContain("perm-actions");
+    expect(resolved).not.toContain("waiting for Codex");
   });
 
   it("labels only host receipt, and gives ambiguous publication the frozen disclosure", () => {

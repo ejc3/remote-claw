@@ -95,7 +95,10 @@ displays completed shell commands/results as read-only activity, and supports br
 accepted versions. Interrupt binds one observed active turn without retargeting or retrying; queued
 text waits for native idle. The current image follow-on reuses encrypted composer groups and native
 inline image inputs, with bounded transient retention and no file upload or URL fetch. It does not
-add general-file support or native-image previews. Current acceptance is tracked in the
+add general-file support or native-image previews. A separate exact-0.153.4 implementation permits
+one-shot ordinary local-command approvals with native resolution; it excludes policy changes, session
+grants, stdin/file/network permissions, and questions. Version 0.151.0 approvals remain native-owned.
+Current acceptance is tracked in the
 [release roadmap](release-finish-line.md), without rewriting the historical 0.151.0 results.
 Other controls, general files, streaming partials, file
 changes, task lifecycle, and other versions/platforms remain outside this implementation.
