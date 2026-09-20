@@ -25,6 +25,10 @@ export interface SeedResult {
   resolvePermission: () => Promise<void>;
 }
 export type SeedHost = (opts?: {
+  /** Reuse this test's identity for a distinct session on the same discovery bus. Passed via env. */
+  pass?: string;
+  /** Distinguish same-identity sessions in the real session picker. */
+  title?: string;
   /** Use the two-frame seed owned by the deployed outcome smoke. */
   profile?: "smoke";
   /** Include code, a diff, and a table for the viewer's real typography/layout checks. */
@@ -57,6 +61,8 @@ function spawnHost(opts: {
   baseURL: string;
   backend: string | undefined;
   bypass: string | undefined;
+  pass?: string;
+  title?: string;
   perm?: boolean;
   askq?: boolean | "multi";
   caps?: string;
@@ -69,6 +75,8 @@ function spawnHost(opts: {
     RC_E2E_BASE: opts.baseURL,
     RC_E2E_BACKEND: opts.backend ?? "",
     RC_E2E_BYPASS: opts.bypass ?? "",
+    RC_E2E_PASS: opts.pass ?? "",
+    RC_E2E_TITLE: opts.title ?? "rc box",
     RC_E2E_PERM: opts.perm ? "1" : "",
     RC_E2E_ASKQ: opts.askq === "multi" ? "multi" : opts.askq ? "1" : "",
     RC_E2E_CAPS: opts.caps ?? "",

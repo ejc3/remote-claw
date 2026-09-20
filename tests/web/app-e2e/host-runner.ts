@@ -12,7 +12,7 @@
 // then we run serve() until SIGTERM/SIGINT aborts it or the fixture closes the real Session over stdin.
 
 import { createInterface } from "node:readline";
-import { deriveIdentity, formatPass } from "@remote-claw/clawsec";
+import { deriveIdentity, formatPass, parsePass } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
 import {
   CLAUDE_NATIVE_CAPABILITIES,
@@ -93,11 +93,15 @@ const smoke = process.env.RC_E2E_PROFILE === "smoke";
 const capsPreset = process.env.RC_E2E_CAPS;
 const harnessPreset = process.env.RC_E2E_HARNESS;
 
-// A fresh random identity per host so each test gets isolated bus/session channels.
+// A fresh identity isolates each test; an explicit fixture pass lets one test share its bus across
+// distinct sessions. The pass arrives through env, never argv or diagnostic output.
 const secret = new Uint8Array(32);
 crypto.getRandomValues(secret);
-const id = await deriveIdentity(secret);
+const sharedPass = process.env.RC_E2E_PASS;
+delete process.env.RC_E2E_PASS;
+const id = sharedPass ? await parsePass(sharedPass) : await deriveIdentity(secret);
 const pass = await formatPass(id);
+const title = process.env.RC_E2E_TITLE || "rc box";
 const rand = new Uint8Array(8);
 crypto.getRandomValues(rand);
 const sessionId = `e2e-${Array.from(rand, (b) => b.toString(16).padStart(2, "0")).join("")}`;
@@ -111,7 +115,7 @@ const sessionConfig =
     : harnessPreset === "tmux" && capsPreset === "tmux-bypassed"
       ? { permissionMode: "bypassPermissions" }
       : {};
-const session = new Session(sessionId, "rc box", sessionConfig);
+const session = new Session(sessionId, title, sessionConfig);
 const clientOpts: ConstructorParameters<typeof BrokerClient>[0] = {
   baseUrl: base,
   provider: securityProvider("sealed", id),
@@ -166,7 +170,7 @@ try {
   // window in which a browser command can land and then be skipped as historical by serve().
   await relay.prepare();
   // A FIXED git snapshot (deterministic git chip, #49) — not the deployment's real repo.
-  await relay.announce("rc box", "/home/ubuntu/remote-claw", {
+  await relay.announce(title, "/home/ubuntu/remote-claw", {
     branch: "main",
     sha: "abc1234",
     dirty: true,

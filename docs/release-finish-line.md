@@ -189,7 +189,7 @@ home-folder UI artifacts, outside Git.
 | Follow-on | Status | Bounded user outcome |
 | --- | --- | --- |
 | Native work visibility, Claude first | Claude tools and Codex completed commands implemented and live-accepted | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
-| Desktop/mobile daily-use finish | Auditing | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
+| Desktop/mobile daily-use finish | Recovery warning scoped; broader daily-use audit remains | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | Managed Unix/paginated recovery passed; official Remote pending external availability | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers; the current result excludes the official client |
 | Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
@@ -201,6 +201,17 @@ user's Claude quota is exhausted. Codex native questions and managed Unix/pagina
 complete; next is shared desktop/mobile daily-use finish. Official-Remote recovery waits for a literal
 same-thread Remote client to be available, not merely a logged-in cloud-Codex page. These sequencing
 decisions do not remove Claude or official Remote from the target.
+
+**Daily-use recovery warning — 2026-09-20.** The managed-recovery screenshots exposed a historical
+"Session ended" notice above a newly selected live projection. The page now shows that notice only
+when no session is selected; returning to the session list preserves the disclosure until dismissed.
+Termination of the current session still removes its row, deselects it, and reveals the loss/tail
+warning. An unrelated session's terminal event cannot mislabel or deselect the active chat.
+The existing browser liveness sentinel owns this regression because subscription callbacks, row clicks,
+and React rendering caused the defect; a new state abstraction or another native recovery run would
+not be a cheaper faithful boundary. The fixture can reuse a test identity for distinct sessions.
+Native recovery, tombstones, delivery, permissions, broker behavior, and capability claims are unchanged.
+This closes one presentation defect, not the whole daily-use audit or official-client recovery.
 
 Future CLI harnesses (for example Grok) should require a native adapter, validated CLI configuration,
 and one explicit metadata/capability entry, reusing broker, encryption, and viewer renderers. The shared

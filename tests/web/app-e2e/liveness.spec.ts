@@ -109,7 +109,11 @@ test("a brief bus blip BELOW the threshold never flashes the banner", async ({
   await expect(page.locator(".bus-error")).toHaveCount(0);
 });
 
-test("an authenticated terminal marker removes and deselects the session permanently", async ({
+// The observed recovery warning is React selection/render state, not native recovery or the encrypted
+// terminal parser (already unit-covered). Keep its regression in this existing browser sentinel:
+// SSR does not run subscription effects or row clicks, and extracting a state helper would not test
+// the callback/render wiring that left the old warning above a freshly selected session.
+test("terminal notices stay on the list without mislabeling another selected session", async ({
   page,
   seedHost,
 }) => {
@@ -140,4 +144,39 @@ test("an authenticated terminal marker removes and deselects the session permane
   await page.reload();
   await expect(page.locator(".terminal-notice")).toContainText("Session ended");
   await expect(row).toHaveCount(0);
+
+  // A fresh projection on the same identity must not inherit the previous projection's loss warning.
+  // Do not dismiss it first: that was the daily-use recovery failure.
+  const fresh = await seedHost({ pass, title: "fresh projection" });
+  const freshRow = page.locator("button.row", { hasText: "fresh projection" });
+  await expect(freshRow).toBeVisible();
+  await freshRow.click();
+  await expect(freshRow).toHaveAttribute("data-active", "true");
+  await expect(page.locator(".prose.assistant", { hasText: "Build is green" })).toBeVisible();
+  await expect(page.locator(".terminal-notice")).toHaveCount(0);
+
+  // A later terminal callback for an unrelated session must neither replace the fresh selection nor
+  // reintroduce the old warning. Keep the session selected throughout the callback.
+  const other = await seedHost({ pass, title: "other projection" });
+  const otherRow = page.locator("button.row", { hasText: "other projection" });
+  await expect(otherRow).toHaveCount(1);
+  await other.terminalize();
+  await expect(otherRow).toHaveCount(0);
+  await expect(freshRow).toHaveAttribute("data-active", "true");
+  await expect(page.locator(".transcript")).toBeVisible();
+  await expect(page.locator(".terminal-notice")).toHaveCount(0);
+
+  // The loss disclosure was scoped, not discarded. Returning to the list reveals it until dismissed.
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  const notice = page.locator(".terminal-notice");
+  await expect(notice).toContainText("most recent delivery and output tail may be incomplete");
+  await notice.getByRole("button").click();
+  await expect(notice).toHaveCount(0);
+
+  // Dismissing that historical notice must not suppress a later loss of the CURRENT selection.
+  await freshRow.click();
+  await fresh.terminalize();
+  await expect(freshRow).toHaveCount(0);
+  await expect(page.locator(".transcript")).toHaveCount(0);
+  await expect(notice).toContainText("Session ended");
 });
