@@ -988,6 +988,8 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   // An authenticated session_terminal is a permanent lifecycle fact, not an ordinary absence from the
   // live list. Keep a visible disclosure after removing/deselecting the dead row so disappearance cannot
   // be mistaken for a harmless refresh and the user knows the last delivery/output tail may be partial.
+  // Show it only on the list: a selected different session must not inherit this historical warning.
+  // Returning to the list preserves it; the callback below deselects a terminated current session.
   const [terminalNotice, setTerminalNotice] = useState(false);
   // The bus-transport banner: shown only when reaching the broker FAILS persistently (a wrong/stale pass
   // or a broker outage), so the user isn't left staring at an empty session list with no idea why. null =
@@ -1115,7 +1117,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
           {/* A persistent bus-transport failure (broker outage / wrong-or-stale pass). role=alert so AT
               announces it; shown ABOVE the list since an outage usually leaves the list empty. */}
           {busError !== null && <Banner className="bus-error" status="warning" title={busError} />}
-          {terminalNotice && (
+          {terminalNotice && selected === null && (
             <Banner
               className="bus-error terminal-notice"
               status="warning"
