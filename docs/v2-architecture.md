@@ -506,10 +506,11 @@ app-server, TUI, or native thread. The writer rechecks session closure after wai
 immediately before sending, so a parked prompt cannot escape a projection already closed by the relay.
 A new explicit exact-thread invocation creates a fresh projection and observes native history without
 restoring pending mutations or consuming the retired projection's command stream. The recovery
-acceptance below covers explicit WS/paginated history only.
-The historical M3a/M3b/recovery runs remain exact 0.151.0 evidence; the
-[release roadmap](release-finish-line.md) owns current-version, command-activity, interrupt/image, and
-command-approval and question acceptance.
+acceptance below covers exact 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated on Linux
+arm64. Legacy-history and simultaneous official-Remote recovery remain unqualified.
+The historical M3a/M3b runs remain exact 0.151.0 evidence; the
+[release roadmap](release-finish-line.md) owns current-version, command-activity, interrupt/image,
+command-approval, question, and recovery acceptance.
 
 ## 11. Agent adapters and inference connectors
 
