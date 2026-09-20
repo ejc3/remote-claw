@@ -748,10 +748,10 @@ publish and recovery-cursor bodies are shape-checked. The exact `410 + channel_s
 remains the only typed permanent channel-loss response.
 
 These are product limits, not invitations to rebuild a second protocol stack. M1, pinned M2, M3a,
-the bounded exact-tuple M3b coexistence/provider-transport-isolation gate, the explicit-WS/paginated
-Codex recovery follow-on, and the exact M5
-accountless Bedrock tuple are complete. Add protocol machinery only for a concrete later capability
-failure.
+the bounded exact-tuple M3b coexistence/provider-transport-isolation gate, the Codex recovery follow-on
+on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated, and the exact M5
+accountless Bedrock tuple are complete. Legacy-history and simultaneous official-Remote recovery remain
+unqualified. Add protocol machinery only for a concrete later capability failure.
 
 ## 13. Code and test map
 
