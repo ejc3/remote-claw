@@ -18,8 +18,9 @@ browser turns after provider-transport disconnect. Viewer UI-1 then completed an
 rollup and chronological detail sheet without adding provider lifecycle claims. The OpenCode status
 follow-on has since implemented, advertised, and separately accepted read-only MAIN running/idle.
 The separate [Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) also passed
-fresh-projection restart/backfill and broker-loss isolation on explicit-port loopback WebSocket with
-paginated history.
+fresh-projection restart/backfill and broker-loss isolation on Linux arm64 with 0.151.0/explicit-port
+loopback WebSocket and 0.153.4/managed Unix, both with paginated history. Legacy-history and simultaneous
+official-Remote recovery remain unqualified.
 Current evidence and remaining gates live in
 [native coexistence](native-rc-passthrough-scoping.md) and the
 [release roadmap](release-finish-line.md).
@@ -88,9 +89,11 @@ text, real status, and no other browser controls. Provider-transport isolation d
 phone or desktop client unsubscribed. The separate 2026-09-07
 [recovery acceptance](release-finish-line.md#codex-recovery--complete) establishes fresh-projection
 restart/backfill and broker-loss isolation for the pinned version/platform with explicit-port loopback
-WebSocket, paginated history, a packed CLI, local SQLite, one TUI, and two browsers. Recovery through
-managed Unix/legacy history or alongside official Remote and stable projection identity remain later
-adapter-local gates; they do not reopen M3a or M3b. Current code also accepts exact 0.153.4/Linux arm64,
+WebSocket, paginated history, a packed CLI, local SQLite, one TUI, and two browsers. The same sentinel
+passed separately on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
+paginated history. Legacy-history recovery, simultaneous official-Remote recovery, and stable
+projection identity remain later adapter-local gates; they do not reopen M3a or M3b.
+Current code also accepts exact 0.153.4/Linux arm64,
 displays completed shell commands/results as read-only activity, and supports browser interrupt on both
 accepted versions. Interrupt binds one observed active turn without retargeting or retrying; queued
 text waits for native idle. The current image follow-on reuses encrypted composer groups and native

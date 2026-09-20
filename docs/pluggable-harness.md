@@ -37,8 +37,10 @@ sending browser. A browser-B turn completed while an ephemeral provider transpor
 daemon, TUI, companion, and browsers stayed live before provider transport restored to connected. This
 is provider-transport isolation, not per-device unsubscribe. The separate
 [Codex recovery follow-on](release-finish-line.md#codex-recovery--complete) passed clean companion
-restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy.
-Those historical Codex results remain exact 0.151.0 evidence; current-version, command-activity, and
+restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated history. Those historical
+Codex results remain exact 0.151.0 evidence. The same sentinel separately passed on 2026-09-08 for
+exact 0.153.4/Linux arm64 through managed Unix with native-reported paginated history. Legacy-history
+and simultaneous official-Remote recovery remain unqualified. Current-version, command-activity, and
 interrupt/image, command-approval, and question acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
 remain disabled.
 Every current `Session` binding remains process-local.
@@ -342,7 +344,7 @@ attached for the projection lifetime.
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
 | Permission behavior | stable surface disabled | native/local; never projected or answered | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4: one-shot ordinary local-command decisions and bounded native choice forms with native resolution; 0.151.0 and unsupported permissions/questions remain native-owned |
 | Status advertised | yes | no | no | yes | yes |
-| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on explicit WS/paginated history |
+| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; legacy and simultaneous official-Remote recovery remain unqualified |
 
 The exact advertised viewer capabilities are:
 

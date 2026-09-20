@@ -6,8 +6,10 @@ thread through an explicit-port loopback app-server. M3b then passed on an exact
 for the same Codex version/platform through the literal managed Unix socket and legacy full-turn
 hydration. The separate 2026-09-07
 [recovery follow-on](release-finish-line.md#codex-recovery--complete) accepted clean companion
-restart/backfill and broker-loss isolation on explicit WS/paginated history, not managed Unix/legacy
-or simultaneous official Remote. The earlier `0.146.0` observations below remain historical seam evidence.
+restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated history. The same sentinel
+separately passed on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
+paginated history. Legacy-history and simultaneous official-Remote recovery remain unqualified.
+The earlier `0.146.0` observations below remain historical seam evidence.
 
 **Current implementation:** the version gate accepts exact `0.151.0` and `0.153.4` on Linux arm64.
 Besides native text/status, completed `commandExecution` items now become read-only `Shell` calls and

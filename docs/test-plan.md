@@ -12,7 +12,8 @@ follow-on and separate real-TUI/two-browser running-to-idle acceptance are also 
 0.151.0/Linux arm64 app-server text/status tuple and real-TUI/two-browser acceptance are green. M3b's
 exact official-Remote/TUI/two-browser coexistence and provider-transport-isolation outcome is also
 green for that tuple. The Codex clean companion restart/backfill and broker-loss follow-on is green
-on explicit WS/paginated history, not managed Unix/legacy. M4's packed exact-Claude/Linux/Bedrock tmux outcome is also green: local pane,
+on 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; legacy and simultaneous
+official-Remote recovery remain untested. M4's packed exact-Claude/Linux/Bedrock tmux outcome is also green: local pane,
 two browsers, reload, a browser turn queued without touching a focused native permission modal, local
 approval after both browsers departed, queued-turn completion, broker loss, and later local work. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
@@ -532,6 +533,9 @@ Secret, optionless, nonblocking, malformed, and all
 ### Codex recovery follow-on
 
 Passed on 2026-09-07 for exact Codex 0.151.0/Linux arm64, explicit-loopback WS and paginated history.
+The same sentinel passed on 2026-09-08 for exact 0.153.4/Linux arm64, managed Unix and native-reported
+paginated history; the [managed recovery result](release-finish-line.md#codex-recovery--complete)
+owns that acceptance record. Legacy and simultaneous official-Remote recovery remain untested.
 The single opt-in sentinel starts a built local SQLite broker and two Chromium contexts (desktop and
 phone), runs a packed-installed companion, stops/restarts it on the same native thread with a fresh
 projection, compares native text history unchanged, and checks browser turns once. It then cuts every
@@ -543,14 +547,19 @@ active session.
 Run `pnpm --dir tests/web test:codex-recovery-live` with these explicit environment inputs:
 
 - `RC_CODEX_RECOVERY_CLI`: absolute path to the packed-installed CLI.
-- `RC_CODEX_RECOVERY_URL`: exact explicit-port loopback WebSocket URL.
-- `RC_CODEX_RECOVERY_THREAD`: exact UUIDv7 of the paginated native thread with its TUI attached.
+- `RC_CODEX_RECOVERY_URL`: literal `unix://` for the same-user managed control socket, or an exact
+  explicit-port loopback WebSocket URL. Arbitrary Unix paths are not accepted.
+- `RC_CODEX_RECOVERY_THREAD`: exact UUIDv7 of the native thread with its TUI attached. Resume's
+  `historyMode` selects bounded paginated items or legacy full-turn history; it is not overridden.
 - `RC_CODEX_RECOVERY_CWD`: dedicated native working directory.
 - `RC_CODEX_RECOVERY_TMUX_SOCKET` and `RC_CODEX_RECOVERY_TMUX_TARGET`: the dedicated TUI's tmux socket
   and target.
 - Optional `RC_CODEX_RECOVERY_ARTIFACTS`: absolute private screenshot directory outside the checkout.
 
 The command sets `RC_CODEX_RECOVERY_LIVE=1`; ordinary suites never discover or probe native services.
+The observer reuses the production client and exact-version/platform checks, joins only the supplied
+thread, reads history/latest-turn metadata, and never submits work or answers native requests. The
+`codex-native-tuple` test attachment records only version, platform, transport, and actual history mode.
 Playwright traces are disabled because pairing is pass-bearing. The initial live attempt exposed a
 harness-only terminal input race; a bounded draft-presence wait and 250 ms settle before one Enter
 fixed submission. No application behavior changed for that finding.
@@ -560,8 +569,9 @@ abort, and native idle must not release already-parked browser text across that 
 focused regression observes a previously applied but unacknowledged prompt after restart without
 repeating its write, and rejects retired-session input. These do not need provider calls. The live
 sentinel stays because packed-process attachment, actual native history, browser reconstruction, and
-local TUI survival after socket loss cannot be established by the fake client. Managed-Unix/legacy,
-native-process crash recovery, and simultaneous official-Remote recovery remain outside this gate.
+local TUI survival after socket loss cannot be established by the fake client. The retained reader
+supports legacy history, but no live legacy recovery result is claimed. Native-process crash recovery
+and simultaneous official-Remote recovery remain outside this gate.
 
 The later milestones use the same shared security checks but keep product-specific truth:
 
@@ -569,7 +579,7 @@ The later milestones use the same shared security checks but keep product-specif
 | --- | --- |
 | OpenCode status follow-on | Complete: one installed exact 1.17.5 session's MAIN running-to-idle transition was observed consistently by an attached TUI and two independent Chromium contexts; this does not reopen M2 |
 | OpenCode beyond M2 | Each added version, platform, model, permission/control family, or native collaboration surface needs its own exact tuple and bounded outcome; it does not reopen the completed text/interrupt tuple |
-| Codex beyond accepted tuples | Current-version/read-only activity/interrupt/image/command-approval acceptance is tracked in the release roadmap. Managed-Unix/legacy recovery, further versions, platforms, other permissions/questions and controls, general files, and any per-device unsubscribe claim need their own bounded outcome without reopening the historical 0.151.0 text/status/coexistence and explicit-WS/paginated recovery results |
+| Codex beyond accepted tuples | Current-version/read-only activity/interrupt/image/command-approval/question and managed Unix/paginated recovery acceptance is tracked in the release roadmap. Legacy or simultaneous official-Remote recovery, further versions, platforms, other permissions/forms and controls, general files, and any per-device unsubscribe claim need their own bounded outcome without reopening accepted results |
 | tmux | Complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: packed install, recoverable local pane, two browsers, reload, active-turn isolation at a focused native permission modal, queued browser completion after both browsers depart, and broker-loss isolation; idle-editor concurrency, independent peer ordering, and provider-native/official-client coexistence are explicitly not advertised |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 
