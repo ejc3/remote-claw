@@ -79,6 +79,17 @@ export interface RcQuestionResponseInput {
   answer: string;
 }
 
+export interface RcBashInput {
+  command: string;
+  description: string;
+}
+
+export type RcCommandResponseInput = {
+  uuid: string;
+  requestId: string;
+  toolUseId: string;
+} & ({ behavior: "allow"; input: RcBashInput } | { behavior: "deny" });
+
 export interface RcPostAck {
   /** Anthropic's canonical event identity; this may differ from the submitted UUID. */
   eventId: string;
@@ -441,6 +452,48 @@ export class AnthropicRcClient {
                   questions: [validated.question],
                   answers: { [validated.question.question]: validated.answer },
                 },
+              },
+            },
+            uuid: validated.uuid,
+          },
+        },
+      ],
+    });
+    const raw = await this.#json(
+      operation,
+      "POST",
+      `/v1/code/sessions/${encodedSession}/events`,
+      options.signal,
+      body,
+      { retryAfter401: false },
+    );
+    return parsePostAck(raw, operation);
+  }
+
+  /** One captured Bash decision; Allow preserves native input and Deny carries no input rewrite. */
+  async postCommandResponse(
+    sessionId: string,
+    event: RcCommandResponseInput,
+    options: RcRequestOptions = {},
+  ): Promise<RcPostAck> {
+    const operation = "postCommandResponse";
+    const encodedSession = encodeSessionId(sessionId, operation);
+    const validated = validateCommandResponse(event, operation);
+    const body = JSON.stringify({
+      events: [
+        {
+          payload: {
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: validated.requestId,
+              response: {
+                behavior: validated.behavior,
+                toolUseID: validated.toolUseId,
+                tool_name: "Bash",
+                ...(validated.behavior === "allow"
+                  ? { updatedInput: validated.input }
+                  : { message: "Denied by user" }),
               },
             },
             uuid: validated.uuid,
@@ -936,7 +989,7 @@ function validateInterruptEvent(
 export function parseSingleChoiceQuestion(value: unknown): RcSingleChoiceQuestion | null {
   const operation = "parseSingleChoiceQuestion";
   try {
-    const question = questionInputSnapshot(
+    const question = controlInputSnapshot(
       value,
       ["header", "question", "multiSelect", "options"],
       operation,
@@ -956,12 +1009,12 @@ export function parseSingleChoiceQuestion(value: unknown): RcSingleChoiceQuestio
     const options: { label: string; description: string }[] = [];
     const labels = new Set<string>();
     for (let index = 0; index < optionCount; index += 1) {
-      const option = questionInputSnapshot(
+      const option = controlInputSnapshot(
         question.options[index],
         ["label", "description"],
         operation,
       );
-      const label = nonblankQuestionString(option.label, operation, "option label", 1024);
+      const label = nonblankControlString(option.label, operation, "option label", 1024);
       if (
         labels.has(label) ||
         typeof option.description !== "string" ||
@@ -974,7 +1027,7 @@ export function parseSingleChoiceQuestion(value: unknown): RcSingleChoiceQuestio
     }
     return {
       header: question.header,
-      question: nonblankQuestionString(question.question, operation, "question", 16_384),
+      question: nonblankControlString(question.question, operation, "question", 16_384),
       multiSelect: false,
       options,
     };
@@ -983,12 +1036,51 @@ export function parseSingleChoiceQuestion(value: unknown): RcSingleChoiceQuestio
   }
 }
 
+/** Only the captured command/description input; execution extensions remain native-owned. */
+export function parseBashInput(value: unknown): RcBashInput | null {
+  const operation = "parseBashInput";
+  try {
+    const input = controlInputSnapshot(value, ["command", "description"], operation);
+    return {
+      command: nonblankControlString(input.command, operation, "command", 16_384),
+      description: nonblankControlString(input.description, operation, "description", 4096),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function validateCommandResponse(
+  event: RcCommandResponseInput,
+  operation: string,
+): RcCommandResponseInput {
+  try {
+    const hasInput = Object.hasOwn(expectRecord(event, operation, "command response"), "input");
+    const input = controlInputSnapshot(
+      event,
+      ["uuid", "requestId", "toolUseId", "behavior", ...(hasInput ? ["input"] : [])],
+      operation,
+    );
+    const identity = {
+      uuid: nonblankControlString(input.uuid, operation, "uuid", 256),
+      requestId: nonblankControlString(input.requestId, operation, "requestId", 256),
+      toolUseId: nonblankControlString(input.toolUseId, operation, "toolUseId", 256),
+    };
+    if (input.behavior === "deny" && !hasInput) return { ...identity, behavior: "deny" };
+    const bash = input.behavior === "allow" && hasInput ? parseBashInput(input.input) : null;
+    if (bash !== null) return { ...identity, behavior: "allow", input: bash };
+  } catch {
+    // Invalid caller fields never cross the transport boundary.
+  }
+  throw AnthropicRcError.protocol(operation, "invalid command response input");
+}
+
 function validateQuestionResponse(
   event: RcQuestionResponseInput,
   operation: string,
 ): RcQuestionResponseInput {
   try {
-    const input = questionInputSnapshot(
+    const input = controlInputSnapshot(
       event,
       ["uuid", "requestId", "toolUseId", "question", "answer"],
       operation,
@@ -1002,9 +1094,9 @@ function validateQuestionResponse(
       throw AnthropicRcError.protocol(operation, "answer is not an offered choice");
     }
     return {
-      uuid: nonblankQuestionString(input.uuid, operation, "uuid", 256),
-      requestId: nonblankQuestionString(input.requestId, operation, "requestId", 256),
-      toolUseId: nonblankQuestionString(input.toolUseId, operation, "toolUseId", 256),
+      uuid: nonblankControlString(input.uuid, operation, "uuid", 256),
+      requestId: nonblankControlString(input.requestId, operation, "requestId", 256),
+      toolUseId: nonblankControlString(input.toolUseId, operation, "toolUseId", 256),
       question,
       answer: input.answer,
     };
@@ -1014,20 +1106,20 @@ function validateQuestionResponse(
   }
 }
 
-function questionInputSnapshot(
+function controlInputSnapshot(
   value: unknown,
   fields: readonly string[],
   operation: string,
 ): Record<string, unknown> {
-  const input = expectRecord(value, operation, "question response");
+  const input = expectRecord(value, operation, "control input");
   const keys = Reflect.ownKeys(input);
   if (keys.length !== fields.length || fields.some((field) => !Object.hasOwn(input, field))) {
-    throw AnthropicRcError.protocol(operation, "unexpected question response fields");
+    throw AnthropicRcError.protocol(operation, "unexpected control input fields");
   }
   return Object.fromEntries(fields.map((field) => [field, input[field]]));
 }
 
-function nonblankQuestionString(
+function nonblankControlString(
   value: unknown,
   operation: string,
   field: string,

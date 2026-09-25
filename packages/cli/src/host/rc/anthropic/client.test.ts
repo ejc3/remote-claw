@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   AnthropicRcClient,
+  parseBashInput,
+  type RcCommandResponseInput,
   type RcInterruptEventInput,
   type RcQuestionResponseInput,
   type RcUserEventInput,
@@ -703,6 +705,169 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
     });
     expect(String(error)).not.toContain("private-network-canary");
     expect(transport.requests).toHaveLength(1);
+  });
+});
+
+describe("AnthropicRcClient.postCommandResponse", () => {
+  const bash = { command: "printf 'approval sentinel\\n'", description: "Print test sentinel" };
+  const identity = { uuid: "decision-uuid", requestId: "request-id", toolUseId: "tool-id" };
+  const commandInput = (behavior: "allow" | "deny"): RcCommandResponseInput =>
+    behavior === "allow"
+      ? { ...identity, behavior, input: { ...bash } }
+      : { ...identity, behavior };
+
+  it.each(["allow", "deny"] as const)("posts the exact captured %s body once", async (behavior) => {
+    const transport = new FakeTransport(
+      json({ results: [{ event_id: "evt_decision", sequence_num: "30", duplicate: false }] }),
+    );
+    await expect(
+      new AnthropicRcClient({ transport }).postCommandResponse("cse/a", commandInput(behavior)),
+    ).resolves.toEqual({ eventId: "evt_decision", sequenceNum: "30", duplicate: false });
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0]).toMatchObject({
+      operation: "postCommandResponse",
+      method: "POST",
+      path: "/v1/code/sessions/cse%2Fa/events",
+      accept: "application/json",
+      retryAfter401: false,
+    });
+    expect(JSON.parse(transport.requests[0]?.body ?? "{}")).toEqual({
+      events: [
+        {
+          payload: {
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: identity.requestId,
+              response: {
+                behavior,
+                toolUseID: identity.toolUseId,
+                tool_name: "Bash",
+                ...(behavior === "allow" ? { updatedInput: bash } : { message: "Denied by user" }),
+              },
+            },
+            uuid: identity.uuid,
+          },
+        },
+      ],
+    });
+  });
+
+  it("copies only exact Bash input, preserving whitespace and accepting inclusive bounds", () => {
+    const input = { command: "  printf 'keep whitespace\\n'\n", description: " Print sentinel " };
+    const parsed = parseBashInput(input);
+    expect(parsed).toEqual(input);
+    expect(parsed).not.toBe(input);
+    input.command = "changed";
+    expect(parsed?.command).toBe("  printf 'keep whitespace\\n'\n");
+    const maximum = { command: "c".repeat(16_384), description: "d".repeat(4096) };
+    expect(parseBashInput(maximum)).toEqual(maximum);
+  });
+
+  it("rejects unsupported input, branch fields, and identities before dispatch", async () => {
+    const invalidBash: unknown[] = [
+      null,
+      [],
+      "command",
+      {},
+      { command: "printf x" },
+      { description: "Print x" },
+      ...["", " \t", 1, "c".repeat(16_385)].map((command) => ({ ...bash, command })),
+      ...["", " \n", 1, "d".repeat(4097)].map((description) => ({ ...bash, description })),
+      ...["cwd", "run_in_background", "dangerouslyDisableSandbox", "updatedPermissions"].map(
+        (field) => ({ ...bash, [field]: true }),
+      ),
+      Object.assign(Object.create({ command: bash.command }), { description: bash.description }),
+    ];
+    const invalid: unknown[] = [
+      null,
+      [],
+      {},
+      { ...identity, behavior: "allow" },
+      { ...identity, behavior: "deny", input: bash },
+      { ...identity, behavior: "deny", input: undefined },
+      ...["accept", "allowAll", "", null].map((behavior) => ({ ...identity, behavior })),
+      ...invalidBash.map((input) => ({ ...identity, behavior: "allow", input })),
+    ];
+    for (const input of invalidBash) expect(parseBashInput(input)).toBeNull();
+    for (const behavior of ["allow", "deny"] as const) {
+      for (const field of [
+        "message",
+        "updatedInput",
+        "updatedPermissions",
+        "tool_name",
+        "session_id",
+      ]) {
+        invalid.push({ ...commandInput(behavior), [field]: "not forwarded" });
+      }
+      for (const field of ["uuid", "requestId", "toolUseId"]) {
+        for (const value of ["", " \t", 1, "x".repeat(257)]) {
+          invalid.push({ ...commandInput(behavior), [field]: value });
+        }
+      }
+    }
+    const transport = new FakeTransport();
+    const client = new AnthropicRcClient({ transport });
+    for (const input of invalid) {
+      await expect(
+        client.postCommandResponse("cse_input", input as RcCommandResponseInput),
+      ).rejects.toMatchObject({
+        kind: "protocol",
+        operation: "postCommandResponse",
+        retryable: false,
+        outcomeUnknown: false,
+      });
+    }
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it.each(["allow", "deny"] as const)("accepts bounded %s identities", async (behavior) => {
+    const transport = new FakeTransport(
+      json({ results: [{ event_id: "evt_decision", sequence_num: "30", duplicate: false }] }),
+    );
+    await expect(
+      new AnthropicRcClient({ transport }).postCommandResponse("cse_input", {
+        ...commandInput(behavior),
+        uuid: "u".repeat(256),
+        requestId: "r".repeat(256),
+        toolUseId: "t".repeat(256),
+      }),
+    ).resolves.toMatchObject({ eventId: "evt_decision" });
+  });
+
+  it.each([
+    "allow",
+    "deny",
+  ] as const)("never replays %s after 401 or an ambiguous network write", async (behavior) => {
+    for (const failure of ["unauthorized", "network"] as const) {
+      const authRequests: boolean[] = [];
+      let fetchCalls = 0;
+      const client = new AnthropicRcClient({
+        oauth: {
+          async accessToken(options) {
+            authRequests.push(options.forceRefresh);
+            return options.forceRefresh ? "rotated-test-token" : "test-token";
+          },
+        },
+        fetchFn: async () => {
+          fetchCalls += 1;
+          if (failure === "network") throw new Error("private-command-network-canary");
+          return json({}, 401);
+        },
+      });
+      const error = await client
+        .postCommandResponse("cse_input", commandInput(behavior))
+        .catch((caught: unknown) => caught);
+      expect(error).toMatchObject({
+        operation: "postCommandResponse",
+        retryable: false,
+        outcomeUnknown: failure === "network",
+        ...(failure === "unauthorized" ? { kind: "http", status: 401 } : { kind: "network" }),
+      });
+      expect(String(error)).not.toContain("private-command-network-canary");
+      expect(authRequests).toEqual([false]);
+      expect(fetchCalls).toBe(1);
+    }
   });
 });
 

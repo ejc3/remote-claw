@@ -353,13 +353,17 @@ and does not block manual-pass onboarding while the feature remains disabled.
 
 ## 7. Claude native coexistence acceptance
 
-The current single-choice follow-on has focused `anthropic/{questions,client,driver}.test.ts` and
-viewer tests for exact offered-label admission, copied native snapshots, no history authority,
+The current single-choice and Bash follow-ons share focused `anthropic/{controls,client,driver}.test.ts`
+and viewer tests for exact offered-label or captured-command admission, copied native snapshots, no history authority,
 one-attempt responses without 401 retry, peer consumption versus exact worker completion, stale
 answers, and pending-stream-loss isolation. The shared viewer tests own honest disclosure and neutral
 resolved/reload states. The bounded [live result](release-finish-line.md#claude-native-single-choice-questions)
 owns actual Mac/native-TUI/two-viewer wiring, which mocks cannot establish; it does not rewrite the
-historical M1 acceptance below or add a new recovery matrix.
+historical M1 acceptance below or add a new recovery matrix. The
+[Bash boundary](protocol.md#claude-native-bash-approvals) adds captured Allow/Deny serialization,
+unknown-field exclusion, complete-command/missing-cwd disclosure, and rejection-result closure to the
+same lifecycle tests. Its [live acceptance](release-finish-line.md#claude-native-bash-approvals) owns
+native/browser decision wiring and actual non-execution evidence, not another lifecycle matrix.
 
 ### M0 lower-fidelity baseline — observed 2026-08-24
 

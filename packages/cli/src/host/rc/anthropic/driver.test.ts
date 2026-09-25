@@ -11,6 +11,7 @@ import type { Session } from "../session.js";
 import {
   type AnthropicRcEvent,
   MAX_USER_CONTENT_CHARS,
+  type RcCommandResponseInput,
   type RcEventPage,
   type RcInterruptEventInput,
   type RcPostAck,
@@ -120,6 +121,12 @@ class FakeNativeClient implements ClaudeNativeClient {
   readonly postCalls: Array<{ sessionId: string; input: RcUserEventInput }> = [];
   readonly interruptCalls: Array<{ sessionId: string; input: RcInterruptEventInput }> = [];
   readonly questionCalls: Array<{ sessionId: string; input: RcQuestionResponseInput }> = [];
+  readonly commandCalls: Array<{ sessionId: string; input: RcCommandResponseInput }> = [];
+  commandImpl: () => Promise<RcPostAck> = async () => ({
+    eventId: "command-ack",
+    sequenceNum: "2",
+    duplicate: false,
+  });
   questionImpl: () => Promise<RcPostAck> = async () => ({
     eventId: "question-ack",
     sequenceNum: "2",
@@ -177,6 +184,11 @@ class FakeNativeClient implements ClaudeNativeClient {
   postQuestionResponse(sessionId: string, input: RcQuestionResponseInput): Promise<RcPostAck> {
     this.questionCalls.push({ sessionId, input });
     return this.questionImpl();
+  }
+
+  postCommandResponse(sessionId: string, input: RcCommandResponseInput): Promise<RcPostAck> {
+    this.commandCalls.push({ sessionId, input });
+    return this.commandImpl();
   }
 }
 
@@ -531,7 +543,20 @@ function nativeQuestion(sequence = "1"): AnthropicRcEvent {
   };
 }
 
-function nativeQuestionDone(sequence = "2"): AnthropicRcEvent {
+function nativeBash(): AnthropicRcEvent {
+  const event = nativeQuestion();
+  (event.payload as Record<string, unknown>).request = {
+    subtype: "can_use_tool",
+    tool_name: "Bash",
+    display_name: "Bash",
+    description: "",
+    tool_use_id: "native-tool",
+    input: { command: "printf 'sentinel\\n'", description: "Print test sentinel" },
+  };
+  return event;
+}
+
+function nativeQuestionDone(sequence = "2", rejected = false): AnthropicRcEvent {
   const payload = {
     type: "user",
     uuid: `question-done-${sequence}`,
@@ -539,7 +564,14 @@ function nativeQuestionDone(sequence = "2"): AnthropicRcEvent {
     parent_tool_use_id: null,
     message: {
       role: "user",
-      content: [{ type: "tool_result", tool_use_id: "native-tool", content: "Blue" }],
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "native-tool",
+          content: rejected ? "Denied by user" : "Blue",
+          is_error: rejected,
+        },
+      ],
     },
   };
   return {
@@ -555,7 +587,7 @@ function nativeQuestionDone(sequence = "2"): AnthropicRcEvent {
   };
 }
 
-function questionAnswer(harness: Harness): string {
+function questionAnswer(harness: Harness, behavior: "allow" | "deny" = "allow"): string {
   const posted = harness.broker.posts.find(
     ({ header }) => header.recordKind === "permission_request",
   );
@@ -563,8 +595,10 @@ function questionAnswer(harness: Harness): string {
   const form = JSON.parse(posted.text);
   return JSON.stringify({
     request_id: form.request_id,
-    behavior: "allow",
-    answers: { [form.tool_input.questions[0].id]: "Blue" },
+    behavior,
+    ...(form.tool_name === "AskUserQuestion"
+      ? { answers: { [form.tool_input.questions[0].id]: "Blue" } }
+      : {}),
   });
 }
 
@@ -1650,28 +1684,38 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     expect(harness.proxy.closed).toBe(true);
   });
 
-  it("carries a fresh native question through the existing browser card and worker resolution", async () => {
+  it.each([
+    "question",
+    "allow",
+    "deny",
+  ] as const)("carries fresh native %s through the existing browser card and worker resolution", async (kind) => {
     const harness = await startHarness();
     try {
       await bindReady(harness, "cse_question");
-      harness.native.streams[0]?.push(nativeQuestion());
+      harness.native.streams[0]?.push(kind === "question" ? nativeQuestion() : nativeBash());
       await waitFor(() =>
         harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
       );
-      const answer = questionAnswer(harness);
+      const answer = questionAnswer(harness, kind === "deny" ? "deny" : "allow");
       harness.broker.push(inbound(harness, "permission", "answer-a", answer));
       harness.broker.push(inbound(harness, "permission", "answer-b", answer));
-      await waitFor(() => harness.native.questionCalls.length === 1);
-      expect(harness.native.questionCalls[0]).toMatchObject({
+      const calls =
+        kind === "question" ? harness.native.questionCalls : harness.native.commandCalls;
+      await waitFor(() => calls.length === 1);
+      expect(calls[0]).toMatchObject({
         sessionId: "cse_question",
-        input: { requestId: "native-question", toolUseId: "native-tool", answer: "Blue" },
+        input: {
+          requestId: "native-question",
+          toolUseId: "native-tool",
+          ...(kind === "question" ? { answer: "Blue" } : { behavior: kind }),
+        },
       });
       expect(
         harness.broker.posts
           .filter(({ header }) => header.recordKind === "permission_resolved")
           .map(({ text }) => JSON.parse(text).behavior),
       ).toEqual(["pending"]);
-      harness.native.streams[0]?.push(nativeQuestionDone());
+      harness.native.streams[0]?.push(nativeQuestionDone("2", kind === "deny"));
       await waitFor(
         () =>
           harness.broker.posts.filter(({ header }) => header.recordKind === "permission_resolved")
@@ -1684,7 +1728,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       ).toEqual(["pending", "resolved"]);
       harness.broker.push(inbound(harness, "permission", "late-answer", answer));
       await tick();
-      expect(harness.native.questionCalls).toHaveLength(1);
+      expect(calls).toHaveLength(1);
     } finally {
       await harness.stop();
     }
@@ -1757,19 +1801,27 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
   });
 
   it.each([
-    false,
-    true,
-  ])("fences only the companion on stream EOF with a submitted=%s question", async (submitted) => {
+    { kind: "question", submitted: false },
+    { kind: "question", submitted: true },
+    { kind: "bash", submitted: true },
+  ])("fences only the companion on stream EOF with a submitted=$submitted $kind", async ({
+    kind,
+    submitted,
+  }) => {
     const harness = await startHarness();
     try {
       await bindReady(harness, "cse_question");
-      harness.native.streams[0]?.push(nativeQuestion());
+      harness.native.streams[0]?.push(kind === "question" ? nativeQuestion() : nativeBash());
       await waitFor(() =>
         harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
       );
       if (submitted) {
         harness.broker.push(inbound(harness, "permission", "answer", questionAnswer(harness)));
-        await waitFor(() => harness.native.questionCalls.length === 1);
+        await waitFor(
+          () =>
+            (kind === "question" ? harness.native.questionCalls : harness.native.commandCalls)
+              .length === 1,
+        );
       }
       harness.native.streams[0]?.end();
       await waitFor(() => harness.session.closed);
@@ -1781,24 +1833,24 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     }
   });
 
-  it("fences an ambiguous question POST before any later browser mutation", async () => {
+  it("fences an ambiguous command POST before any later browser mutation", async () => {
     const harness = await startHarness();
-    harness.native.questionImpl = async () => {
-      throw AnthropicRcError.network("postQuestionResponse", {
+    harness.native.commandImpl = async () => {
+      throw AnthropicRcError.network("postCommandResponse", {
         retryable: false,
         outcomeUnknown: true,
       });
     };
     try {
       await bindReady(harness, "cse_question");
-      harness.native.streams[0]?.push(nativeQuestion());
+      harness.native.streams[0]?.push(nativeBash());
       await waitFor(() =>
         harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
       );
       harness.broker.push(inbound(harness, "permission", "answer", questionAnswer(harness)));
       harness.broker.push(inbound(harness, "user", "later", "must not post"));
       await waitFor(() => harness.session.closed);
-      expect(harness.native.questionCalls).toHaveLength(1);
+      expect(harness.native.commandCalls).toHaveLength(1);
       expect(harness.native.postCalls).toEqual([]);
       expect(harness.isRunSettled()).toBe(false);
     } finally {
