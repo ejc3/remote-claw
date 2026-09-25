@@ -63,6 +63,7 @@ export interface CodexInitializeResult {
 export interface CodexResumeResult {
   thread: {
     id: string;
+    name?: string;
     status: CodexThreadStatus;
     canAcceptDirectInput: boolean | null;
     historyMode: "legacy" | "paginated";
@@ -332,9 +333,12 @@ export class CodexAppServerClient implements CodexClient {
     ) {
       throw new CodexAppServerError("Codex returned an invalid resumed thread");
     }
+    // A display label is optional and must not prevent an otherwise valid thread from attaching.
+    const name = typeof thread.name === "string" ? thread.name.trim().slice(0, 512) : "";
     return {
       thread: {
         id: thread.id,
+        ...(name === "" ? {} : { name }),
         status: parseCodexStatus(thread.status),
         canAcceptDirectInput: thread.canAcceptDirectInput,
         historyMode: thread.historyMode,

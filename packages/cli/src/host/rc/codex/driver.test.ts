@@ -355,7 +355,10 @@ async function context(
   };
 }
 
-async function start(client = new FakeCodexClient()): Promise<{
+async function start(
+  client = new FakeCodexClient(),
+  threadId = THREAD_ID,
+): Promise<{
   ac: AbortController;
   broker: FakeDurableBroker;
   client: FakeCodexClient;
@@ -370,7 +373,7 @@ async function start(client = new FakeCodexClient()): Promise<{
   });
   const driver = new CodexDriver(driverContext, {
     url: "ws://127.0.0.1:4500",
-    threadId: THREAD_ID,
+    threadId,
     client,
     runtime: { platform: "linux", arch: "arm64" },
   });
@@ -510,6 +513,51 @@ describe("Codex M3a companion", () => {
 
   afterEach(() => {
     for (const controller of controllers.splice(0)) controller.abort();
+  });
+
+  it.each([
+    ["Run native parity smoke test", `Run native parity smoke test · ${THREAD_ID}`],
+    [undefined, `Codex ${THREAD_ID}`],
+  ])("announces an exact native thread label (%s)", async (name, expected) => {
+    const client = new FakeCodexClient();
+    if (name !== undefined) client.resumeResult.thread.name = name;
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    try {
+      const announce = launched.broker.posts.find((post) => post.recordKind === "session_announce");
+      expect(JSON.parse(announce?.text ?? "{}").title).toBe(expected);
+      expect(client.resumeCalls).toEqual([THREAD_ID]);
+      expect(client.startCalls).toEqual([]);
+    } finally {
+      launched.ac.abort();
+      await expect(launched.run).resolves.toBe(0);
+    }
+  });
+
+  it("distinguishes same-name native threads in the same working-directory context", async () => {
+    const labels: unknown[] = [];
+    for (const threadId of [THREAD_ID, OTHER_THREAD_ID]) {
+      const client = new FakeCodexClient();
+      client.resumeResult.thread.id = threadId;
+      client.resumeResult.thread.name = "Same native name";
+      const launched = await start(client, threadId);
+      controllers.push(launched.ac);
+      try {
+        const post = launched.broker.posts.find((entry) => entry.recordKind === "session_announce");
+        const announcement = JSON.parse(post?.text ?? "{}");
+        labels.push(announcement.title);
+        expect(announcement.cwd).toBe("/tmp");
+        expect(client.resumeCalls).toEqual([threadId]);
+        expect(client.startCalls).toEqual([]);
+      } finally {
+        launched.ac.abort();
+        await expect(launched.run).resolves.toBe(0);
+      }
+    }
+    expect(labels).toEqual([
+      `Same native name · ${THREAD_ID}`,
+      `Same native name · ${OTHER_THREAD_ID}`,
+    ]);
   });
 
   it("keeps presence private until exact-thread resume and bounded history complete", async () => {

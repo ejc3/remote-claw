@@ -225,6 +225,26 @@ the blocked-storage failure is covered at the storage adapter. Screenshots and b
 stay outside Git under `~/remote-claw-ui-artifacts/daily-use-2026-09-25.9ZJ8g9`.
 This is shared-web behavior, not physical-phone keyboard or native mobile-app qualification.
 
+### Physical-phone follow-up and native session labels — 2026-09-25
+
+**Current:** the follow-up uses a physical Moto G 2025/Android 15 with Chrome 153, connected through
+an existing authenticated, loopback-only Mac/ADB tunnel. Actual keyboard entry/newline, separate
+Claude/Codex drafts, Codex text delivery, Claude single-choice answers, and one-time Bash Allow have
+been observed on that phone and reconciled with native results. This does not qualify iPhone/WebKit,
+public deployment transport, or either provider's native mobile-app Remote connection. The detailed
+accepted cases, screenshots, and exclusions remain outside Git under
+`~/remote-claw-ui-artifacts/physical-phone-2026-09-25.JYuJIq`.
+
+That run exposed indistinguishable native session rows: each companion advertised `remote-claw`, even
+when native Codex supplied a thread name. Codex now preserves that optional display name, trimmed and
+bounded to 512 code units, followed by the exact native thread ID so duplicate names remain
+distinguishable. Without a valid name it uses `Codex <exact native thread ID>`. Compact rows can
+truncate the label; Session actions → Details shows the full name and ID. Claude-native uses
+`Claude <exact bound native session ID>` without adding discovery or metadata requests. These are
+display-only, launch-time labels; they do not follow later native renames, provide stable projection
+IDs, or change attachment authority. Detailed regressions live at the existing native client/driver
+boundaries; no new E2E framework or permission mechanism was added.
+
 ### Claude-native single-choice questions
 
 **Implemented; bounded live acceptance passed 2026-09-25.** Exact Claude 2.1.237/Linux supports single
