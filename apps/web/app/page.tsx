@@ -1314,7 +1314,16 @@ export function Transcript(props: {
   const codex = announce?.harness?.agent === "codex" && announce.harness.mode === "app-server";
   const nativeCommandApprovals =
     codex && interaction.structuredPermissions && caps?.permissionResolution === "native";
-  const nativeQuestions = nativeCommandApprovals && caps?.structuredQuestions === true;
+  const nativeQuestions =
+    interaction.structuredPermissions &&
+    caps?.permissionResolution === "native" &&
+    caps.structuredQuestions === true;
+  const claudeQuestionDisclosure =
+    announce?.harness?.agent === "claude-code" &&
+    announce.harness.mode === "native-rc" &&
+    nativeQuestions
+      ? "Supported single-choice questions here; other permissions stay in Claude"
+      : null;
   // Rolling deploys can still surface an older tmux host with either the historical permission mirror
   // or explicit bypass. Only a new, exact local-posture tuple earns the local-ownership claim.
   const tmuxText = isTmuxGatedTextSurface(announce?.harness, caps);
@@ -1326,11 +1335,12 @@ export function Transcript(props: {
   const localInputDisclosure = !interaction.text
     ? "This harness or input policy is not supported. Update remote-claw to enable controls."
     : interaction.structuredPermissions
-      ? nativeCommandApprovals
-        ? nativeQuestions
-          ? "Command approvals and supported questions can be answered here. Other approvals stay in Codex."
-          : "Command approvals can be answered here. Questions and other approvals stay in Codex."
-        : null
+      ? (claudeQuestionDisclosure ??
+        (nativeCommandApprovals
+          ? nativeQuestions
+            ? "Command approvals and supported questions can be answered here. Other approvals stay in Codex."
+            : "Command approvals can be answered here. Questions and other approvals stay in Codex."
+          : null))
       : codex
         ? "Approvals and questions stay in the local Codex TUI."
         : supportedOpenCode
@@ -2043,11 +2053,12 @@ export function Transcript(props: {
                       : supportedOpenCode
                         ? "Permission prompts stay in OpenCode"
                         : "Permission prompts stay in the local terminal"
-                    : nativeCommandApprovals
-                      ? nativeQuestions
-                        ? "Command approvals and supported questions here; other approvals stay in Codex"
-                        : "Command approvals here; questions and other approvals stay in Codex"
-                      : "Permission prompts can be answered here"
+                    : (claudeQuestionDisclosure ??
+                      (nativeCommandApprovals
+                        ? nativeQuestions
+                          ? "Command approvals and supported questions here; other approvals stay in Codex"
+                          : "Command approvals here; questions and other approvals stay in Codex"
+                        : "Permission prompts can be answered here"))
           }
           branch={announce?.git?.branch ?? null}
           currentModel={optimisticModel}

@@ -96,13 +96,21 @@ describe("RC_HELP banner", () => {
   it("exposes the bounded Claude native companion separately from the private relay", () => {
     expect(RC_HELP).toMatch(/mitm \| claude-native \| tmux \| opencode/);
     expect(RC_HELP).toContain("Claude native companion (--rc-driver=claude-native)");
-    expect(RC_HELP).toContain("Linux/Claude 2.1.237 text/image/interrupt companion");
+    expect(RC_HELP).toContain("Linux/Claude 2.1.237 text/image/interrupt/question companion");
     expect(RC_HELP).toMatch(/Images become private host-owned\s+upload files/);
     expect(RC_HELP).toContain("256 MiB decoded-image budget is per companion run");
     expect(RC_HELP).toContain("not a global or cross-restart disk quota");
     expect(RC_HELP).toMatch(/Literal official-client coexistence acceptance passed/);
     expect(RC_HELP).toContain("session-scoped Interrupt");
     expect(RC_HELP).toContain("a delayed Stop may affect newer work");
+    expect(RC_HELP).toContain(
+      "Supported single-choice questions can be answered here; other permissions stay in Claude",
+    );
+    expect(RC_HELP).toMatch(/Only fresh live AskUserQuestion forms with one offered-label choice/);
+    expect(RC_HELP).toMatch(/free text,\s+multiselect, and skip stay native/);
+    expect(RC_HELP).toContain("Answers are sent once and wait for matching native tool completion");
+    expect(RC_HELP).toContain("History never restores answer authority");
+    expect(RC_HELP).toContain("stream drop with an open question retires only the companion");
     expect(RC_HELP).toMatch(/--rc-inference, --rc-bedrock-\*, and --rc-accountless\s+are rejected/);
     expect(RC_HELP).toMatch(/--rc-native-session <cse_…>/);
     expect(RC_HELP).toMatch(/starts no interactive Claude session or proxy/);

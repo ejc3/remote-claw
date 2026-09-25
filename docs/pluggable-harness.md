@@ -8,7 +8,8 @@ Five drivers exist:
 
 - `mitm` — the default Claude Code Remote Control adapter;
 - `claude-native` — the Linux/exact-2.1.237 structured companion for ordinary Anthropic Remote
-  Control, with ordinary text, host-owned image uploads, one-shot session-scoped Interrupt, and read-only worker tool activity;
+  Control, with ordinary text, host-owned image uploads, one-shot session-scoped Interrupt,
+  supported fresh single-choice responses, and read-only worker tool activity;
 - `tmux` — the maintained lower-fidelity plain-Claude compatibility adapter;
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
 - `codex` — the exact 0.151.0, 0.153.4, or 0.154.0/Linux arm64 app-server companion: text, images, and interrupt,
@@ -255,6 +256,13 @@ rejected/unknown outcome fences only the companion. Status remains false; see
 [control semantics](protocol.md#11-compatibility-control-verbs) and the separate current acceptance
 in the [release roadmap](release-finish-line.md).
 
+Fresh single offered-choice questions use the existing native-resolution card and one-shot writer;
+other permissions and forms remain native. History cannot grant authority, and a lost live stream
+with an unresolved form retires only the companion. The
+[protocol boundary](protocol.md#claude-native-single-choice-questions) owns exact admission and
+resolution rules; [live acceptance](release-finish-line.md#claude-native-single-choice-questions)
+is separate from M1.
+
 The Codex companion waits for native idle, rechecks that its projection is still open, starts one turn
 with the broker event ID as
 `clientUserMessageId`, and acknowledges only after the matching completed native user item appears.
@@ -344,7 +352,7 @@ attached for the projection lifetime.
 | Capture | authenticated RC event batches | subscribe-before-history provider reconciliation | tail main and sub-agent JSONL | history plus coalesced SSE parts | resume subscription, `historyMode`-selected bounded text/completed-command history, then buffered/live notifications |
 | Remote text | Claude downstream SSE | serialized provider event POST | non-empty non-slash private-buffer text; helper/flock gates pane paste + Enter against active native turns | `prompt_async` | serialized `turn/start`, correlated to completed native user item |
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
-| Permission behavior | stable surface disabled | native/local; never projected or answered | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4/0.154.0: one-shot ordinary local-command decisions and bounded native choice forms with native resolution; 0.151.0 and unsupported permissions/questions remain native-owned |
+| Permission behavior | stable surface disabled | fresh single-choice forms with native resolution; other permissions/forms remain native/local | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4/0.154.0: one-shot ordinary local-command decisions and bounded native choice forms with native resolution; 0.151.0 and unsupported permissions/questions remain native-owned |
 | Status advertised | yes | no | no | yes | yes |
 | Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; legacy and simultaneous official-Remote recovery remain unqualified |
 
@@ -353,7 +361,7 @@ The exact advertised viewer capabilities are:
 | Driver | Permissions | Status | Interrupt | Model | Mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable `mitm` | no | yes | no | no | no | no | no |
-| `claude-native` | no | no | yes; session-scoped | no | no | no | yes; images only |
+| `claude-native` | fresh single-choice forms only; native resolution | no | yes; session-scoped | no | no | no | yes; images only |
 | `tmux` | no; posture says native/local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
 | `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |

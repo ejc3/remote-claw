@@ -51,8 +51,10 @@ references are hidden in the displayed names/caption. Attempted upload files are
 turn coordinate and can affect newer peer work if delayed; the companion waits for matching canonical
 worker success before later browser text without advertising idle status. Current acceptance belongs
 to the [release roadmap](release-finish-line.md), not a rewrite of M1. The structured critical path
-remains outside Claude; permissions, questions, modes, slash commands, general files, image previews, end, and truthful
-status may graduate later one family at a time.
+remains outside Claude. The current [single-choice boundary](protocol.md#claude-native-single-choice-questions)
+and its [acceptance](release-finish-line.md#claude-native-single-choice-questions) add only fresh offered-choice
+responses; other permissions and forms, modes, slash commands, general files, image previews, end, and
+truthful status may graduate later one family at a time.
 Keep the private replacement relay as a separately labeled mode for environments that do not need the
 official client.
 

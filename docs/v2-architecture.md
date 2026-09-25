@@ -409,11 +409,15 @@ Only the generated reference-group form is stripped for display, retaining sanit
 on live/history projection. Raw image slots are released after preparation, but attempted files remain
 for native ingestion even after companion loss. The 256 MiB decoded-image budget is per companion run,
 not a global or cross-restart quota. See [upload bounds and retention](protocol.md#10-attachments).
-The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text, images, and Interrupt;
-permissions, status, other controls, general files, and image previews remain disabled. This surface is Linux-only and
+The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text, images, Interrupt,
+and [fresh single-choice responses](protocol.md#claude-native-single-choice-questions). Other permissions
+and forms, status, other controls, general files, and image previews remain disabled. This surface is Linux-only and
 pins exact Claude 2.1.237. The [release roadmap](release-finish-line.md) owns current Interrupt acceptance,
 separately from historical M1. [Image acceptance](release-finish-line.md#claude-native-images--complete)
 also remains a separate follow-on, not a rewrite of M1.
+The separate [question result](release-finish-line.md#claude-native-single-choice-questions) records its
+native-app/two-viewer acceptance. History grants no question authority; losing the live stream with
+an unresolved form retires only the companion, not native Claude.
 
 ### 10.5 Pinned OpenCode text/interrupt/status companion
 
@@ -521,7 +525,7 @@ have narrower, truthfully labeled guarantees.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
-| Claude native companion | Structured text projection, host-owned image uploads, read-only tool activity, and one-shot session-scoped Interrupt over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; no other controls, remote permission/question responses, general files, image previews, or status |
+| Claude native companion | Structured text projection, host-owned image uploads, read-only tool activity, one-shot session-scoped Interrupt, and [fresh single-choice responses](protocol.md#claude-native-single-choice-questions) over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; no other permissions/forms or controls, general files, image previews, or status |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
 | Codex | Current code accepts exact 0.151.0, 0.153.4, and 0.154.0/Linux arm64 with text/images/interrupt/status and read-only completed command activity; exact 0.153.4 and 0.154.0 implement one-shot ordinary local-command approvals and bounded native choice forms. Historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0; a separate 0.153.4/managed Unix/paginated recovery run also passed | One explicit thread and attached local-TUI precondition; current-version/activity/interrupt/image/approval/question/recovery acceptance is tracked in the release roadmap; unsupported permissions/questions, general files, legacy and simultaneous official-Remote recovery, per-device unsubscribe, and other browser controls remain unclaimed |
@@ -657,15 +661,17 @@ The <code>claude-native</code> driver uses these bounded <code>AnthropicRcClient
 
 - <code>history</code> for caller-driven ordered reconciliation;
 - <code>streamEvents</code> for one independent SSE reader;
-- <code>postEvent</code> for one user event with a caller-owned UUID and timestamp; and
+- <code>postEvent</code> for one user event with a caller-owned UUID and timestamp;
 - current <code>postInterrupt</code> for one session-scoped Stop with caller-owned UUID/request ID,
-  separate from the historical M1 text acceptance.
+  separate from the historical M1 text acceptance; and
+- current <code>postQuestionResponse</code> for one recorded native single-choice form and offered
+  label, under the [question boundary](protocol.md#claude-native-single-choice-questions).
 
 Its production transport is fixed to <code>https://api.anthropic.com</code> and the pinned API
 version. The built-in credential source is Linux-only, reads native Claude's owner-only mode-0600
 credential file afresh, never writes or refreshes it, and waits for native Claude to rotate a rejected
 token. A 401 is retried only when the bearer actually changed, except that session-scoped Interrupt
-disables rotation/retry entirely. Network-ambiguous writes are not automatically replayed.
+and question responses disable rotation/retry entirely. Network-ambiguous writes are not automatically replayed.
 
 The native companion implements this bounded orchestration:
 
