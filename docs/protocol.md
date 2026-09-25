@@ -318,7 +318,13 @@ waits up to 15 seconds for the exact completed native user item with the same cl
 input digest, including any images. A
 timeout, changed/reused coordinate, ambiguous write, cyclic/oversized history, disconnect, archive,
 revert, close, or delete fences only the projection instead of guessing success. Native `active` maps
-to viewer `running`, `idle` maps to `idle`, and `notLoaded` or `systemError` fails closed.
+to viewer `running` and `idle` maps to `idle`. A runtime `systemError` preserves the live projection
+and reports that raw status while closing the idle gate; subsequent native `active` still cannot
+release queued browser input. Only a later native `idle` releases it. The companion neither retries
+the failed turn nor resumes the thread or changes response authority. `notLoaded` and malformed
+statuses still fence the projection, and startup `systemError` still rejects attachment. The shared
+viewer currently has no dedicated system-error warning; its non-thinking phase does not mean the
+native input gate is open.
 
 For native approval/question requests, the first result or error wins globally. Version 0.151.0 stays
 response-less at the driver boundary. Exact 0.153.4 and 0.154.0 additionally implement one-shot ordinary

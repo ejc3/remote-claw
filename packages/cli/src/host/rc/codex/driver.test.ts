@@ -1501,6 +1501,143 @@ describe("Codex M3a companion", () => {
     expect(launched.broker.posts.some((post) => post.recordKind === "session_terminal")).toBe(true);
   });
 
+  // A real provider-capacity failure retired the companion while the native TUI recovered.
+  // The status reducer owns that failure: preserve capture, but never infer idle or retry a turn.
+  it.each([
+    "idle",
+    "active",
+  ] as const)("keeps runtime systemError recoverable from %s without admitting queued text before native idle", async (initialStatus) => {
+    const client = new FakeCodexClient();
+    client.resumeResult.thread.status = { type: initialStatus };
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    const status = (type: "systemError" | "active" | "idle"): void =>
+      client.emit({
+        kind: "notification",
+        value: {
+          method: "thread/status/changed",
+          params: {
+            threadId: THREAD_ID,
+            status: type === "active" ? { type, activeFlags: [] } : { type },
+          },
+        },
+      });
+
+    status("systemError");
+    await waitFor(() => launched.session.closed || launched.session.workerStatus === "systemError");
+    expect(launched.session.closed).toBe(false);
+    expect(launched.session.workerStatus).toBe("systemError");
+    launched.broker.pushInbound(
+      browserFrame(launched.identityId, launched.broker.sessionId, "after recovery", "recovery"),
+    );
+    await waitFor(() => accepted(launched.broker).length === 1);
+    expect(accepted(launched.broker)).toEqual([
+      { client_msg_id: "recovery", native_pending: true },
+    ]);
+    expect(client.startCalls).toEqual([]);
+
+    status("active");
+    client.emit(completed(assistantItem("native-recovery", "native retry completed")));
+    await waitFor(() => upstream(launched.session, "assistant").length === 1);
+    expect(launched.session.workerStatus).toBe("running");
+    expect(client.startCalls).toEqual([]);
+    expect(client.resumeCalls).toEqual([THREAD_ID]);
+    expect(client.closeCalls).toBe(0);
+    expect(launched.broker.posts.some((post) => post.recordKind === "session_terminal")).toBe(
+      false,
+    );
+
+    status("idle");
+    await waitFor(() => client.startCalls.length === 1);
+    const call = client.startCalls[0];
+    if (call === undefined) throw new Error("expected queued text after native idle");
+    expect(call.text).toBe("after recovery");
+    client.emit(completed(userItem("recovery-user", call.text, call.clientUserMessageId)));
+    await waitFor(() =>
+      accepted(launched.broker).some((receipt) => typeof receipt.seq === "number"),
+    );
+    expect(client.startCalls).toHaveLength(1);
+    expect(client.externalThreadRunning).toBe(true);
+    expect(launched.session.closed).toBe(false);
+    await stop(launched.ac, launched.run);
+  });
+
+  it.each(["notLoaded", "unknown"])("still retires runtime %s status", async (type) => {
+    const launched = await start();
+    launched.client.emit({
+      kind: "notification",
+      value: { method: "thread/status/changed", params: { threadId: THREAD_ID, status: { type } } },
+    });
+    await expect(launched.run).resolves.toBe(1);
+    expect(launched.session.closed).toBe(true);
+    expect(launched.client.startCalls).toEqual([]);
+    expect(launched.client.externalThreadRunning).toBe(true);
+  });
+
+  it("still rejects systemError at startup without announcing or mutating", async () => {
+    const client = new FakeCodexClient();
+    client.resumeResult.thread.status = { type: "systemError" };
+    const broker = new FakeDurableBroker();
+    const driver = new CodexDriver(await context(broker, () => {}), {
+      url: "ws://127.0.0.1:4500",
+      threadId: THREAD_ID,
+      client,
+      runtime: { platform: "linux", arch: "arm64" },
+    });
+    await expect(driver.run(new AbortController().signal)).resolves.toBe(1);
+    expect(broker.posts.some((post) => post.recordKind === "session_announce")).toBe(false);
+    expect(client.startCalls).toEqual([]);
+    expect(client.externalThreadRunning).toBe(true);
+  });
+
+  it("rejects systemError buffered during history reconciliation before announcing", async () => {
+    const barrier = deferred();
+    const client = new FakeCodexClient();
+    client.historyBarrier = barrier.promise;
+    const broker = new FakeDurableBroker();
+    let session: Session | undefined;
+    const driver = new CodexDriver(
+      await context(broker, (value) => {
+        session = value;
+      }),
+      {
+        url: "ws://127.0.0.1:4500",
+        threadId: THREAD_ID,
+        client,
+        runtime: { platform: "linux", arch: "arm64" },
+      },
+    );
+    const ac = new AbortController();
+    const run = driver.run(ac.signal);
+    try {
+      await waitFor(() => client.listCalls.length === 1);
+      expect(broker.posts).toEqual([]);
+      client.buffered.push({
+        kind: "notification",
+        value: {
+          method: "thread/status/changed",
+          params: { threadId: THREAD_ID, status: { type: "systemError" } },
+        },
+      });
+      barrier.resolve();
+      await waitFor(
+        () =>
+          session?.closed === true ||
+          broker.posts.some((post) => post.recordKind === "session_announce"),
+      );
+      expect(broker.posts.some((post) => post.recordKind === "session_announce")).toBe(false);
+      await expect(within(run)).resolves.toBe(1);
+      expect(client.resumeCalls).toEqual([THREAD_ID]);
+      expect(client.startCalls).toEqual([]);
+      expect(client.closeCalls).toBe(1);
+      expect(client.externalThreadRunning).toBe(true);
+    } finally {
+      barrier.resolve();
+      ac.abort();
+      await run;
+    }
+  });
+
   it("fences only the encrypted projection when the app-server connection drops", async () => {
     const launched = await start();
     launched.client.disconnect();
