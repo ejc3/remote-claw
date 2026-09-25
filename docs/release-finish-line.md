@@ -245,6 +245,22 @@ display-only, launch-time labels; they do not follow later native renames, provi
 IDs, or change attachment authority. Detailed regressions live at the existing native client/driver
 boundaries; no new E2E framework or permission mechanism was added.
 
+### Codex transient native error — 2026-09-25
+
+**Current:** runtime `systemError` keeps the companion's projection and capture alive, reports the
+raw status, and parks browser input until an explicit later native `idle`. It never retries native
+work, resumes the thread, or changes approval/question authority. Startup rejection and the existing
+disconnect, unavailable-thread, ambiguous-write, and coordinate-integrity fences remain unchanged.
+
+The physical-phone run exposed a native `serverOverloaded` turn failure coincident with the old
+companion's “Codex thread became unavailable” exit; the native TUI then retried and completed while
+the phone returned to a terminal projection. That exact status notification was not retained, so
+`systemError` is inferred rather than directly captured; the old guard also covered `notLoaded`.
+Focused driver regressions own error-to-recovery capture and queued-input gating without relying on
+provider-capacity timing. A dedicated viewer error warning remains a nonblocking UI follow-up; this
+change does not claim that the existing UI explains capacity failures. Evidence stays in the physical-phone
+artifact directory's `recovery/` subdirectory. Physical-phone retest is separate acceptance.
+
 ### Claude-native single-choice questions
 
 **Implemented; bounded live acceptance passed 2026-09-25.** Exact Claude 2.1.237/Linux supports single

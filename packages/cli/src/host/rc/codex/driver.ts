@@ -494,11 +494,13 @@ export class CodexDriver implements Driver {
     }
     if (method === "thread/status/changed") {
       const status = parseCodexStatus(params.status);
-      if (status.type === "notLoaded" || status.type === "systemError") {
+      if (status.type === "notLoaded") {
         throw new CodexProjectionError("Codex thread became unavailable");
       }
+      // A native turn error can recover without losing this thread or connection. Keep capture live,
+      // but systemError is not idle: only a later native idle may release queued browser input.
       gate.update(status);
-      session.workerStatus = status.type === "active" ? "running" : "idle";
+      session.workerStatus = status.type === "active" ? "running" : status.type;
       session.wake();
       return;
     }
