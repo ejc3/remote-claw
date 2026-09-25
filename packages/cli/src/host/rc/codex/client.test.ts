@@ -291,7 +291,7 @@ describe("Codex app-server boundary", () => {
     }
   });
 
-  it("pins the two measured app-server versions and runtime compatibility tuple", () => {
+  it("pins the measured app-server versions and runtime compatibility tuple", () => {
     const compatible = {
       userAgent: `some-other-subscriber/${CODEX_APP_SERVER_VERSION} codex-cli/${CODEX_APP_SERVER_VERSION}`,
       platformFamily: "unix",
@@ -300,25 +300,18 @@ describe("Codex app-server boundary", () => {
     expect(() =>
       assertCodexCompatibility(compatible, { platform: "linux", arch: "arm64" }),
     ).not.toThrow();
-    expect(() =>
-      assertCodexCompatibility(
-        {
-          ...compatible,
-          userAgent:
-            "Codex Desktop/0.153.4 (Ubuntu 24.4.0; aarch64) unknown (remote-claw-approval-version; 0.0.0)",
-        },
-        { platform: "linux", arch: "arm64" },
-      ),
-    ).not.toThrow();
-    expect(() =>
-      assertCodexCompatibility(
-        {
-          ...compatible,
-          userAgent: "codex_chatgpt_ios_remote/0.153.4 (Ubuntu; aarch64)",
-        },
-        { platform: "linux", arch: "arm64" },
-      ),
-    ).not.toThrow();
+    for (const userAgent of [
+      "Codex Desktop/0.153.4 (Ubuntu 24.4.0; aarch64) unknown (remote-claw-approval-version; 0.0.0)",
+      "codex_chatgpt_ios_remote/0.153.4 (Ubuntu; aarch64)",
+      "Codex Desktop/0.154.0 (Ubuntu 24.4.0; aarch64) unknown (remote-claw-native-parity-readonly; 0.0.0)",
+    ]) {
+      expect(() =>
+        assertCodexCompatibility(
+          { ...compatible, userAgent },
+          { platform: "linux", arch: "arm64" },
+        ),
+      ).not.toThrow();
+    }
 
     for (const [result, runtime] of [
       [
@@ -334,11 +327,15 @@ describe("Codex app-server boundary", () => {
         { platform: "linux", arch: "arm64" },
       ],
       [
-        { ...compatible, userAgent: "subscriber/0.154.0" },
+        { ...compatible, userAgent: "subscriber/0.154.1" },
         { platform: "linux", arch: "arm64" },
       ],
       [
         { ...compatible, userAgent: "subscriber/0.153.4-dev" },
+        { platform: "linux", arch: "arm64" },
+      ],
+      [
+        { ...compatible, userAgent: "subscriber/0.154.0-dev" },
         { platform: "linux", arch: "arm64" },
       ],
       [
@@ -357,13 +354,14 @@ describe("Codex app-server boundary", () => {
       [compatible, { platform: "darwin", arch: "arm64" }],
     ] as const) {
       expect(() => assertCodexCompatibility(result, runtime)).toThrow(
-        /Codex app-server 0\.151\.0 or 0\.153\.4 on Linux arm64/,
+        /Codex app-server 0\.151\.0 or 0\.153\.4 or 0\.154\.0 on Linux arm64/,
       );
     }
   });
 
   it.each([
     ["Codex Desktop/0.153.4 (Ubuntu 24.4.0; aarch64)", "0.153.4"],
+    ["Codex Desktop/0.154.0 (Ubuntu 24.4.0; aarch64)", "0.154.0"],
     ["legacy-subscriber/0.151.0 codex-cli/0.151.0", "0.151.0"],
     ["Codex Desktop/0.150.0 codex-cli/0.153.4", "0.150.0"],
     ["subscriber/0.153.4-dev codex-cli/0.153.4", "0.153.4-dev"],

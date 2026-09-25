@@ -93,20 +93,23 @@ WebSocket, paginated history, a packed CLI, local SQLite, one TUI, and two brows
 passed separately on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
 paginated history. Legacy-history recovery, simultaneous official-Remote recovery, and stable
 projection identity remain later adapter-local gates; they do not reopen M3a or M3b.
-Current code also accepts exact 0.153.4/Linux arm64,
-displays completed shell commands/results as read-only activity, and supports browser interrupt on both
+Current code also accepts exact 0.153.4 and 0.154.0/Linux arm64,
+displays completed shell commands/results as read-only activity, and supports browser interrupt on all
 accepted versions. Interrupt binds one observed active turn without retargeting or retrying; queued
 text waits for native idle. The current image follow-on reuses encrypted composer groups and native
 inline image inputs, with bounded transient retention and no file upload or URL fetch. It does not
-add general-file support or native-image previews. A separate exact-0.153.4 implementation permits
+add general-file support or native-image previews. A separate exact-0.153.4/0.154.0 implementation permits
 one-shot ordinary local-command approvals with native resolution; it excludes policy changes, session
-grants, stdin/file/network permissions, and questions. A separate 0.153.4 form adapter implements
+grants, stdin/file/network permissions, and questions. A separate 0.153.4/0.154.0 form adapter implements
 complete non-secret blocking groups of 1–3 questions with 1–20 choices each, free text only when
 native `isOther` permits it, and native-confirmed resolution. These transparent forms may authorize
 tool actions; they are not planning-only and add no separate policy/session-grant API. Unsupported
 forms and all 0.151.0 approvals/questions remain native-owned.
 Current acceptance is tracked in the
 [release roadmap](release-finish-line.md), without rewriting the historical 0.151.0 results.
+The separate [0.154.0 result](release-finish-line.md#codex-current-version-acceptance) accepts native-app
+text coexistence and browser/TUI approvals and questions; image, interrupt, recovery, and native-app
+approval/question UI acceptance remain outside that run.
 Other controls, general files, streaming partials, file
 changes, task lifecycle, and other versions/platforms remain outside this implementation.
 

@@ -28,12 +28,15 @@ credentials.
 > fresh-projection restart/backfill and broker-loss isolation on 0.151.0/explicit-loopback WebSocket
 > and 0.153.4/managed Unix, both with paginated history. Legacy-history recovery, simultaneous official
 > Remote recovery, and stable projection identity remain unclaimed.
-> The current Codex implementation accepts exact 0.151.0 and 0.153.4 on Linux arm64 and also displays
+> The current Codex implementation accepts exact 0.151.0, 0.153.4, and 0.154.0 on Linux arm64 and also displays
 > completed shell commands and bounded results as read-only activity. Browser mutations are ordinary
-> non-empty non-slash text, images with an optional caption, and interrupt. Exact 0.153.4 also implements
-> [one-shot local-command approvals](docs/release-finish-line.md#codex-command-approvals), with actual
-> phone/desktop acceptance passed. Bounded native choice forms are also implemented for 0.153.4,
-> with [phone/desktop/native-TUI acceptance passed](docs/release-finish-line.md#codex-native-questions).
+> non-empty non-slash text, images with an optional caption, and interrupt. Exact 0.153.4 and 0.154.0 implement
+> [one-shot local-command approvals](docs/release-finish-line.md#codex-command-approvals) and bounded
+> native choice forms. The approval phone/desktop and
+> [question phone/desktop/native-TUI acceptance](docs/release-finish-line.md#codex-native-questions)
+> passed on 0.153.4. Separate [0.154.0 acceptance](docs/release-finish-line.md#codex-current-version-acceptance)
+> covers native-app text coexistence and browser/TUI approvals and questions; images, interrupt,
+> recovery, and native-app approval/question UI were not requalified on that newer tuple.
 > Version 0.151.0 approvals/questions and unsupported request shapes remain native-owned. Other
 > controls and general files remain disabled. These
 > additions do not rewrite the historical 0.151.0 acceptance; see the release roadmap for their current
@@ -97,7 +100,7 @@ The implemented native modes are:
 | `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text, image groups with an optional caption, and one-shot session-scoped Interrupt; permissions, questions, model/mode changes, general files, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
 | `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The mutable surface remains non-empty non-slash text plus interrupt. Read-only MAIN-session running/idle status is advertised; native/local UI still owns permissions, questions, model/mode, attachments, and end. |
-| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0 or 0.153.4 on Linux arm64. Browser mutations are non-empty non-slash text, image groups with an optional caption, and interrupt; native status and completed shell commands/results are read-only. Exact 0.153.4 additionally implements one-shot ordinary local-command approvals and bounded non-secret blocking choice forms; 0.151.0 approvals/questions and unsupported request shapes remain native-owned. |
+| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0, 0.153.4, or 0.154.0 on Linux arm64. Browser mutations are non-empty non-slash text, image groups with an optional caption, and interrupt; native status and completed shell commands/results are read-only. Exact 0.153.4 and 0.154.0 additionally implement one-shot ordinary local-command approvals and bounded non-secret blocking choice forms; 0.151.0 approvals/questions and unsupported request shapes remain native-owned. |
 | `--rc-app <origin> --rc-driver=tmux [claude args]` | Runs plain Claude in a recoverable private tmux pane while the lower-fidelity adapter projects transcript and serializes browser injection against active native turns. It fail-fast requires Linux arm64 and exact Claude 2.1.237 before identity, broker, or pane startup. Browser input is ordinary non-empty non-slash text plus attachments; interrupt, model, mode, and end are disabled. Permissions, questions, and folder trust stay in that local pane unless the caller explicitly bypasses Claude policy. Idle editor/config UI concurrency and independent peer ordering are not isolated. M4's maintained Bedrock tuple is green; provider-native and official-client coexistence are not advertised for this mode. |
 
 The launch form waits for the exact successful bridge request from its Claude child. The attach form
@@ -148,7 +151,7 @@ Other supported and experimental paths have narrower current claims:
 - The pinned Codex M3a acceptance used an explicit-port loopback app-server and remains the historical
   text/status result. The current companion also accepts literal `unix://` for Codex's same-user
   managed control socket; it rejects arbitrary Unix paths. The local TUI must stay attached; exact
-  0.153.4 adds one-shot ordinary local-command decisions and bounded native choice forms, while
+  0.153.4 and 0.154.0 add one-shot ordinary local-command decisions and bounded native choice forms, while
   unsupported permissions/questions remain native-owned. M3b's exact official-Remote/TUI/two-browser coexistence and provider-transport
   isolation gate is complete. The separate
   [Codex recovery result](docs/release-finish-line.md#codex-recovery--complete) covers 0.151.0/explicit-port
@@ -313,7 +316,7 @@ independent Chromium contexts both showed and cleared “working,” with one us
 
 ### Run the pinned Codex companion
 
-On Linux arm64, run these in separate terminals: start exact Codex 0.151.0 or 0.153.4 app-server,
+On Linux arm64, run these in separate terminals: start exact Codex 0.151.0, 0.153.4, or 0.154.0 app-server,
 attach its TUI, then attach remote-claw to that same exact thread for the companion's entire lifetime:
 
 ```bash
@@ -327,7 +330,7 @@ node dist/remote-claw.js --rc-app https://your-app.example \
 Use the real UUIDv7 supplied by Codex. remote-claw resumes/joins only that thread; it never starts or
 stops app-server, discovers/selects/creates/deletes/stops a thread, or owns the TUI. Browser mutations
 are non-empty non-slash text, images with an optional non-slash caption, and interrupt. Exact 0.153.4
-also implements one-shot ordinary local-command approvals and bounded native choice forms;
+and 0.154.0 implement one-shot ordinary local-command approvals and bounded native choice forms;
 0.151.0 approvals/questions and unsupported request shapes stay native-owned. Model/mode, general
 files, and end are disabled. A durable
 SQLite/libSQL broker is required. The existing composer sends an encrypted image group; the host passes
@@ -341,7 +344,7 @@ Completed native `commandExecution` items appear as read-only `Shell` calls and 
 including failed, declined, and nonzero-exit outcomes. Activity observation itself adds no execution
 authority, streaming partials, file-change projection, or task lifecycle tracking.
 
-The separate 0.153.4 approval path shows the complete bounded command, absolute cwd, and optional
+The separate 0.153.4/0.154.0 approval path shows the complete bounded command, absolute cwd, and optional
 native reason only for ordinary local commands with no network/additional-permission context and
 native-advertised one-shot Allow plus Deny. Deny uses `decline`, or `cancel` with an explicit turn-
 cancellation explanation. It never changes command input or policy, grants session-wide authority,
@@ -350,7 +353,7 @@ resolution; the resolved card does not claim which client or decision won. The l
 native clients remain usable. See [permission semantics](docs/protocol.md#9-permissions) and the
 [acceptance status](docs/release-finish-line.md#codex-command-approvals).
 
-The separate 0.153.4 question path reuses that native-confirmed card lifecycle for complete blocking,
+The separate 0.153.4/0.154.0 question path reuses that native-confirmed card lifecycle for complete blocking,
 non-secret forms of 1–3 questions with 1–20 choices each. Native `isOther` alone enables a free-text
 answer; there is no invented Dismiss or multiselect action. Answers use native question IDs, never
 display wording. These are transparent native forms, not a planning-only API: a choice may authorize

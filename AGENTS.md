@@ -63,7 +63,7 @@ attached local TUI, and two browsers survived fresh-projection restart/backfill 
 native mutations; broker loss retired only the companion while local work completed. The same retained
 sentinel also passed on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
 paginated history, without a production change. Legacy-history recovery, simultaneous official Remote
-recovery, stable projection identity, and richer controls remain outside these runs. The current code accepts exact Codex 0.151.0 and 0.153.4 on
+recovery, stable projection identity, and richer controls remain outside these runs. The current code accepts exact Codex 0.151.0, 0.153.4, and 0.154.0 on
 Linux arm64
 and also projects completed `commandExecution` as read-only `Shell` calls and bounded results,
 including failed/declined/nonzero-exit outcomes. Browser mutations are non-empty non-slash text,
@@ -73,11 +73,11 @@ input is digest-correlated; only sanitized names/caption or an image-count place
 Raw pending images are bounded and released after native submission settles or the session closes.
 Interrupt binds the latest active native turn once and never retargets or retries; queued
 text still waits for native idle, not interrupt RPC acceptance. Native background commands may outlive
-the interrupted model turn. Exact 0.153.4 also implements one-shot ordinary local-command approvals;
+the interrupted model turn. Exact 0.153.4 and 0.154.0 implement one-shot ordinary local-command approvals;
 0.151.0 keeps all approvals native-owned. Only complete bounded command/cwd/optional reason, native
 `kind:"command"` / `environmentId:"local"`, and advertised `accept` plus `decline` or `cancel` qualify.
 The command path never answers network/additional permissions, stdin, file approvals, or questions,
-and never amends policy or grants session-wide authority. The separate 0.153.4 question path admits
+and never amends policy or grants session-wide authority. Their separate question path admits
 complete non-secret blocking forms of 1–3 questions with 1–20 choices each; only native `isOther`
 enables free text. These transparent forms may authorize tool actions and are not planning-only.
 Secret, optionless, nonblocking, malformed, and all 0.151.0 questions stay native-owned; no invented
@@ -87,7 +87,11 @@ means pending, and only native resolution closes the card without claiming which
 writes never retry or stop native work. Other controls, general files, streaming partials, file
 changes, and task lifecycle remain unsupported. The [release roadmap](docs/release-finish-line.md)
 owns current-version/activity/interrupt/image, command-approval, and question acceptance; the bounded
-question phone/desktop/native-TUI run passed. The historical results above remain exact 0.151.0
+question phone/desktop/native-TUI run passed on 0.153.4. The separate
+[0.154.0 acceptance](docs/release-finish-line.md#codex-current-version-acceptance) covers native-app
+text coexistence and browser/TUI command approvals and choice forms, not newer-tuple image,
+interrupt, recovery, or native-app approval/question UI acceptance.
+The historical M3a/M3b results above remain exact 0.151.0
 evidence. The attachment path
 accepts literal `unix://` only as Codex's same-user managed control socket
 (`$CODEX_HOME/app-server-control/app-server-control.sock`, falling back to `~/.codex`), while retaining

@@ -134,7 +134,9 @@ describe("RC_HELP banner", () => {
 
   it("documents the frozen attach-only Codex tuple and local interaction ownership", () => {
     expect(RC_HELP).toContain("Pinned Codex companion (--rc-driver=codex)");
-    expect(RC_HELP).toMatch(/Linux arm64\s+and exact Codex app-server 0\.151\.0\s+or 0\.153\.4/);
+    expect(RC_HELP).toMatch(
+      /Linux arm64\s+and exact Codex app-server 0\.151\.0\s+or 0\.153\.4 or 0\.154\.0/,
+    );
     expect(RC_HELP).toMatch(/literal `unix:\/\/` for Codex's same-user managed\s+control socket/);
     expect(RC_HELP).toMatch(/caller-owned explicit-port loopback `ws:\/\/` origin/);
     expect(RC_HELP).toMatch(/Arbitrary\s+Unix paths.+are rejected/);
@@ -145,12 +147,13 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toMatch(/host-prepared inline bytes, never browser URLs or file paths/);
     expect(RC_HELP).toMatch(/one active turn ID without retargeting or retrying/);
     expect(RC_HELP).toMatch(
-      /Exact 0\.153\.4 also supports one-shot ordinary local-command approvals/,
+      /Exact 0\.153\.4 and 0\.154\.0 support one-shot ordinary local-command approvals/,
     );
+    expect(RC_HELP).toContain("bounded non-secret blocking native choice forms");
     expect(RC_HELP).toMatch(/Submitted choices stay pending until native resolution/);
     expect(RC_HELP).toMatch(/Keep a local Codex TUI attached/);
     expect(RC_HELP).toMatch(
-      /Version 0\.151\.0 approvals,\s+other permission kinds, and all questions remain native-owned/,
+      /Version 0\.151\.0 approvals\s+and questions, and unsupported request shapes, remain native-owned/,
     );
     expect(RC_HELP).toMatch(/No forwarded arguments/);
   });

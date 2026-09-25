@@ -1092,9 +1092,12 @@ describe("Codex M3a companion", () => {
     await stop(launched.ac, launched.run);
   });
 
-  it("answers an exact-version native command once through the broker while text remains parked", async () => {
+  it.each([
+    "0.153.4",
+    "0.154.0",
+  ])("answers a %s native command once through the broker while text remains parked", async (version) => {
     const client = new FakeCodexClient();
-    client.nativeVersion = "0.153.4";
+    client.nativeVersion = version;
     client.resumeResult.thread.status = { type: "active" };
     const native = commandApproval();
     client.buffered.push({ kind: "request", value: native });
@@ -1187,9 +1190,12 @@ describe("Codex M3a companion", () => {
 
   // Detailed form validation and callback races live at questions/client; this is the thin
   // Session/relay wiring sentinel, including the capability snapshot used by real browsers.
-  it("routes a native question through the broker and closes only on native resolution", async () => {
+  it.each([
+    "0.153.4",
+    "0.154.0",
+  ])("routes a %s native question through the broker and closes only on native resolution", async (version) => {
     const client = new FakeCodexClient();
-    client.nativeVersion = "0.153.4";
+    client.nativeVersion = version;
     client.resumeResult.thread.status = { type: "active" };
     const native = nativeQuestion();
     client.buffered.push({ kind: "request", value: native });

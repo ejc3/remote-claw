@@ -86,7 +86,7 @@ export const CODEX_CAPABILITIES: DriverCapabilities = {
   attachments: true,
 };
 
-/** Exact Codex 0.153.4 command approvals and bounded blocking, non-secret native choice forms. */
+/** Exact Codex 0.153.4/0.154.0 command approvals and bounded blocking, non-secret native choice forms. */
 export const CODEX_APPROVAL_CAPABILITIES: DriverCapabilities = {
   textInput: "plain",
   status: true,
