@@ -74,7 +74,7 @@ describe("reconcileAccepted", () => {
   it.each([
     true,
     false,
-  ])("uses canonical filenames in place, with no duplicate (ack first=%s)", (ackFirst) => {
+  ])("uses canonical filenames with no duplicate (ack first=%s)", (ackFirst) => {
     let msgs = [optimisticMessage("cm-9", "describe", staged(["Screen Shot.png"]))];
     const echo: Message = {
       kind: "user",
@@ -91,6 +91,54 @@ describe("reconcileAccepted", () => {
     expect(appendUniqueMessage(msgs, echo)).toBe(msgs);
     expect(appendUniqueMessage(msgs, { ...echo, text: "changed replay" })).toBe(msgs);
     expect(reconcileAccepted(msgs, "cm-9", 4)).toEqual(msgs);
+  });
+
+  it.each([
+    true,
+    false,
+  ])("settles the next prompt after the previous native reply (ack first=%s)", (ackFirst) => {
+    const reply: Message = { kind: "assistant", seq: 3, text: "Blue", msgId: "assistant-3" };
+    const echo: Message = { kind: "user", seq: 4, text: "Next question", msgId: "user-4" };
+    let msgs = [optimisticMessage("cm-next", echo.text, [])];
+    // The sending viewer has not received the previous reply when the next prompt is submitted.
+    msgs = appendUniqueMessage(msgs, reply);
+    if (ackFirst) msgs = reconcileAccepted(msgs, "cm-next", 4);
+    msgs = appendUniqueMessage(msgs, echo);
+    if (!ackFirst) msgs = reconcileAccepted(msgs, "cm-next", 4);
+    expect(msgs).toEqual([
+      reply,
+      { ...echo, clientMsgId: "cm-next", optimistic: false, deliveryUnknown: false },
+    ]);
+    expect(appendUniqueMessage(msgs, reply)).toBe(msgs);
+    expect(appendUniqueMessage(msgs, echo)).toBe(msgs);
+    expect(reconcileAccepted(msgs, "cm-next", 4)).toEqual(msgs);
+  });
+
+  it.each([
+    true,
+    false,
+  ])("keeps pending and unknown sends after native content (ack first=%s)", (ackFirst) => {
+    const reply: Message = { kind: "assistant", seq: 3, text: "Blue", msgId: "assistant-3" };
+    const echo: Message = { kind: "user", seq: 4, text: "Next question", msgId: "user-4" };
+    const pending = opt("cm-pending");
+    const unknown = markDeliveryUnknown([opt("cm-unknown")], "cm-unknown")[0] as Message;
+    let msgs = [opt("cm-next"), pending, unknown];
+    msgs = appendUniqueMessage(msgs, reply);
+    expect(msgs).toEqual([reply, opt("cm-next"), pending, unknown]);
+    if (ackFirst) msgs = reconcileAccepted(msgs, "cm-next", 4);
+    msgs = appendUniqueMessage(msgs, echo);
+    if (!ackFirst) msgs = reconcileAccepted(msgs, "cm-next", 4);
+    expect(msgs).toEqual([
+      reply,
+      { ...echo, clientMsgId: "cm-next", optimistic: false, deliveryUnknown: false },
+      pending,
+      unknown,
+    ]);
+    expect(msgs.find((m) => m.msgId === pending.msgId)).toBe(pending);
+    expect(msgs.find((m) => m.msgId === unknown.msgId)).toBe(unknown);
+    expect(appendUniqueMessage(msgs, reply)).toBe(msgs);
+    expect(appendUniqueMessage(msgs, echo)).toBe(msgs);
+    expect(reconcileAccepted(msgs, "cm-next", 4)).toEqual(msgs);
   });
 });
 

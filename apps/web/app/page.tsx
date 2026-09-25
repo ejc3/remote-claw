@@ -111,11 +111,14 @@ function isGapMessage(
 }
 
 export function appendUniqueMessage(prev: Message[], msg: Message): Message[] {
+  let messages = prev;
+  let incoming = msg;
   const existing = prev.find((m) => m.msgId === msg.msgId);
   if (existing) {
     const clientMsgId = existing.clientMsgId;
-    // An accepted receipt rekeys our optimistic row before its canonical content arrives. Replace
-    // that provisional text (e.g. an unsanitized filename), retaining the sender's receipt status.
+    // An accepted receipt rekeys our optimistic row before its canonical content arrives. Move the
+    // replacement to this ordered stream position: an earlier native reply may have arrived after
+    // the optimistic send. Retain the sender's receipt status and canonical text/filenames.
     // Once canonical, ordinary replay still deduplicates without rewriting transcript content.
     if (
       msg.kind === "user" &&
@@ -124,20 +127,22 @@ export function appendUniqueMessage(prev: Message[], msg: Message): Message[] {
       existing.seq === null &&
       clientMsgId !== undefined &&
       existing.optimistic === false
-    )
-      return prev.map((m) =>
-        m === existing
-          ? {
-              ...msg,
-              clientMsgId,
-              optimistic: false,
-              deliveryUnknown: false,
-            }
-          : m,
-      );
-    return prev;
+    ) {
+      messages = prev.filter((m) => m !== existing);
+      incoming = { ...msg, clientMsgId, optimistic: false, deliveryUnknown: false };
+    } else return prev;
   }
-  return [...prev, msg];
+  // The stream is already ordered. Keep its next row before locally provisional sends, including
+  // acknowledged rows awaiting content and delivery-unknown rows; preserve their relative order.
+  const provisional =
+    incoming.seq === null
+      ? -1
+      : messages.findIndex(
+          (m) => m.kind === "user" && m.seq === null && m.clientMsgId !== undefined,
+        );
+  return provisional < 0
+    ? [...messages, incoming]
+    : [...messages.slice(0, provisional), incoming, ...messages.slice(provisional)];
 }
 
 /** A staged (queued, not-yet-sent) image in the composer: the File plus an object-URL preview. */
@@ -303,7 +308,7 @@ export function composerTextForSend(text: string, preserveOriginal: boolean): st
 /** The OPTIMISTIC echo (#113) of a just-sent message — rendered instantly so the user's image/text
  *  appears without waiting for the host's round-trip echo (which on a suspended iOS stream is delayed).
  *  Mirrors the host's echo text (📎 chips + caption, or the prompt) and carries `clientMsgId` so the
- *  `accepted` ack can re-key it to the real `user-<seq>` (then the host echo updates it in place). */
+ *  `accepted` ack can re-key it to the real `user-<seq>` (then the host echo settles its order). */
 export function optimisticMessage(
   clientMsgId: string,
   text: string,
@@ -350,7 +355,7 @@ export function fitStaged(
 
 /** Reconcile an optimistic echo against the host's `accepted` ack (#113): if the real `user-<seq>` echo
  *  has already arrived, drop the still-pending optimistic twin; otherwise re-key the optimistic to
- *  `user-<seq>` so the upcoming echo updates it in place. Either order → one canonical bubble.
+ *  `user-<seq>` so the upcoming echo settles its content and order. Either order → one canonical bubble.
  *
  *  IDEMPOTENT under a re-delivered ack (at-least-once; a #seen eviction on a long session, or a fresh
  *  orderer on revive, re-yields the seq-null `accepted`): the optimistic twin is identified ONLY by its
