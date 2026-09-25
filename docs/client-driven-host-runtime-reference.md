@@ -22,9 +22,11 @@ the managed Unix socket and continued browser turns after provider-transport dis
 the same version/platform through explicit-port loopback WebSocket with paginated history: a packed
 CLI, local SQLite broker, attached TUI, and two browsers exercised fresh-projection restart/backfill
 and broker-loss isolation. The same outcome separately passed on 2026-09-08 for exact
-0.153.4/Linux arm64 through managed Unix with paginated history. Legacy recovery, simultaneous
-official-Remote recovery, per-device Remote unsubscribe, and stable projection identity remain
-unclaimed; the release roadmap owns current capability and version qualifications. Only
+0.153.4/Linux arm64 through managed Unix with paginated history. Separate
+[0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
+adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app recovery,
+per-device Remote unsubscribe and automatic stable-ID reconnect remain unclaimed; the release roadmap
+owns current capability and version qualifications. Only
 OpenCode's positive permission-mirroring opt-in retains experimental guarantees. The tmux adapter
 is maintained for its exact M4 tuple: ordinary non-empty non-slash text plus attachments are fenced
 behind an active model turn and its native permission/question modal, every raw browser control is

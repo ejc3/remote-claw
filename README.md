@@ -26,8 +26,10 @@ credentials.
 > isolation, not per-device unsubscribe. A separate
 > [Codex recovery follow-on](docs/release-finish-line.md#codex-recovery--complete) now proves
 > fresh-projection restart/backfill and broker-loss isolation on 0.151.0/explicit-loopback WebSocket
-> and 0.153.4/managed Unix, both with paginated history. Legacy-history recovery, simultaneous official
-> Remote recovery, and stable projection identity remain unclaimed.
+> and 0.153.4/managed Unix, both with paginated history. Separate
+> [0.154.0 official desktop Remote recovery](docs/release-finish-line.md#codex-official-remote-recovery--complete)
+> passed with the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app
+> recovery and automatic stable-ID reconnect remain unclaimed.
 > The current Codex implementation accepts exact 0.151.0, 0.153.4, and 0.154.0 on Linux arm64 and also displays
 > completed shell commands and bounded results as read-only activity. Browser mutations are ordinary
 > non-empty non-slash text, images with an optional caption, and interrupt. Exact 0.153.4 and 0.154.0 implement
@@ -67,7 +69,7 @@ The intended surface matrix is:
 | Agent surface | Local native UI | Official provider collaboration | remote-claw browsers | Current truth |
 | --- | --- | --- | --- | --- |
 | Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; M1's exact-2.1.237 native companion passed local TUI, literal official web UI on the user's phone, two-browser, fresh-projection restart, broker-loss, packed-install, and exact-SHA deployed-broker acceptance |
-| Codex | Codex TUI | Codex Remote through ChatGPT | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket. Separate [recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) adds fresh-projection restart/backfill and broker-loss isolation on 0.151.0/explicit WS and 0.153.4/managed Unix, both with paginated history; legacy and simultaneous official-Remote recovery and per-device Remote unsubscribe remain unclaimed |
+| Codex | Codex TUI | Codex Remote through ChatGPT; official desktop remote connection | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket. Separate [recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) covers 0.151.0/explicit WS and 0.153.4/managed Unix/paginated; [0.154.0 official desktop Remote recovery](docs/release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Legacy/mobile-app recovery, automatic stable-ID reconnect and per-device Remote unsubscribe remain unclaimed |
 | OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | M2 complete for exact OpenCode 1.17.5 on Linux arm64 with the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux compatibility | Terminal pane | Not claimed by this fallback | Multiple browsers | M4 complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed CLI, local pane, two browsers, reload, non-empty non-slash text plus attachments, active-turn native-modal isolation, browser departure, and broker-loss isolation; idle-editor concurrency, raw controls, ordering, and native application remain lower fidelity or unsupported |
 
@@ -154,7 +156,10 @@ Other supported and experimental paths have narrower current claims:
   unsupported permissions/questions remain native-owned. M3b's exact official-Remote/TUI/two-browser coexistence and provider-transport
   isolation gate is complete. The separate
   [Codex recovery result](docs/release-finish-line.md#codex-recovery--complete) covers 0.151.0/explicit-port
-  loopback WebSocket and 0.153.4/managed Unix, both with paginated history. Current text/image/interrupt, command-approval, and question work is tracked
+  loopback WebSocket and 0.153.4/managed Unix, both with paginated history. The
+  [0.154.0 official desktop result](docs/release-finish-line.md#codex-official-remote-recovery--complete)
+  separately adds the actual Mac app and recovery through reopened viewers selecting a fresh projection.
+  Current text/image/interrupt, command-approval, and question work is tracked
   separately in the [release roadmap](docs/release-finish-line.md); other controls remain disabled.
 - tmux captures transcripts and injects ordinary non-empty non-slash text plus attachments when no
   higher-fidelity native seam is available. Node loads a private tmux buffer before a fixed helper
