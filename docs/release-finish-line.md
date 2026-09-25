@@ -191,7 +191,7 @@ home-folder UI artifacts, outside Git.
 | Follow-on | Status | Bounded user outcome |
 | --- | --- | --- |
 | Native work visibility, Claude first | Claude tools and Codex completed commands implemented and live-accepted | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
-| Desktop/mobile daily-use finish | Recovery warning scoped; [draft navigation and credential restoration](#viewer-daily-use--2026-09-25) implemented | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
+| Desktop/mobile daily-use finish | Current: recovery warning scoped; [draft navigation and credential restoration](#viewer-daily-use--2026-09-25) implemented | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | [Complete for exact 0.154.0/Linux arm64/managed Unix/paginated](#codex-official-remote-recovery--complete) | Existing TUI and actual Mac desktop app keep the same native thread across companion restart/broker loss; reopened viewers select a fresh projection, recover history once, and complete later browser work |
 | Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
