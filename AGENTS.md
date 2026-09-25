@@ -67,8 +67,11 @@ version/platform through explicit-port loopback WebSocket with paginated history
 attached local TUI, and two browsers survived fresh-projection restart/backfill without replaying
 native mutations; broker loss retired only the companion while local work completed. The same retained
 sentinel also passed on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
-paginated history, without a production change. Legacy-history recovery, simultaneous official Remote
-recovery, stable projection identity, and richer controls remain outside these runs. The current code accepts exact Codex 0.151.0, 0.153.4, and 0.154.0 on
+paginated history, without a production change. Those historical runs exclude official-client recovery.
+The separate [0.154.0 official desktop Remote recovery](docs/release-finish-line.md#codex-official-remote-recovery--complete)
+qualifies managed Unix/paginated history with the actual Mac app and reopened viewers selecting a fresh
+projection. Legacy/mobile-app recovery and automatic stable-ID reconnect remain unqualified.
+The current code accepts exact Codex 0.151.0, 0.153.4, and 0.154.0 on
 Linux arm64
 and also projects completed `commandExecution` as read-only `Shell` calls and bounded results,
 including failed/declined/nonzero-exit outcomes. Browser mutations are non-empty non-slash text,

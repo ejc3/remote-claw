@@ -12,8 +12,10 @@ follow-on and separate real-TUI/two-browser running-to-idle acceptance are also 
 0.151.0/Linux arm64 app-server text/status tuple and real-TUI/two-browser acceptance are green. M3b's
 exact official-Remote/TUI/two-browser coexistence and provider-transport-isolation outcome is also
 green for that tuple. The Codex clean companion restart/backfill and broker-loss follow-on is green
-on 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; legacy and simultaneous
-official-Remote recovery remain untested. M4's packed exact-Claude/Linux/Bedrock tmux outcome is also green: local pane,
+on 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated. Separate
+[0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete)
+adds the actual Mac app and reopened viewers; legacy/mobile-app recovery and automatic stable-ID
+reconnect remain untested. M4's packed exact-Claude/Linux/Bedrock tmux outcome is also green: local pane,
 two browsers, reload, a browser turn queued without touching a focused native permission modal, local
 approval after both browsers departed, queued-turn completion, broker loss, and later local work. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
@@ -547,7 +549,11 @@ Secret, optionless, nonblocking, malformed, and all
 Passed on 2026-09-07 for exact Codex 0.151.0/Linux arm64, explicit-loopback WS and paginated history.
 The same sentinel passed on 2026-09-08 for exact 0.153.4/Linux arm64, managed Unix and native-reported
 paginated history; the [managed recovery result](release-finish-line.md#codex-recovery--complete)
-owns that acceptance record. Legacy and simultaneous official-Remote recovery remain untested.
+owns that acceptance record. The separate
+[0.154.0 official desktop recovery result](release-finish-line.md#codex-official-remote-recovery--complete)
+records a home-only adaptation with actual Mac observation checkpoints and a separate reopened-viewer
+restoration tail, including its original helper-selection failure. It adds no checked-in suite.
+Legacy/mobile-app recovery and automatic stable-ID reconnect remain untested.
 The single opt-in sentinel starts a built local SQLite broker and two Chromium contexts (desktop and
 phone), runs a packed-installed companion, stops/restarts it on the same native thread with a fresh
 projection, compares native text history unchanged, and checks browser turns once. It then cuts every
@@ -583,7 +589,9 @@ repeating its write, and rejects retired-session input. These do not need provid
 sentinel stays because packed-process attachment, actual native history, browser reconstruction, and
 local TUI survival after socket loss cannot be established by the fake client. The retained reader
 supports legacy history, but no live legacy recovery result is claimed. Native-process crash recovery
-and simultaneous official-Remote recovery remain outside this gate.
+and simultaneous official-Remote recovery remain outside this retained gate; the separate
+[0.154.0 desktop result](release-finish-line.md#codex-official-remote-recovery--complete) owns the latter
+qualification with its narrower reopened-viewer scope.
 
 The later milestones use the same shared security checks but keep product-specific truth:
 
@@ -591,7 +599,7 @@ The later milestones use the same shared security checks but keep product-specif
 | --- | --- |
 | OpenCode status follow-on | Complete: one installed exact 1.17.5 session's MAIN running-to-idle transition was observed consistently by an attached TUI and two independent Chromium contexts; this does not reopen M2 |
 | OpenCode beyond M2 | Each added version, platform, model, permission/control family, or native collaboration surface needs its own exact tuple and bounded outcome; it does not reopen the completed text/interrupt tuple |
-| Codex beyond accepted tuples | Current-version/read-only activity/interrupt/image/command-approval/question and managed Unix/paginated recovery acceptance is tracked in the release roadmap. Legacy or simultaneous official-Remote recovery, further versions, platforms, other permissions/forms and controls, general files, and any per-device unsubscribe claim need their own bounded outcome without reopening accepted results |
+| Codex beyond accepted tuples | Current-version/read-only activity/interrupt/image/command-approval/question and managed Unix/paginated recovery, including the [0.154.0 official desktop result](release-finish-line.md#codex-official-remote-recovery--complete), are tracked in the release roadmap. Legacy/mobile-app recovery, automatic stable-ID reconnect, further versions, platforms, other permissions/forms and controls, general files, and any per-device unsubscribe claim need their own bounded outcome without reopening accepted results |
 | tmux | Complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: packed install, recoverable local pane, two browsers, reload, active-turn isolation at a focused native permission modal, queued browser completion after both browsers depart, and broker-loss isolation; idle-editor concurrency, independent peer ordering, and provider-native/official-client coexistence are explicitly not advertised |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 
