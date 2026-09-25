@@ -121,12 +121,14 @@ test("the session AUTO-reconnects after a browser refresh (credential restored, 
   seedHost,
 }) => {
   const { pass } = await seedHost();
-  // Open via the #fragment and connect — page.tsx strips the fragment from the URL after reading it.
-  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  // Pasted passes often carry surrounding whitespace. Both the live connection and its stored
+  // credential must use the same normalized pass, or the next ordinary reload falls back to the gate.
+  await page.goto(`/${qp}`);
+  await page.getByLabel("Machine pass", { exact: true }).fill(`  ${pass}  `);
   await page.getByRole("button", { name: "Connect" }).click();
   await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
 
-  // Reload: the fragment is gone, so the app restores the stored credential (§3.6) and AUTO-reconnects
+  // Reload without a fragment, so the app restores the stored credential (§3.6) and AUTO-reconnects
   // — it must land back on the session list, NOT the pass/token form (#110).
   await page.reload();
   await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();

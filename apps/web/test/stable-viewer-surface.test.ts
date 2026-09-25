@@ -97,6 +97,8 @@ describe("stable viewer surface", () => {
         now: 1_000,
         reconnectingSince: 0,
         onBack: () => {},
+        draft: { input: "", staged: [] },
+        updateDraft: () => {},
       }),
     );
     expect(html).toContain(
@@ -145,6 +147,8 @@ describe("stable viewer surface", () => {
           now: 1_000,
           reconnectingSince: 0,
           onBack: () => {},
+          draft: { input: "", staged: [] },
+          updateDraft: () => {},
         }),
       );
 

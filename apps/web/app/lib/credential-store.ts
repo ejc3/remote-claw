@@ -92,7 +92,7 @@ const unhex = (s: string): Uint8Array =>
  *  failure must not break a successful connect, so the caller treats a throw as "not persisted". */
 export async function saveCredential(pass: string): Promise<void> {
   const key = await deviceKey();
-  const { iv, ct } = await wrapPass(pass, key);
+  const { iv, ct } = await wrapPass(pass.trim(), key);
   sessionStorage.setItem(BLOB_KEY, JSON.stringify({ iv: hex(iv), ct: hex(ct) }));
 }
 
@@ -109,7 +109,8 @@ export async function loadCredential(): Promise<string | null> {
   if (typeof parsed.iv !== "string" || typeof parsed.ct !== "string") return null;
   try {
     const key = await deviceKey();
-    const pass = await unwrapPass({ iv: unhex(parsed.iv), ct: unhex(parsed.ct) }, key);
+    // Older saves kept pasted whitespace even though connecting already trimmed it.
+    const pass = (await unwrapPass({ iv: unhex(parsed.iv), ct: unhex(parsed.ct) }, key)).trim();
     return pass.startsWith("rcp1_") ? pass : null;
   } catch {
     return null;
@@ -121,7 +122,11 @@ export async function loadCredential(): Promise<string | null> {
  *  decrypt), but a "forget device" should leave nothing behind, so also delete the IDB key (best-effort,
  *  fire-and-forget — a storage failure must not throw out of a UI click handler). */
 export function clearCredential(): void {
-  sessionStorage.removeItem(BLOB_KEY);
+  try {
+    sessionStorage.removeItem(BLOB_KEY);
+  } catch {
+    // Blocked session storage must not prevent disconnect or independent device-key cleanup.
+  }
   void (async () => {
     try {
       const db = await idb();

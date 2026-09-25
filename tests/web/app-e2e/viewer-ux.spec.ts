@@ -7,6 +7,65 @@ import { expect, test } from "./fixtures";
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 
+// Session navigation used to unmount the only owner of unsent text and images. Keep this one browser
+// sentinel: the real keyed component lifecycle and object-URL preview cannot be proved by SSR helpers.
+test("unsent drafts stay isolated through mobile Back and desktop session switching", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ title: "draft session A", caps: "compat-mitm" });
+  await seedHost({ pass, title: "draft session B", caps: "compat-mitm" });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  const rowA = page.locator("button.row", { hasText: "draft session A" });
+  const rowB = page.locator("button.row", { hasText: "draft session B" });
+  const composer = page.getByRole("textbox", { name: "Message" });
+  await rowA.click();
+  await composer.fill("draft belongs to A");
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "draft.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGM4YWMDRwzEcQAREhQBbrqBkwAAAABJRU5ErkJggg==",
+      "base64",
+    ),
+  });
+  await expect(page.locator(".staged-item img")).toBeVisible();
+
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await rowB.click();
+  await expect(composer).toHaveValue("");
+  await expect(page.locator(".staged-item")).toHaveCount(0);
+  await composer.fill("draft belongs to B");
+
+  // Switch through the actual desktop sidebar too, without creating another duplicated scenario.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await rowA.click();
+  await expect(composer).toHaveValue("draft belongs to A");
+  const preview = page.locator('.staged-item img[alt="draft.png"]');
+  await expect(preview).toBeVisible();
+  await expect
+    .poll(() => preview.evaluate((img) => (img as HTMLImageElement).naturalWidth))
+    .toBe(4); // a visible <img> with a revoked object URL is not a restored image draft
+  await rowB.click();
+  await expect(composer).toHaveValue("draft belongs to B");
+  await expect(page.locator(".staged-item")).toHaveCount(0);
+  await rowA.click();
+
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const sent = page.locator(".row-user .pill", { hasText: "draft belongs to A" });
+  await expect(sent).toHaveCount(1);
+  await expect(sent).not.toHaveClass(/pill-pending/); // host receipt, not only an optimistic echo
+  await expect(sent).toContainText("📎 draft.png");
+  await expect(composer).toHaveValue("");
+  await expect(page.locator(".staged-item")).toHaveCount(0);
+
+  await rowB.click();
+  await expect(page.locator(".prose.assistant", { hasText: "Build is green" })).toBeVisible();
+  await expect(composer).toHaveValue("draft belongs to B");
+  await expect(page.locator(".row-user .pill", { hasText: "draft belongs to A" })).toHaveCount(0);
+});
+
 // A computed-style check is the cheapest faithful boundary for the Markdown inheritance regression:
 // component markup and source CSS both looked right, but the built cascade rendered paragraphs at 14px.
 test("assistant prose, code, and diff highlights stay readable on phone and desktop", async ({
