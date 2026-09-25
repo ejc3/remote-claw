@@ -193,12 +193,13 @@ home-folder UI artifacts, outside Git.
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | Managed Unix/paginated recovery passed; official Remote pending external availability | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers; the current result excludes the official client |
 | Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
-| Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance). Claude [single-choice acceptance](#claude-native-single-choice-questions) passed separately | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
+| Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance). Claude [single-choice acceptance](#claude-native-single-choice-questions) and [bounded Bash acceptance](#claude-native-bash-approvals) passed | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted; 0.154.0 native-app text and browser/TUI mutation [acceptance passed](#codex-current-version-acceptance) | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
 Claude is active again as of 2026-09-24; the bounded
 [single-choice question slice](#claude-native-single-choice-questions) is implemented and live-accepted,
-while other Claude approvals and forms remain native. Codex 0.153.4 native questions and
+and the separate [Bash slice](#claude-native-bash-approvals) is implemented and live-accepted;
+unsupported Claude approvals and forms remain native. Codex 0.153.4 native questions and
 managed Unix/paginated recovery are complete; shared desktop/mobile daily-use finish remains queued.
 Official-Remote recovery requires a literal
 same-thread Remote client to be available, not merely a logged-in cloud-Codex page. These sequencing
@@ -230,6 +231,31 @@ identified this overlap; current code intentionally does not promote a duplicate
 Native clients remain usable and post-reconciliation questions are supported. Broader overlap recovery
 needs a demonstrated provider freshness boundary and causal regression before changing this rule,
 not an unchecked replay of history or a new generic coordinator.
+
+### Claude-native Bash approvals
+
+**Implemented; bounded live acceptance passed 2026-09-25.** Exact Claude 2.1.237/Linux supports one-time
+Allow/Deny for the captured Bash command/description input, using the shared question/control lifecycle.
+The [protocol boundary](protocol.md#claude-native-bash-approvals) owns exact admission, copied input,
+no-retry posting, native completion and history/stream-loss rules. The viewer shows the full command
+and explicitly discloses that Claude did not provide a working directory. Other input fields, policy
+extensions and tool families remain native-owned; no sandbox or permission policy is changed.
+
+The native contract was observed in a new isolated Manual-mode fixture with additive ask rules for
+harmless `printf` commands. Actual Mac Allow once yielded one successful worker tool result;
+actual Mac Deny yielded one matching error result with `non_execution_kind: user-rejected` and no
+execution. Both turns ended successfully, so turn success alone is not approval evidence.
+
+The separate companion run attached that exact existing session without changing its native child,
+Manual mode, ask rules or sandbox. Phone-layout Allow executed the exact command once; desktop Deny
+produced a matching native `user-rejected` result with no execution. Actual Mac Deny then beat a held
+stale desktop Allow: the stale POST reached the encrypted broker after neutral resolution, without
+another native decision or execution. Both independent viewers reloaded all three cards neutrally
+with no actionable buttons; pending and resolved phone/desktop light/dark screenshots were inspected.
+This checks stale-after-native-resolution rejection, not every simultaneous-winner race. It does not
+claim other Bash input shapes, other tools, startup/reconnect authority, physical-phone/WebKit
+transport or general approval parity. Evidence remains outside Git under
+`/home/ubuntu/remote-claw-ui-artifacts/claude-native-approval-capture-2026-09-25.pM3qoc/companion-acceptance.x8wLEP/LIVE-ACCEPTANCE.md`.
 
 ### Codex current-version acceptance
 

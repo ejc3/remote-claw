@@ -32,9 +32,10 @@ Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text
 tool calls/textual results to remote-claw while
 ordinary Anthropic Remote Control remains active. Current browser mutations are ordinary non-empty
 non-slash text, image groups with an optional non-slash caption, one-shot session-scoped Interrupt,
-and fresh live single offered-choice question responses. The
-[question boundary](docs/protocol.md#claude-native-single-choice-questions) preserves native ownership
-of other permissions and unsupported forms; history never grants response authority. Its separate
+fresh live single offered-choice question responses, and
+[bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals). The
+[question boundary](docs/protocol.md#claude-native-single-choice-questions) and Bash boundary preserve
+native ownership of unsupported permissions/forms; history never grants response authority. The separate
 [live acceptance](docs/release-finish-line.md#claude-native-single-choice-questions) does not rewrite M1.
 Images become private host-owned upload files referenced by ordinary native text; only the exact
 generated reference-group form is stripped for display, leaving sanitized names/caption on backfill.
@@ -130,7 +131,8 @@ Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-
   (`runClaudeNativeDriverPath`, `run.ts`) — transparently forwards ordinary Anthropic Remote Control,
   binds only the spawned child's successful bridge request, and projects provider-ordered text plus
   read-only worker tool activity through our encrypted broker. Browser mutations are ordinary text,
-  host-owned image uploads, one-shot session-scoped Interrupt, and supported single-choice responses;
+  host-owned image uploads, one-shot session-scoped Interrupt, supported single-choice responses,
+  and bounded one-time Bash decisions;
   a delayed Stop can affect newer native/peer work. The local TUI and provider RC API remain live;
   other permissions, unsupported question forms, other controls, general files, image previews,
   and status are disabled. Linux and exact Claude 2.1.237 only.

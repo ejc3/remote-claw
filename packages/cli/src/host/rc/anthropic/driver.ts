@@ -18,6 +18,7 @@ import { type RcEvent, RelayCore, type Session } from "../session.js";
 import {
   AnthropicRcClient,
   type AnthropicRcEvent,
+  type RcCommandResponseInput,
   type RcEventPage,
   type RcInterruptEventInput,
   type RcPostAck,
@@ -25,9 +26,9 @@ import {
   type RcSseItem,
   type RcUserEventInput,
 } from "./client.js";
+import { ClaudeNativeControls } from "./controls.js";
 import { AnthropicRcError } from "./errors.js";
 import { NativeImageStore } from "./images.js";
-import { ClaudeNativeQuestions } from "./questions.js";
 
 const HISTORY_PAGE_LIMIT = 100;
 const HISTORY_PAGE_CAP = 1_000;
@@ -60,6 +61,11 @@ export interface ClaudeNativeClient {
   postQuestionResponse(
     sessionId: string,
     event: RcQuestionResponseInput,
+    options: { signal: AbortSignal },
+  ): Promise<RcPostAck>;
+  postCommandResponse(
+    sessionId: string,
+    event: RcCommandResponseInput,
     options: { signal: AbortSignal },
   ): Promise<RcPostAck>;
 }
@@ -178,7 +184,7 @@ class NativeReconciler {
   readonly #trace: Tracer;
   readonly #onControlResponse: (event: AnthropicRcEvent) => void;
   readonly #images: NativeImageStore;
-  readonly #questions: ClaudeNativeQuestions;
+  readonly #controls: ClaudeNativeControls;
   readonly #seenEvents = new Map<string, AnthropicRcEvent>();
   readonly #usersByUuid = new Map<string, UserObservation>();
   #lastSequence: bigint | null = null;
@@ -191,7 +197,7 @@ class NativeReconciler {
     trace: Tracer,
     onControlResponse: (event: AnthropicRcEvent) => void,
     images: NativeImageStore,
-    questions: ClaudeNativeQuestions,
+    controls: ClaudeNativeControls,
   ) {
     this.#session = session;
     this.#nativeId = nativeId;
@@ -200,7 +206,7 @@ class NativeReconciler {
     this.#trace = trace;
     this.#onControlResponse = onControlResponse;
     this.#images = images;
-    this.#questions = questions;
+    this.#controls = controls;
   }
 
   accept(event: AnthropicRcEvent, live = false): void {
@@ -229,9 +235,9 @@ class NativeReconciler {
 
   #project(event: AnthropicRcEvent, live: boolean): void {
     try {
-      this.#questions.observe(event, live);
+      this.#controls.observe(event, live);
     } catch {
-      throw new NativeProjectionError("native question projection failed");
+      throw new NativeProjectionError("native control projection failed");
     }
     if (event.eventType === "user") {
       const user = providerUser(event, this.#nativeId);
@@ -370,7 +376,7 @@ export class ClaudeNativeDriver implements Driver {
   readonly #projectionCoordinateCap: number;
   readonly #images: NativeImageStore;
   #pendingInterrupt: PendingInterrupt | null = null;
-  #questions: ClaudeNativeQuestions | null = null;
+  #controls: ClaudeNativeControls | null = null;
 
   constructor(ctx: DriverContext, options: ClaudeNativeDriverOptions) {
     this.#ctx = ctx;
@@ -507,7 +513,7 @@ export class ClaudeNativeDriver implements Driver {
   ): Promise<void> {
     const nativeId = await raceAbort(binding, signal);
     const budget = new ProjectionBudget(this.#projectionCoordinateCap);
-    this.#questions = new ClaudeNativeQuestions(session, nativeId, this.#client);
+    this.#controls = new ClaudeNativeControls(session, nativeId, this.#client);
     const reconciler = new NativeReconciler(
       session,
       nativeId,
@@ -516,7 +522,7 @@ export class ClaudeNativeDriver implements Driver {
       this.#trace,
       (event) => this.#observeInterruptResponse(event),
       this.#images,
-      this.#questions,
+      this.#controls,
     );
 
     // Subscribe first, then read all bounded ascending history. This closes the snapshot gap: live
@@ -624,9 +630,9 @@ export class ClaudeNativeDriver implements Driver {
         if (signal.aborted || session.closed) return;
         this.#writeGate.pause();
         // Native clients/TUI remain live, but a missed peer answer could make this form stale.
-        // Do not recover browser question authority from history or silently label it resolved.
-        if (this.#questions?.pending) {
-          throw new NativeProjectionError("native question lost its live event stream");
+        // Do not recover browser control authority from history or silently label it resolved.
+        if (this.#controls?.pending) {
+          throw new NativeProjectionError("native control lost its live event stream");
         }
         let recovered = false;
         for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS; attempt += 1) {
@@ -696,7 +702,7 @@ export class ClaudeNativeDriver implements Driver {
       if (event.eventType === "control_response") {
         await this.#writeGate.wait(signal);
         if (signal.aborted || session.closed) return;
-        await this.#questions?.respond(event.payload, signal);
+        await this.#controls?.respond(event.payload, signal);
         session.ack(event.eventId);
         continue;
       }

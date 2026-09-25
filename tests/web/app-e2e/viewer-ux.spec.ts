@@ -744,7 +744,7 @@ test.describe("capability gating (#149)", () => {
 
     await expect(page.locator(".perms-bypassed")).toHaveCount(0);
     await expect(page.locator(".local-input-disclosure")).toContainText(
-      "Supported single-choice questions here; other permissions stay in Claude",
+      "Answer the Claude prompts shown here; other permissions stay in Claude",
     );
     await expect(page.getByTestId("composer-mode")).toBeDisabled();
     await expect(page.getByRole("button", { name: "Attach photos" })).toBeEnabled();
@@ -769,7 +769,7 @@ test.describe("capability gating (#149)", () => {
     const sheet = page.locator(".sheet");
     await expect(sheet).toContainText("Claude Code · Anthropic remote control");
     await expect(sheet).toContainText(
-      "Supported single-choice questions here; other permissions stay in Claude",
+      "Answer the Claude prompts shown here; other permissions stay in Claude",
     );
     await expect(sheet).toContainText("can’t switch model");
     const interrupt = sheet.locator(".mode-row-danger", { hasText: "Interrupt" });

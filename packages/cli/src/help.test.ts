@@ -96,7 +96,9 @@ describe("RC_HELP banner", () => {
   it("exposes the bounded Claude native companion separately from the private relay", () => {
     expect(RC_HELP).toMatch(/mitm \| claude-native \| tmux \| opencode/);
     expect(RC_HELP).toContain("Claude native companion (--rc-driver=claude-native)");
-    expect(RC_HELP).toContain("Linux/Claude 2.1.237 text/image/interrupt/question companion");
+    expect(RC_HELP).toContain(
+      "Linux/Claude 2.1.237 text/image/interrupt/approval/question companion",
+    );
     expect(RC_HELP).toMatch(/Images become private host-owned\s+upload files/);
     expect(RC_HELP).toContain("256 MiB decoded-image budget is per companion run");
     expect(RC_HELP).toContain("not a global or cross-restart disk quota");
@@ -104,18 +106,23 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toContain("session-scoped Interrupt");
     expect(RC_HELP).toContain("a delayed Stop may affect newer work");
     expect(RC_HELP).toContain(
-      "Supported single-choice questions can be answered here; other permissions stay in Claude",
+      "Supported Bash approvals and single-choice questions can be answered here; other permissions stay in Claude",
     );
-    expect(RC_HELP).toContain("AskUserQuestion forms first observed after history reconciliation");
+    expect(RC_HELP).toContain("requests first observed after history reconciliation");
     expect(RC_HELP).toContain(
-      "questions overlapping attachment or reconnect history stay native-owned",
+      "requests overlapping attachment or reconnect history stay native-owned",
     );
     expect(RC_HELP).toMatch(
       /one offered-label choice; free text, multiselect, and skip stay native/,
     );
-    expect(RC_HELP).toContain("Answers are sent once and wait for matching native tool completion");
-    expect(RC_HELP).toContain("History never restores answer authority");
-    expect(RC_HELP).toContain("stream drop with an open question retires only the companion");
+    expect(RC_HELP).toContain("without an inferred working directory");
+    expect(RC_HELP).toContain("Allow applies once; Deny rejects that command");
+    expect(RC_HELP).toContain("Unknown fields and permission-policy extensions stay native");
+    expect(RC_HELP).toContain(
+      "Decisions are sent once and wait for matching native tool completion, including rejection",
+    );
+    expect(RC_HELP).toContain("History never restores response authority");
+    expect(RC_HELP).toContain("stream drop with an open request retires only the companion");
     expect(RC_HELP).toMatch(/--rc-inference, --rc-bedrock-\*, and --rc-accountless\s+are rejected/);
     expect(RC_HELP).toMatch(/--rc-native-session <cse_…>/);
     expect(RC_HELP).toMatch(/starts no interactive Claude session or proxy/);

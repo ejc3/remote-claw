@@ -1318,11 +1318,11 @@ export function Transcript(props: {
     interaction.structuredPermissions &&
     caps?.permissionResolution === "native" &&
     caps.structuredQuestions === true;
-  const claudeQuestionDisclosure =
+  const claudeNativeDisclosure =
     announce?.harness?.agent === "claude-code" &&
     announce.harness.mode === "native-rc" &&
     nativeQuestions
-      ? "Supported single-choice questions here; other permissions stay in Claude"
+      ? "Answer the Claude prompts shown here; other permissions stay in Claude"
       : null;
   // Rolling deploys can still surface an older tmux host with either the historical permission mirror
   // or explicit bypass. Only a new, exact local-posture tuple earns the local-ownership claim.
@@ -1335,7 +1335,7 @@ export function Transcript(props: {
   const localInputDisclosure = !interaction.text
     ? "This harness or input policy is not supported. Update remote-claw to enable controls."
     : interaction.structuredPermissions
-      ? (claudeQuestionDisclosure ??
+      ? (claudeNativeDisclosure ??
         (nativeCommandApprovals
           ? nativeQuestions
             ? "Command approvals and supported questions can be answered here. Other approvals stay in Codex."
@@ -2053,7 +2053,7 @@ export function Transcript(props: {
                       : supportedOpenCode
                         ? "Permission prompts stay in OpenCode"
                         : "Permission prompts stay in the local terminal"
-                    : (claudeQuestionDisclosure ??
+                    : (claudeNativeDisclosure ??
                       (nativeCommandApprovals
                         ? nativeQuestions
                           ? "Command approvals and supported questions here; other approvals stay in Codex"

@@ -53,7 +53,10 @@ worker success before later browser text without advertising idle status. Curren
 to the [release roadmap](release-finish-line.md), not a rewrite of M1. The structured critical path
 remains outside Claude. The current [single-choice boundary](protocol.md#claude-native-single-choice-questions)
 and its [acceptance](release-finish-line.md#claude-native-single-choice-questions) add only fresh offered-choice
-responses; other permissions and forms, modes, slash commands, general files, image previews, end, and
+responses. The separate [Bash boundary](protocol.md#claude-native-bash-approvals) adds one-time
+Allow/Deny for the captured command/description shape, with no inferred cwd or policy changes;
+its [acceptance](release-finish-line.md#claude-native-bash-approvals) is tracked separately.
+Unsupported permissions and forms, modes, slash commands, general files, image previews, end, and
 truthful status may graduate later one family at a time.
 Keep the private replacement relay as a separately labeled mode for environments that do not need the
 official client.

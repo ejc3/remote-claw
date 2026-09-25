@@ -46,7 +46,7 @@ function renderBubble(
 }
 
 describe("stable viewer surface", () => {
-  it("admits Claude native questions without claiming general remote permission ownership", async () => {
+  it("admits supported Claude native prompts without claiming general remote permission ownership", async () => {
     const harness = { agent: "claude-code", mode: "native-rc" };
     const capabilities = parseCapabilities(
       {
@@ -100,7 +100,7 @@ describe("stable viewer surface", () => {
       }),
     );
     expect(html).toContain(
-      "Supported single-choice questions here; other permissions stay in Claude",
+      "Answer the Claude prompts shown here; other permissions stay in Claude",
     );
     expect(html).not.toContain("Permissions off");
     expect(html).not.toContain("Permission prompts can be answered here");
@@ -290,25 +290,37 @@ describe("stable viewer surface", () => {
     expect(html.match(/disabled=""/g)?.length).toBe(2);
   });
 
-  it("shows full native command context, then pending and neutral resolution without claiming an approval", () => {
+  it.each([
+    "Codex",
+    "Claude",
+  ] as const)("shows full %s command context, then pending and neutral resolution without claiming an approval", (agent) => {
     const request: Message = {
       kind: "permission_request",
       seq: 6,
       msgId: "permission-native",
       text: JSON.stringify({
         request_id: "native-command",
-        tool_name: "Shell",
+        tool_name: agent === "Claude" ? "Bash" : "Shell",
         tool_input: {
           command: "git status --short\nprintf 'check complete'",
-          cwd: "/work/my project",
-          reason: "Inspect the working tree before making changes",
+          ...(agent === "Codex" ? { cwd: "/work/my project" } : {}),
+          reason:
+            agent === "Claude"
+              ? "Inspect the working tree before making changes\nWorking directory not provided by Claude.\nAllow applies to this command once; Deny rejects it."
+              : "Inspect the working tree before making changes",
         },
       }),
     };
-    const opts = { permissionAgent: "Codex" as const, nativePermissionResolution: true };
+    const opts = { permissionAgent: agent, nativePermissionResolution: true };
     const initial = renderBubble(request, opts);
     expect(initial).toContain("git status --short\nprintf &#x27;check complete&#x27;");
-    expect(initial).toContain("Working directory: /work/my project");
+    if (agent === "Codex") {
+      expect(initial).toContain("Working directory: /work/my project");
+    } else {
+      expect(initial).toContain("Working directory not provided by Claude");
+      expect(initial).not.toContain("Working directory:");
+      expect(initial).toContain("Allow applies to this command once; Deny rejects it");
+    }
     expect(initial).toContain("Reason: Inspect the working tree before making changes");
     expect(initial).toContain(">Allow<");
     expect(initial).toContain(">Deny<");
@@ -318,7 +330,7 @@ describe("stable viewer surface", () => {
       text: JSON.stringify({ request_id: "native-command", behavior }),
     });
     const pending = renderBubble(request, opts, foldPermissionResolutions([stateFrame("pending")]));
-    expect(pending).toContain("Submitted — waiting for Codex confirmation");
+    expect(pending).toContain(`Submitted — waiting for ${agent} confirmation`);
     expect(pending).not.toContain("Allowed");
     expect(pending).not.toContain("Denied");
     expect(pending).not.toContain("perm-actions");
@@ -330,11 +342,11 @@ describe("stable viewer surface", () => {
       opts,
       foldPermissionResolutions([stateFrame("resolved"), stateFrame("pending")]),
     );
-    expect(resolved).toContain("Resolved by Codex");
+    expect(resolved).toContain(`Resolved by ${agent}`);
     expect(resolved).not.toContain("Allowed");
     expect(resolved).not.toContain("Denied");
     expect(resolved).not.toContain("perm-actions");
-    expect(resolved).not.toContain("waiting for Codex");
+    expect(resolved).not.toContain(`waiting for ${agent}`);
   });
 
   const nativeQuestionInput = {

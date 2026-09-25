@@ -232,7 +232,8 @@ fresh-history backfill without changing provider order or receipt semantics. See
 The writer
 fences the projection after a rejected or outcome-unknown POST, before any successor. It also accepts
 the allowlisted session-scoped Interrupt described in [control verbs](#11-compatibility-control-verbs),
-and [fresh single-choice responses](#claude-native-single-choice-questions), without enabling status or
+and [fresh single-choice responses](#claude-native-single-choice-questions) plus
+[bounded Bash decisions](#claude-native-bash-approvals), without enabling status or
 other control families. Accepted provider events and browser mutations share
 a fixed lifetime ceiling; exhausting it
 fails only the projection instead of growing companion state without bound. Projection or broker
@@ -460,7 +461,7 @@ cannot bypass a disabled button:
 | Driver | Structured permissions | Status | Interrupt | Set model | Set mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
-| Claude native companion | fresh single-choice forms only; native resolution | no | yes; session-scoped | no | no | no | yes; images only |
+| Claude native companion | supported Bash decisions and single-choice forms; native resolution | no | yes; session-scoped | no | no | no | yes; images only |
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
@@ -498,10 +499,12 @@ request/tool IDs and UUID are non-empty and bounded to 256 characters; the heade
 nonblank question text to 16,384, nonblank labels to 1,024, and descriptions to 4,096. Unexpected fields
 and malformed or unsupported shapes stay native. This is a structural allowlist, not semantic
 secret detection or a planning-only guarantee; the viewer warns that answers may authorize tool actions.
-Free text, multiple questions, multiselect, skip/Dismiss, and other tool approvals remain native-only.
+Free text, multiple questions, multiselect, and skip/Dismiss remain native-only. The separate
+[Bash boundary](#claude-native-bash-approvals) supports one captured command-input shape; other tools
+and unsupported approvals remain native-only.
 
 `structuredPermissions:true`, `structuredQuestions:true`, and `permissionResolution:"native"` advertise
-only this bounded question surface, not general Claude approvals. Fresh opaque viewer request/question
+this bounded question surface and the Bash boundary below, not general Claude approvals. Fresh opaque viewer request/question
 IDs bind the recorded native request/tool IDs and copied form. A browser may choose one exact offered
 label; its supplied tool IDs and question text are ignored. `postQuestionResponse` sends one
 `control_response` through `POST /v1/code/sessions/{cse_*}/events`, with `behavior:"allow"`,
@@ -523,6 +526,35 @@ those overlapping requests requires a separately validated provider freshness bo
 adapter does not infer one or reopen them.
 The [release result](release-finish-line.md#claude-native-single-choice-questions) owns the bounded live
 acceptance, separately from historical M1 and other control families.
+
+### Claude-native Bash approvals
+
+On the same exact Linux/Claude 2.1.237 tuple, a fresh bound-worker `control_request/can_use_tool`
+first observed after history reconciliation can expose a Bash Allow/Deny card. Admission requires
+`tool_name` and `display_name` both `Bash`, an empty outer `description`, native request/tool IDs
+and UUID bounded to 256 characters, and exactly two input fields: nonblank `command` (at most
+16,384 characters) and nonblank `description` (at most 4,096). The captured request has no
+`requires_user_interaction` field. Unexpected request/input fields remain native-owned, including
+cwd, environment, sandbox and permission-policy extensions. This is not a shell or policy parser.
+
+The card shows the complete command and description, one-time decision semantics, and
+“Working directory not provided by Claude.” It never infers a cwd from the companion's process.
+The shared Claude disclosure says “Answer the Claude prompts shown here; other permissions stay in
+Claude,” which is also truthful for older question-only hosts with the same capability fields.
+
+`postCommandResponse` sends one `control_response` through the fixed session `/events` POST.
+Allow copies the recorded command/description into `updatedInput`; Deny sends `behavior:"deny"`
+and the fixed message `Denied by user`, without `updatedInput`. Both use only the retained native
+request/tool IDs and `tool_name:"Bash"`; viewer-supplied IDs, command rewrites and policy fields cannot
+change the native response. No policy memory, session-wide grant, or sandbox change is sent.
+
+One shared `ClaudeNativeControls` lifecycle owns questions and Bash: consume before the single POST,
+no 401/ambiguous retry, conservative peer consumption, and neutral closure only on the matching
+bound-worker top-level `user/tool_result`, including rejection. A successful turn `result` is not
+permission approval or execution evidence. History/hydration overlap never restores authority;
+losing the stream with an unresolved request or an ambiguous/rejected write retires only the
+companion. Native clients and the local TUI stay usable. The
+[Bash release record](release-finish-line.md#claude-native-bash-approvals) owns live acceptance.
 
 ### Codex command approvals
 
