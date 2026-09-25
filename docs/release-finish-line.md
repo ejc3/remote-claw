@@ -206,8 +206,9 @@ decisions do not remove Claude or official Remote from the target.
 
 ### Claude-native single-choice questions
 
-**Implemented; bounded live acceptance passed 2026-09-25.** Exact Claude 2.1.237/Linux supports fresh
-live single offered-choice forms through the existing encrypted question card. The
+**Implemented; bounded live acceptance passed 2026-09-25.** Exact Claude 2.1.237/Linux supports single
+offered-choice forms first observed live after history reconciliation through the existing encrypted
+question card. The
 [protocol section](protocol.md#claude-native-single-choice-questions) owns admission, one-shot response,
 native completion, and pending-stream-loss boundaries; this is not general Claude approval support.
 
@@ -222,6 +223,13 @@ This checks stale-after-native-resolution rejection, not every simultaneous-winn
 claim free text, multiple questions, multiselect, skip, other approvals, semantic secret detection,
 physical-phone/WebKit transport, or full feature parity. Evidence remains outside Git under
 `/home/ubuntu/remote-claw-ui-artifacts/native-controls-2026-09-24.ZV0QLy/LIVE-ACCEPTANCE.md`.
+
+**Queued startup/reconnect limitation:** a request first encountered in history hydration stays
+native-owned even if the open SSE stream buffered the same request. Hosted review on PR #245
+identified this overlap; current code intentionally does not promote a duplicate into fresh authority.
+Native clients remain usable and post-reconciliation questions are supported. Broader overlap recovery
+needs a demonstrated provider freshness boundary and causal regression before changing this rule,
+not an unchecked replay of history or a new generic coordinator.
 
 ### Codex current-version acceptance
 

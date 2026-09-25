@@ -71,8 +71,10 @@ Claude native companion (--rc-driver=claude-native):
   Stop is sent once and waits for the matching native acknowledgement before
   later browser text; it has no exact-turn target and a delayed Stop may affect newer work.
   Supported single-choice questions can be answered here; other permissions stay in Claude.
-  Only fresh live AskUserQuestion forms with one offered-label choice are supported; free text,
-  multiselect, and skip stay native. Answers are sent once and wait for matching native tool completion.
+  Only AskUserQuestion forms first observed after history reconciliation can be answered here;
+  questions overlapping attachment or reconnect history stay native-owned. Supported forms have
+  one offered-label choice; free text, multiselect, and skip stay native.
+  Answers are sent once and wait for matching native tool completion.
   History never restores answer authority; a stream drop with an open question retires only the companion.
   No native running/idle status is inferred. Model/mode changes, general files, and end remain
   native/local and disabled in the viewer. --rc-inference, --rc-bedrock-*, and --rc-accountless

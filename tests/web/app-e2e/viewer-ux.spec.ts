@@ -731,7 +731,7 @@ test.describe("capability gating (#149)", () => {
     await expect(sheet.locator(".mode-row-danger")).toBeDisabled();
   });
 
-  test("the native Claude companion supports text, images and interrupt without a private-relay warning", async ({
+  test("the native Claude companion discloses single-choice questions and keeps other permissions native", async ({
     page,
     seedHost,
   }) => {
@@ -743,7 +743,9 @@ test.describe("capability gating (#149)", () => {
     await row.click();
 
     await expect(page.locator(".perms-bypassed")).toHaveCount(0);
-    await expect(page.locator(".local-input-disclosure")).toHaveCount(0);
+    await expect(page.locator(".local-input-disclosure")).toContainText(
+      "Supported single-choice questions here; other permissions stay in Claude",
+    );
     await expect(page.getByTestId("composer-mode")).toBeDisabled();
     await expect(page.getByRole("button", { name: "Attach photos" })).toBeEnabled();
 
@@ -766,7 +768,9 @@ test.describe("capability gating (#149)", () => {
     await page.locator("button.chat-menu").click();
     const sheet = page.locator(".sheet");
     await expect(sheet).toContainText("Claude Code · Anthropic remote control");
-    await expect(sheet).toContainText("Permission prompts stay in the local terminal");
+    await expect(sheet).toContainText(
+      "Supported single-choice questions here; other permissions stay in Claude",
+    );
     await expect(sheet).toContainText("can’t switch model");
     const interrupt = sheet.locator(".mode-row-danger", { hasText: "Interrupt" });
     await expect(interrupt).toBeEnabled();

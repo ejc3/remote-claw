@@ -489,8 +489,9 @@ permissions false” means native/local handling, not that permissions are disab
 
 ### Claude-native single-choice questions
 
-On Linux with exact Claude Code 2.1.237, only a fresh live worker `control_request` for
-`can_use_tool` / `AskUserQuestion` on the bound native session can grant browser answer authority.
+On Linux with exact Claude Code 2.1.237, only a worker `control_request` first observed on the live
+stream after history reconciliation for `can_use_tool` / `AskUserQuestion` on the bound native session
+can grant browser answer authority.
 The request must have matching `tool_name` and `display_name`, `requires_user_interaction:true`, and
 exactly one question with `multiSelect:false` and 1–20 uniquely labelled offered options. Native
 request/tool IDs and UUID are non-empty and bounded to 256 characters; the header is bounded to 256,
@@ -515,6 +516,11 @@ the card neutrally as “Resolved by Claude,” without claiming which peer won.
 answers cannot submit again. History, including a request repeated later on SSE, never grants fresh
 authority. Loss of the live event stream while a form is unresolved retires the companion instead of
 recovering its authority from history; native clients and the local TUI stay usable.
+This deliberately leaves requests first encountered during startup/reconnect history hydration
+native-owned, even when a buffered SSE copy is also received. An SSE duplicate is not evidence that
+the request is still pending: history may already contain a peer answer or completion. Recovering
+those overlapping requests requires a separately validated provider freshness boundary; the current
+adapter does not infer one or reopen them.
 The [release result](release-finish-line.md#claude-native-single-choice-questions) owns the bounded live
 acceptance, separately from historical M1 and other control families.
 

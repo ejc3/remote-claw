@@ -106,8 +106,13 @@ describe("RC_HELP banner", () => {
     expect(RC_HELP).toContain(
       "Supported single-choice questions can be answered here; other permissions stay in Claude",
     );
-    expect(RC_HELP).toMatch(/Only fresh live AskUserQuestion forms with one offered-label choice/);
-    expect(RC_HELP).toMatch(/free text,\s+multiselect, and skip stay native/);
+    expect(RC_HELP).toContain("AskUserQuestion forms first observed after history reconciliation");
+    expect(RC_HELP).toContain(
+      "questions overlapping attachment or reconnect history stay native-owned",
+    );
+    expect(RC_HELP).toMatch(
+      /one offered-label choice; free text, multiselect, and skip stay native/,
+    );
     expect(RC_HELP).toContain("Answers are sent once and wait for matching native tool completion");
     expect(RC_HELP).toContain("History never restores answer authority");
     expect(RC_HELP).toContain("stream drop with an open question retires only the companion");

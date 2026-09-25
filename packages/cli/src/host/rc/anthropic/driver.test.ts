@@ -1690,19 +1690,68 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     }
   });
 
-  it("never reopens a historical question when initial SSE replays it", async () => {
+  it.each([
+    false,
+    true,
+  ])("keeps a question overlapping history hydration native-owned (resolved in history=%s)", async (resolvedInHistory) => {
     const harness = await startHarness();
-    harness.native.historyImpl = async () => ({ data: [nativeQuestion()], nextCursor: null });
+    const historyStarted = Promise.withResolvers<void>();
+    const history = Promise.withResolvers<RcEventPage>();
+    harness.native.historyImpl = async () => {
+      historyStarted.resolve();
+      return history.promise;
+    };
+    const question = nativeQuestion();
+    const payload = {
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: "native-question",
+        response: { behavior: "allow" },
+      },
+    };
+    const peer: AnthropicRcEvent = {
+      ...assistant("question-answer", "2", ""),
+      eventType: "control_response",
+      source: "client",
+      payload,
+      raw: {
+        event_id: "question-answer",
+        event_type: "control_response",
+        sequence_num: "2",
+        payload,
+      },
+    };
+    const result = nativeQuestionDone("3");
     try {
-      await bindReady(harness, "cse_question");
-      harness.native.streams[0]?.push(nativeQuestion());
-      harness.native.streams[0]?.push(assistant("barrier", "2", "after history"));
+      harness.proxy.bridge("cse_question");
+      await historyStarted.promise;
+      // The cursorless stream is open, but readiness waits for history. Its buffered event
+      // might be new or replayed; an overlap never proves fresh response authority.
+      expect(harness.native.streams[0]?.sessionIds).toEqual(["cse_question"]);
+      expect(harness.brokerState.creations).toBe(0);
+      harness.native.streams[0]?.push(question);
+      history.resolve({
+        data: resolvedInHistory ? [question, peer, result] : [question],
+        nextCursor: null,
+      });
+      await waitFor(() => harness.broker.announcements.length === 1);
+      harness.native.streams[0]?.push(peer);
+      harness.native.streams[0]?.push(result);
+      // Neither the same provider event nor a new event reusing the request/tool can reopen it.
+      harness.native.streams[0]?.push(question);
+      harness.native.streams[0]?.push(nativeQuestion("4"));
+      harness.native.streams[0]?.push(assistant("barrier", "5", "after history"));
       await waitFor(() => harness.broker.content.some(({ text }) => text === "after history"));
       expect(
         harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
       ).toBe(false);
       expect(harness.native.questionCalls).toEqual([]);
+      expect(harness.session.closed).toBe(false);
+      expect(harness.proxy.closed).toBe(false);
+      expect(harness.isRunSettled()).toBe(false);
     } finally {
+      history.resolve({ data: [], nextCursor: null });
       await harness.stop();
     }
   });
