@@ -385,7 +385,7 @@ export class CodexDriver implements Driver {
       session.workerStatus = resumed.thread.status.type === "active" ? "running" : "idle";
       await this.#reconcileHistory(reconciler, resumed.thread.historyMode, signal);
       for (const inbound of this.#client.drainInbound()) {
-        this.#acceptInbound(inbound, session, reconciler, gate);
+        this.#acceptInbound(inbound, session, reconciler, gate, "startup");
       }
       const handle = bridge.start({
         title: resumed.thread.name
@@ -458,7 +458,7 @@ export class CodexDriver implements Driver {
     signal: AbortSignal,
   ): Promise<void> {
     for await (const inbound of this.#client.inbound(signal)) {
-      this.#acceptInbound(inbound, session, reconciler, gate);
+      this.#acceptInbound(inbound, session, reconciler, gate, "runtime");
     }
   }
 
@@ -467,6 +467,7 @@ export class CodexDriver implements Driver {
     session: Session,
     reconciler: CodexReconciler,
     gate: IdleGate,
+    phase: "startup" | "runtime",
   ): void {
     if (inbound.kind === "request") {
       this.#approvals?.observe(inbound.value);
@@ -494,7 +495,7 @@ export class CodexDriver implements Driver {
     }
     if (method === "thread/status/changed") {
       const status = parseCodexStatus(params.status);
-      if (status.type === "notLoaded") {
+      if (status.type === "notLoaded" || (status.type === "systemError" && phase === "startup")) {
         throw new CodexProjectionError("Codex thread became unavailable");
       }
       // A native turn error can recover without losing this thread or connection. Keep capture live,

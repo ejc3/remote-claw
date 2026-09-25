@@ -1590,6 +1590,54 @@ describe("Codex M3a companion", () => {
     expect(client.externalThreadRunning).toBe(true);
   });
 
+  it("rejects systemError buffered during history reconciliation before announcing", async () => {
+    const barrier = deferred();
+    const client = new FakeCodexClient();
+    client.historyBarrier = barrier.promise;
+    const broker = new FakeDurableBroker();
+    let session: Session | undefined;
+    const driver = new CodexDriver(
+      await context(broker, (value) => {
+        session = value;
+      }),
+      {
+        url: "ws://127.0.0.1:4500",
+        threadId: THREAD_ID,
+        client,
+        runtime: { platform: "linux", arch: "arm64" },
+      },
+    );
+    const ac = new AbortController();
+    const run = driver.run(ac.signal);
+    try {
+      await waitFor(() => client.listCalls.length === 1);
+      expect(broker.posts).toEqual([]);
+      client.buffered.push({
+        kind: "notification",
+        value: {
+          method: "thread/status/changed",
+          params: { threadId: THREAD_ID, status: { type: "systemError" } },
+        },
+      });
+      barrier.resolve();
+      await waitFor(
+        () =>
+          session?.closed === true ||
+          broker.posts.some((post) => post.recordKind === "session_announce"),
+      );
+      expect(broker.posts.some((post) => post.recordKind === "session_announce")).toBe(false);
+      await expect(within(run)).resolves.toBe(1);
+      expect(client.resumeCalls).toEqual([THREAD_ID]);
+      expect(client.startCalls).toEqual([]);
+      expect(client.closeCalls).toBe(1);
+      expect(client.externalThreadRunning).toBe(true);
+    } finally {
+      barrier.resolve();
+      ac.abort();
+      await run;
+    }
+  });
+
   it("fences only the encrypted projection when the app-server connection drops", async () => {
     const launched = await start();
     launched.client.disconnect();
