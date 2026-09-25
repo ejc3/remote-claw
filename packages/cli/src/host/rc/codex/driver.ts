@@ -364,8 +364,9 @@ export class CodexDriver implements Driver {
     try {
       const initialized = await this.#client.initialize(signal);
       assertCodexCompatibility(initialized, this.#options.runtime);
-      // Approval/question replay and resolution belong to this exact version, not the older tuple.
-      if (codexAppServerVersion(initialized.userAgent) === "0.153.4") {
+      // Approval/question replay and resolution belong to these exact versions, not the older tuple.
+      const nativeVersion = codexAppServerVersion(initialized.userAgent);
+      if (nativeVersion === "0.153.4" || nativeVersion === "0.154.0") {
         this.#approvals = new CodexCommandApprovals(session, this.#options.threadId, this.#client);
         this.#questions = new CodexUserQuestions(session, this.#options.threadId, this.#client);
       }

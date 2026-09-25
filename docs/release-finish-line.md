@@ -193,16 +193,53 @@ home-folder UI artifacts, outside Git.
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | Managed Unix/paginated recovery passed; official Remote pending external availability | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers; the current result excludes the official client |
 | Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
-| Remote approvals and questions | Codex 0.153.4 ordinary-command approvals and bounded native choice forms implemented and live-accepted | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
-| Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
+| Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance) | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
+| Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted; 0.154.0 native-app text and browser/TUI mutation [acceptance passed](#codex-current-version-acceptance) | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
-Claude-native approval/question work and new live comparisons are temporarily deferred while the
-user's Claude quota is exhausted. Codex native questions and managed Unix/paginated recovery are
-complete; next is shared desktop/mobile daily-use finish. Official-Remote recovery waits for a literal
+Claude is active again as of 2026-09-24; native approval/question work and live comparisons have resumed,
+without claiming a Claude-native approval/question implementation. Codex 0.153.4 native questions and
+managed Unix/paginated recovery are complete; shared desktop/mobile daily-use finish remains queued.
+Official-Remote recovery requires a literal
 same-thread Remote client to be available, not merely a logged-in cloud-Codex page. These sequencing
 decisions do not remove Claude or official Remote from the target.
 
-**Daily-use recovery warning — 2026-09-20.** The managed-recovery screenshots exposed a historical
+### Codex current-version acceptance
+
+**Implemented; bounded acceptance passed 2026-09-25.** The implementation admits exact 0.154.0/Linux arm64
+alongside 0.151.0 and 0.153.4. The running managed daemon reports 0.154.0. Its `thread/resume` request
+and response schemas differ compatibly: the optional supplied-history `configuration_update` variant
+is unused, and added thread metadata is ignored. The 21 other consumed protocol schemas match 0.153.4.
+It reuses the existing bounded ordinary-command approval and non-secret blocking
+choice-form adapters without changing permission policy, transport, or other capabilities.
+
+On the actual Mac-created native thread through managed Unix, native-app and browser-origin text
+round trips appeared once in the Mac app, attached TUI, and two independent phone-layout/desktop
+remote-claw viewers; browser reload introduced no duplicates. Separate owned native fixtures accepted
+phone Allow with one command execution, desktop Deny with no execution, and native-TUI rejection
+winning against a held stale browser Allow. Questions accepted phone Blue and desktop free-text Coral;
+native-TUI Blue won against held stale browser Green. Both viewers resolved cards neutrally and
+reloaded without duplicate or reactivated cards; light/dark artifacts were inspected. The dedicated
+control fixtures used read-only/on-request settings, with plan mode for questions; the exact saved
+turn contexts confirmed those settings. Global settings and seed-thread policy were unchanged,
+and the managed daemon was not restarted.
+
+The same seed then accepted a captioned PNG from each viewer; native Codex correctly read its visible
+text, and sanitized filenames plus replies appeared once in both viewers and the attached TUI,
+including reload. Each viewer's Interrupt button also interrupted one active native `sleep 20` turn
+while the other viewer had queued ordinary continuation text. Both turns reported `interrupted`,
+both continuations completed once across the TUI and viewers, and the seed finished idle. These
+additional checks reused the existing image and interrupt sentinels, without changing native policy.
+
+This accepts the bounded text/image/interrupt/approval/question compatibility slice. It does not
+requalify companion restart/broker-loss recovery, physical-phone/WebKit transport, native Mac
+image/interrupt/approval/question UI, or process cancellation. Historical 0.151.0/0.153.4 runs retain
+their original scope. Evidence is outside Git under
+`/home/ubuntu/remote-claw-ui-artifacts/codex-native-0.154-2026-09-24.DXrrEN/` and
+`/home/ubuntu/remote-claw-ui-artifacts/codex-native-154-image-interrupt-2026-09-25.QEwazh/`.
+
+### Daily-use recovery warning
+
+**2026-09-20.** The managed-recovery screenshots exposed a historical
 "Session ended" notice above a newly selected live projection. The page now shows that notice only
 when no session is selected; returning to the session list preserves the disclosure until dismissed.
 Termination of the current session still removes its row, deselects it, and reveals the loss/tail
@@ -251,8 +288,8 @@ horizontally. Settled screenshots and measured bounds are retained under
 `/home/ubuntu/remote-claw-ui-artifacts/daily-use-2026-09-07/`. No speculative CSS change or new UI gate
 was added. Future captures should settle animations and scroll the inspected content into view.
 
-**Next visibility tranche — current Codex:** the running host daemon reports exact 0.153.4/Linux arm64,
-while the retained adapter accepts 0.151.0. Extend only the explicit accepted-version set and project
+**Visibility tranche — 2026-09-07 tuple:** the tested host daemon reported exact 0.153.4/Linux arm64,
+while the retained adapter then accepted 0.151.0. The bounded plan was to extend only the explicit accepted-version set and project
 completed `commandExecution` observations through the existing tool-call/result UI. The owning files
 are `codex/{client,driver}.ts`, their focused tests, and current capability docs. Command identity stays
 the native `(turnId,itemId)` tuple; one admitted completed item produces one call and one bounded result.
@@ -281,7 +318,7 @@ coexistence, companion restart/broker-loss on this newer tuple, or other tool fa
 authenticated web UI did not expose a Remote entry during this run; it is not counted as a native
 Remote client merely because it was logged in.
 
-**Next control tranche — Codex interrupt:** enable the existing encrypted Interrupt action for the
+**Codex interrupt tranche — 2026-09-07 plan:** enable the existing encrypted Interrupt action for the
 exact 0.151.0/0.153.4 Linux arm64 companion. Read one latest native turn with
 `thread/turns/list {limit:1, sortDirection:"desc", itemsView:"notLoaded"}`, bind its active ID once,
 then send `turn/interrupt {threadId,turnId}`. Never retarget or retry an old request. Both exact native
@@ -338,7 +375,7 @@ This accepts session-scoped Stop and continuation, not exact-turn/successor isol
 cancellation, remote approval decisions, or status inference.
 
 **Codex screenshots/images — implemented and live-accepted:** the existing phone/desktop composer
-now submits grouped images with an optional caption to exact Codex 0.151.0 and 0.153.4/Linux arm64.
+submits grouped images with an optional caption to exact Codex 0.151.0 and 0.153.4/Linux arm64.
 The host constructs inline image inputs from authenticated image bytes; it never accepts viewer URLs
 or host paths, fetches remote images, or creates upload files. Native history retains the image bytes.
 The canonical native text contains sanitized filename chips and the caption, while remote-claw's
@@ -399,8 +436,9 @@ Native permissions, authenticated browsers, Claude TUI, managed Codex daemon, an
 
 ### Codex command approvals
 
-**Implemented and live-accepted.** Exact Codex 0.153.4/Linux
-arm64 now admits one-shot decisions for ordinary local native commands. The existing managed-socket
+**Implemented and browser/TUI live-accepted on 0.153.4 and 0.154.0.** These exact Linux arm64 versions
+admit one-shot decisions for ordinary local native commands; see the bounded
+[0.154.0 result](#codex-current-version-acceptance). The existing managed-socket
 thread, attached TUI, native permission policy, and other clients remain live. Version 0.151.0 keeps
 native-only approvals; this does not graduate questions or full permission parity.
 
@@ -431,8 +469,9 @@ sentinel owns the shared permission-card behavior. No new E2E matrix or coordina
 
 ### Codex native questions
 
-**Implemented and live-accepted.** Exact Codex 0.153.4/Linux arm64 can project complete blocking,
-non-secret native choice forms through the existing encrypted question card. The bounded surface is
+**Implemented and browser/TUI live-accepted on 0.153.4 and 0.154.0.** These exact Linux arm64 versions
+can project complete blocking, non-secret native choice forms through the existing encrypted question
+card; see the bounded [0.154.0 result](#codex-current-version-acceptance). The bounded surface is
 1–3 questions with 1–20 choices each; only native `isOther` enables free text. Secret, optionless,
 nonblocking, malformed, and all 0.151.0 forms stay native-owned. These are transparent native forms,
 not a planning-only API: the same native method can carry tool-consent wording, and the viewer warns

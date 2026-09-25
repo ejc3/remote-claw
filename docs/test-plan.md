@@ -91,7 +91,7 @@ pnpm --filter @remote-claw/web run test:run
 | Claude private facade | <code>packages/cli/src/host/rc/mitm*.test.ts</code>, <code>session.test.ts</code>, <code>relay.test.ts</code>, <code>launch.test.ts</code> | Strict native intake, worker delivery, translation, fail-stop, and child isolation |
 | Anthropic direct client and native companion | <code>packages/cli/src/host/rc/anthropic/*.test.ts</code>, relay/Session/viewer tests | Fixed-origin OAuth transport, exact launch/attach binding, subscribe/history reconciliation, provider-coordinate dedup, fresh-projection restart, conservative writes, whole-group image validation, private exclusive upload files, per-run decoded-byte budget, never-submitted cleanup and attempted-file retention, raw-slot release, full-text correlation with display-only generated-reference stripping, one-shot session Interrupt without 401 retry, pre-POST pending response registration, exact canonical worker success before later text, response timeout/rejection fencing, and native/projection isolation; session Stop does not establish idle or exact-turn/successor isolation |
 | Pinned OpenCode adapter | <code>packages/cli/src/host/rc/opencode/*.test.ts</code>, focused relay/viewer tests | Exact-session capture, native coordinates and parents, marker correlation, FIFO idle admission, reconnect fencing, interrupt, restart projection, and honest text/interrupt plus read-only MAIN-status capabilities |
-| Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/Session/viewer tests, opt-in <code>tests/web/app-e2e/codex-recovery-live.spec.ts</code> | Explicit-port loopback and literal same-user managed-socket URL boundaries, UUID/platform and exact 0.151.0/0.153.4 version checks, one-item/turn `historyMode` readers with bounded scans, supported input/command filtering, `(turnId,itemId)` identity and changed-byte fencing, bounded command results/error outcomes, whole-group image validation and no URL/path input, bounded transient image retention/release, full ordered-input digest correlation and deadline, subscribe/history/readiness, exact-active-turn interrupt with stale-target no-op and no retarget/retry, FIFO input without blocking interrupt/approval responses or treating RPC acceptance as idle, exact-0.153.4 one-shot ordinary local-command approvals with connection-owned callback identity and native resolution, response-less unsupported requests and all 0.151.0 approvals, disconnect/archive/revert fencing, post-idle closure fence, fresh-projection history without command replay, teardown, dispatch intent, and honest capabilities; the live sentinel owns packed-process/browser/TUI restart and broker-loss wiring |
+| Pinned Codex adapter | <code>packages/cli/src/host/rc/codex/*.test.ts</code>, CLI/relay/Session/viewer tests, opt-in <code>tests/web/app-e2e/codex-recovery-live.spec.ts</code> | Explicit-port loopback and literal same-user managed-socket URL boundaries, UUID/platform and exact 0.151.0/0.153.4/0.154.0 version checks, one-item/turn `historyMode` readers with bounded scans, supported input/command filtering, `(turnId,itemId)` identity and changed-byte fencing, bounded command results/error outcomes, whole-group image validation and no URL/path input, bounded transient image retention/release, full ordered-input digest correlation and deadline, subscribe/history/readiness, exact-active-turn interrupt with stale-target no-op and no retarget/retry, FIFO input without blocking interrupt/approval responses or treating RPC acceptance as idle, exact-0.153.4/0.154.0 one-shot ordinary local-command approvals with connection-owned callback identity and native resolution, response-less unsupported requests and all 0.151.0 approvals, disconnect/archive/revert fencing, post-idle closure fence, fresh-projection history without command replay, teardown, dispatch intent, and honest capabilities; the live sentinel owns packed-process/browser/TUI restart and broker-loss wiring |
 | Maintained tmux fallback | <code>packages/cli/src/host/rc/tmux/*.test.ts</code>, focused relay/viewer tests, <code>tests/web/app-e2e/tmux-live.spec.ts</code> | Shared-helper/flock exclusion for active turns and their native permission/question modal, buffer-before-gate injection, Linux startup probe, blocking prompt-hook failures, SessionEnd projection retirement, Stop-family non-release, three-layer slash/control rejection, permission posture, readiness/recovery, browser departure, and broker-loss isolation for the accepted exact tuple; not idle-editor, generic idle-modal, peer-ordering, structured, or provider parity |
 | Maintained exact Bedrock/accountless connector; broader tuples experimental | <code>packages/cli/src/host/rc/bedrock/*.test.ts</code>, focused MITM/launch tests, exact live gate below | Exact M5 text-only tuple, credential-route isolation, and connector-local contracts; not broader tuple or full-product parity |
 | Broker backends | <code>apps/web/test/broker/*.test.ts</code> | Ordered publish/subscribe, SQLite recovery, Turso locator behavior, retention, handoff storage |
@@ -236,8 +236,8 @@ sanitized diagnostics.
 
 Retained Claude, OpenCode, and Codex fixtures are sanitized observations for exact historical versions
 and protocol claims. The retained Codex fixture remains 0.146.0 history; the supported 0.151.0 M3a
-claim comes from deterministic tests plus its bounded real TUI/two-browser acceptance. The current
-0.153.4 and read-only completed-command follow-on is tracked separately in the
+claim comes from deterministic tests plus its bounded real TUI/two-browser acceptance. Current-version
+and read-only completed-command follow-on work is tracked separately in the
 [release roadmap](release-finish-line.md), not inferred from that historical evidence. Fixtures
 do not make products equivalent or satisfy a new coexistence gate. They are research assets, not
 ordinary CI or the root Biome/test gate. The one-off capture programs and verifiers live in Git history;
@@ -493,7 +493,7 @@ and the other adapter invariants in the ownership table.
 
 ### Codex command approvals
 
-Exact 0.153.4 ordinary local-command decisions have focused client/helper/driver tests for the bounded
+Exact 0.153.4/0.154.0 ordinary local-command decisions have focused client/helper/driver tests for the bounded
 request allowlist, opaque viewer IDs and exact native callbacks, advertised one-shot decisions,
 no policy/input amendments, native-winner/duplicate/stale responses, and companion-only failure.
 The driver-broker sentinel owns native-resolution capability propagation and approvals reachable behind
@@ -511,7 +511,7 @@ questions have their own bounded surface below.
 
 ### Codex native questions
 
-Exact 0.153.4 non-secret blocking choice forms reuse the existing question projection and
+Exact 0.153.4/0.154.0 non-secret blocking choice forms reuse the existing question projection and
 native-resolution lifecycle. Focused client/helper tests own complete-group bounds and rejection,
 stable native question IDs (including repeated wording and ordinary object-property names), offered
 choices versus explicitly permitted free text, one-attempt callback ownership, stale/native-winner
