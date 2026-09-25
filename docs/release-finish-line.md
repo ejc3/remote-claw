@@ -191,7 +191,7 @@ home-folder UI artifacts, outside Git.
 | Follow-on | Status | Bounded user outcome |
 | --- | --- | --- |
 | Native work visibility, Claude first | Claude tools and Codex completed commands implemented and live-accepted | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
-| Desktop/mobile daily-use finish | Recovery warning scoped; broader daily-use audit remains | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
+| Desktop/mobile daily-use finish | Recovery warning scoped; [draft navigation and credential restoration](#viewer-daily-use--2026-09-25) implemented | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | [Complete for exact 0.154.0/Linux arm64/managed Unix/paginated](#codex-official-remote-recovery--complete) | Existing TUI and actual Mac desktop app keep the same native thread across companion restart/broker loss; reopened viewers select a fresh projection, recover history once, and complete later browser work |
 | Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
@@ -202,10 +202,28 @@ Claude is active again as of 2026-09-24; the bounded
 [single-choice question slice](#claude-native-single-choice-questions) is implemented and live-accepted,
 and the separate [Bash slice](#claude-native-bash-approvals) is implemented and live-accepted;
 unsupported Claude approvals and forms remain native. Codex 0.153.4 native questions and
-managed Unix/paginated recovery are complete; shared desktop/mobile daily-use finish remains queued.
+managed Unix/paginated recovery are complete; the shared viewer's bounded daily-use slice is below.
 The separate [0.154.0 recovery result](#codex-official-remote-recovery--complete) used the actual Mac
 desktop app on the same native thread, not merely a logged-in cloud-Codex page. Its reopened-viewer
 scope does not qualify automatic stable-ID reconnect or mobile-app recovery.
+
+### Viewer daily-use — 2026-09-25
+
+The shared viewer keeps unsent text and photo drafts in memory, keyed by the exact session ID, across
+mobile Back and desktop session switching. Sending clears only that session's draft before the network
+wait; an ambiguous send is never restored as a retryable draft. Session termination and Disconnect
+discard the affected drafts and release their image previews. Reload/tab closure also discard drafts;
+there is no plaintext draft storage or transfer to a fresh projection.
+
+Pasted passes now normalize surrounding whitespace for encrypted credential save/restore, including
+older padded stored values. A blocked sessionStorage operation no longer prevents leaving the console
+or attempting independent device-key cleanup. Credential authority and encryption are unchanged.
+
+The existing refresh browser test now covers a padded pass. One navigation sentinel owns the real
+component-unmount/image-preview regression and checks A/B draft isolation plus host-confirmed delivery;
+the blocked-storage failure is covered at the storage adapter. Screenshots and before/after evidence
+stay outside Git under `~/remote-claw-ui-artifacts/daily-use-2026-09-25.9ZJ8g9`.
+This is shared-web behavior, not physical-phone keyboard or native mobile-app qualification.
 
 ### Claude-native single-choice questions
 

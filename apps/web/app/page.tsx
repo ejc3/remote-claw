@@ -18,6 +18,7 @@ import {
   type CSSProperties,
   memo,
   type ReactNode,
+  type SetStateAction,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -152,6 +153,13 @@ interface StagedImage {
   file: File;
   url: string;
 }
+
+interface ComposerDraft {
+  input: string;
+  staged: StagedImage[];
+}
+const EMPTY_DRAFT: ComposerDraft = { input: "", staged: [] };
+type UpdateDraft = (sessionId: string, update: (draft: ComposerDraft) => ComposerDraft) => void;
 
 /** The composer's send action, extracted pure for testing. All staged images of one send go as a SINGLE
  *  grouped attachment message (#114) — the host writes them all and injects ONE `@"p1" @"p2" caption`
@@ -990,6 +998,28 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
   // this the announce stream stays dead on return and the session would read as disconnected forever.
   const [announceRevive, setAnnounceRevive] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
+  // Drafts belong to this connected console, not the currently mounted transcript. Keep them only in
+  // memory and under the exact projection ID: Back/session switching must neither lose nor retarget them.
+  const [drafts, setDrafts] = useState<Map<string, ComposerDraft>>(() => new Map());
+  const draftsRef = useRef(drafts);
+  draftsRef.current = drafts;
+  const updateDraft: UpdateDraft = useCallback((sessionId, update) => {
+    setDrafts((prev) => {
+      const draft = update(prev.get(sessionId) ?? EMPTY_DRAFT);
+      const next = new Map(prev);
+      if (draft.input === "" && draft.staged.length === 0) next.delete(sessionId);
+      else next.set(sessionId, draft);
+      return next;
+    });
+  }, []);
+  useEffect(
+    () => () => {
+      for (const draft of draftsRef.current.values()) {
+        for (const image of draft.staged) URL.revokeObjectURL(image.url);
+      }
+    },
+    [],
+  );
   // An authenticated session_terminal is a permanent lifecycle fact, not an ordinary absence from the
   // live list. Keep a visible disclosure after removing/deselecting the dead row so disappearance cannot
   // be mistaken for a harmless refresh and the user knows the last delivery/output tail may be partial.
@@ -1031,6 +1061,14 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
           // the replayed terminal and cannot notify us again. Applying the idempotent removal here is what
           // keeps a visibility/revive race from leaving a dead row stranded forever.
           reconnectAnchors.current.delete(sessionId);
+          setDrafts((prev) => {
+            const draft = prev.get(sessionId);
+            if (!draft) return prev;
+            for (const image of draft.staged) URL.revokeObjectURL(image.url);
+            const next = new Map(prev);
+            next.delete(sessionId);
+            return next;
+          });
           setTerminalNotice(true);
           setSessions((prev) => {
             if (!prev.has(sessionId)) return prev;
@@ -1211,6 +1249,8 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             announce={current}
             now={now}
             reconnectingSince={current ? anchorFor(current) : 0}
+            draft={drafts.get(selected) ?? EMPTY_DRAFT}
+            updateDraft={updateDraft}
             onBack={() => setSelected(null)}
           />
         )}
@@ -1226,6 +1266,8 @@ export function Transcript(props: {
   announce: Announce | undefined;
   now: number;
   reconnectingSince: number;
+  draft: ComposerDraft;
+  updateDraft: UpdateDraft;
   onBack: () => void;
 }) {
   const { viewer, sessionId, announce, now, reconnectingSince } = props;
@@ -1239,8 +1281,20 @@ export function Transcript(props: {
           (item): item is ActivityGroup =>
             item.kind === "activity_group" && item.id === activitySheetId,
         ) ?? null);
-  const [input, setInput] = useState("");
-  const [staged, setStaged] = useState<StagedImage[]>([]);
+  const { input, staged } = props.draft;
+  const { updateDraft } = props;
+  const setInput = useCallback(
+    (input: string) => updateDraft(sessionId, (draft) => ({ ...draft, input })),
+    [sessionId, updateDraft],
+  );
+  const setStaged = useCallback(
+    (action: SetStateAction<StagedImage[]>) =>
+      updateDraft(sessionId, (draft) => ({
+        ...draft,
+        staged: typeof action === "function" ? action(draft.staged) : action,
+      })),
+    [sessionId, updateDraft],
+  );
   const [sending, setSending] = useState(false);
   // Synchronous re-entry guard for send() — the `sending` STATE can't block a same-tick double-fire (a
   // double-tap / Enter-mash before React commits setSending), so the ref is the actual gate; state drives UI.
@@ -1555,10 +1609,10 @@ export function Transcript(props: {
   }, [gap, retryGap, showGapRecovery]);
 
   // Attachments are STAGED, not auto-sent (#44): the paperclip queues image(s) as thumbnails; they go on
-  // Submit with the composer text. Each holds a File + an object-URL preview (revoked on remove/clear/unmount).
+  // Submit with the composer text. Preview URLs survive session navigation; removal/send and console
+  // disposal revoke them. Console also drops a terminal session's draft rather than transferring it.
   const fileRef = useRef<HTMLInputElement | null>(null);
-  // Mirror staged into a ref so addStaged + the send-failure recovery + the unmount cleanup read the LIVE
-  // value (their closures otherwise see only the render-time copy).
+  // Mirror staged into a ref so addStaged reads the live count rather than its render-time copy.
   const stagedRef = useRef(staged);
   stagedRef.current = staged;
   const addStaged = useCallback(
@@ -1591,37 +1645,32 @@ export function Transcript(props: {
       );
       if (items.length > 0) setStaged((prev) => [...prev, ...items]);
     },
-    [canAttach, connected],
+    [canAttach, connected, setStaged],
   );
-  const removeStaged = useCallback((id: string) => {
-    setStagedNotice(null); // back under the cap → drop any "max images" notice
-    setStaged((prev) => {
-      const hit = prev.find((s) => s.id === id);
-      if (hit) URL.revokeObjectURL(hit.url);
-      return prev.filter((s) => s.id !== id);
-    });
-  }, []);
+  const removeStaged = useCallback(
+    (id: string) => {
+      setStagedNotice(null); // back under the cap → drop any "max images" notice
+      setStaged((prev) => {
+        const hit = prev.find((s) => s.id === id);
+        if (hit) URL.revokeObjectURL(hit.url);
+        return prev.filter((s) => s.id !== id);
+      });
+    },
+    [setStaged],
+  );
   const clearStaged = useCallback(() => {
     setStagedNotice(null);
     setStaged((prev) => {
       for (const s of prev) URL.revokeObjectURL(s.url);
       return [];
     });
-  }, []);
+  }, [setStaged]);
   // A stable-capability refresh can remove attachment support after files were staged. Revoke and clear
   // them immediately so no stale UI path can later smuggle an unsupported mutation into send(). A mere
   // presence blip only disables mutation; it does not discard a compatibility host's local draft.
   useEffect(() => {
     if (!supportsAttachments) clearStaged();
   }, [supportsAttachments, clearStaged]);
-  // Revoke any still-staged object URLs if the transcript unmounts (session switch / back) with a draft.
-  useEffect(
-    () => () => {
-      for (const s of stagedRef.current) URL.revokeObjectURL(s.url);
-    },
-    [],
-  );
-
   const send = useCallback(async () => {
     // OpenCode's native message identity binds immutable text. Validate with trim, but preserve every
     // original text byte for an admitted prompt; other surfaces retain their established trim behavior.
@@ -1683,6 +1732,7 @@ export function Transcript(props: {
     interaction.text,
     interaction.textInput,
     nativeTextOnly,
+    setInput,
   ]);
 
   // Auto-grow the composer textarea up to a cap; recompute whenever the text changes (incl. on clear).

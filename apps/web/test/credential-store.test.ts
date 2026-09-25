@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { newDeviceKey, unwrapPass, wrapPass } from "../app/lib/credential-store";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearCredential, newDeviceKey, unwrapPass, wrapPass } from "../app/lib/credential-store";
+
+afterEach(() => vi.unstubAllGlobals());
 
 // The security-relevant crypto core (§3.6). The IndexedDB + sessionStorage glue is browser-only and thin;
 // here we prove the non-extractable device key + wrap/unwrap behave (WebCrypto is available in node).
@@ -38,5 +40,37 @@ describe("credential-store crypto core", () => {
     const blob = await wrapPass("rcp1_X", key);
     blob.ct[0] = (blob.ct[0] ?? 0) ^ 0xff;
     await expect(unwrapPass(blob, key)).rejects.toThrow();
+  });
+});
+
+describe("credential cleanup", () => {
+  it("continues device-key cleanup when session storage is blocked", async () => {
+    const removeItem = vi.fn(() => {
+      throw new DOMException("Storage is blocked", "SecurityError");
+    });
+    vi.stubGlobal("sessionStorage", { removeItem });
+
+    // Only IDB's successful request callbacks are needed here: this test owns the synchronous storage
+    // failure before key cleanup, not IndexedDB persistence or the browser's CryptoKey cloning.
+    function successRequest<T>(result: T) {
+      const request: { result: T; onsuccess?: () => void } = { result };
+      queueMicrotask(() => request.onsuccess?.());
+      return request;
+    }
+    const deleteKey = vi.fn(() => successRequest(undefined));
+    const store = vi.fn(() => ({ delete: deleteKey }));
+    const transaction = vi.fn(() => ({ objectStore: store }));
+    const cleanupFinished = new Promise<void>((resolve) => {
+      vi.stubGlobal("indexedDB", {
+        open: () => successRequest({ transaction, close: resolve }),
+      });
+    });
+
+    expect(() => clearCredential()).not.toThrow();
+    await cleanupFinished;
+    expect(removeItem).toHaveBeenCalledWith("rc-pass-wrapped");
+    expect(transaction).toHaveBeenCalledWith("cred", "readwrite");
+    expect(store).toHaveBeenCalledWith("cred");
+    expect(deleteKey).toHaveBeenCalledWith("device-key");
   });
 });
