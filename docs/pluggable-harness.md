@@ -284,8 +284,8 @@ means pending, never that our choice won. Unknown writes fence only the companio
 Version 0.151.0 approvals and all unsupported permissions/questions remain native-owned. Keep the
 local TUI attached. The [release roadmap](release-finish-line.md#codex-command-approvals) records the
 native probe and passed 0.153.4 phone/desktop acceptance without claiming official Remote approval
-coverage. The separate [0.154.0 result](release-finish-line.md#codex-current-version-acceptance) also
-accepts browser/TUI approvals and questions; native-app approval/question UI remains untested.
+coverage. The separate [0.154.0 result](release-finish-line.md#codex-current-version-acceptance)
+records that tuple's tested journeys and exclusions.
 
 The separate `codex/questions.ts` adapter admits complete non-secret blocking native choice forms
 on exact 0.153.4 and 0.154.0: 1–3 questions, 1–20 choices each, and free text only when native `isOther` allows it.

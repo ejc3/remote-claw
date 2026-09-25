@@ -194,7 +194,7 @@ home-folder UI artifacts, outside Git.
 | Codex official-Remote recovery | Managed Unix/paginated recovery passed; official Remote pending external availability | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers; the current result excludes the official client |
 | Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
 | Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance) | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
-| Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted; 0.154.0 native-app text and browser/TUI approval/question [acceptance passed](#codex-current-version-acceptance) | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
+| Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted; 0.154.0 native-app text and browser/TUI mutation [acceptance passed](#codex-current-version-acceptance) | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
 Claude is active again as of 2026-09-24; native approval/question work and live comparisons have resumed,
 without claiming a Claude-native approval/question implementation. Codex 0.153.4 native questions and
@@ -218,13 +218,24 @@ remote-claw viewers; browser reload introduced no duplicates. Separate owned nat
 phone Allow with one command execution, desktop Deny with no execution, and native-TUI rejection
 winning against a held stale browser Allow. Questions accepted phone Blue and desktop free-text Coral;
 native-TUI Blue won against held stale browser Green. Both viewers resolved cards neutrally and
-reloaded without duplicate or reactivated cards; light/dark artifacts were inspected. Test requests
-supplied stricter fixture-scoped read-only/on-request settings, with plan mode for questions; global
-settings and seed-thread policy were unchanged, and the managed daemon was not restarted. This
-accepts the bounded text/approval/question compatibility slice, not 0.154.0 images, interrupt,
-companion restart/broker-loss recovery, or approval/question interaction through the actual native
-Mac app. Historical 0.151.0/0.153.4 runs retain their original scope. Evidence is outside Git under
-`/home/ubuntu/remote-claw-ui-artifacts/codex-native-0.154-2026-09-24.DXrrEN/`.
+reloaded without duplicate or reactivated cards; light/dark artifacts were inspected. The dedicated
+control fixtures used read-only/on-request settings, with plan mode for questions; the exact saved
+turn contexts confirmed those settings. Global settings and seed-thread policy were unchanged,
+and the managed daemon was not restarted.
+
+The same seed then accepted a captioned PNG from each viewer; native Codex correctly read its visible
+text, and sanitized filenames plus replies appeared once in both viewers and the attached TUI,
+including reload. Each viewer's Interrupt button also interrupted one active native `sleep 20` turn
+while the other viewer had queued ordinary continuation text. Both turns reported `interrupted`,
+both continuations completed once across the TUI and viewers, and the seed finished idle. These
+additional checks reused the existing image and interrupt sentinels, without changing native policy.
+
+This accepts the bounded text/image/interrupt/approval/question compatibility slice. It does not
+requalify companion restart/broker-loss recovery, physical-phone/WebKit transport, native Mac
+image/interrupt/approval/question UI, or process cancellation. Historical 0.151.0/0.153.4 runs retain
+their original scope. Evidence is outside Git under
+`/home/ubuntu/remote-claw-ui-artifacts/codex-native-0.154-2026-09-24.DXrrEN/` and
+`/home/ubuntu/remote-claw-ui-artifacts/codex-native-154-image-interrupt-2026-09-25.QEwazh/`.
 
 ### Daily-use recovery warning
 

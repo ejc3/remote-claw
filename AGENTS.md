@@ -88,9 +88,8 @@ writes never retry or stop native work. Other controls, general files, streaming
 changes, and task lifecycle remain unsupported. The [release roadmap](docs/release-finish-line.md)
 owns current-version/activity/interrupt/image, command-approval, and question acceptance; the bounded
 question phone/desktop/native-TUI run passed on 0.153.4. The separate
-[0.154.0 acceptance](docs/release-finish-line.md#codex-current-version-acceptance) covers native-app
-text coexistence and browser/TUI command approvals and choice forms, not newer-tuple image,
-interrupt, recovery, or native-app approval/question UI acceptance.
+[0.154.0 acceptance](docs/release-finish-line.md#codex-current-version-acceptance) records the current
+tuple's tested journeys and exclusions in one place.
 The historical M3a/M3b results above remain exact 0.151.0
 evidence. The attachment path
 accepts literal `unix://` only as Codex's same-user managed control socket

@@ -27,8 +27,8 @@ text waits for native idle. Background commands may outlive the interrupted mode
 general files, streaming partials, file changes, other tool families, and task lifecycle are unsupported.
 Current-version/activity/interrupt/image/approval/question acceptance lives in the [release roadmap](release-finish-line.md),
 separately from the historical results below. The separate
-[0.154.0 result](release-finish-line.md#codex-current-version-acceptance) accepts native-app text
-coexistence and browser/TUI approvals and questions, not a repeat of every historical gate.
+[0.154.0 result](release-finish-line.md#codex-current-version-acceptance) records that tuple's tested
+journeys and exclusions, not a repeat of every historical gate.
 
 ## M3a product result
 

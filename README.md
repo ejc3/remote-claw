@@ -35,8 +35,7 @@ credentials.
 > native choice forms. The approval phone/desktop and
 > [question phone/desktop/native-TUI acceptance](docs/release-finish-line.md#codex-native-questions)
 > passed on 0.153.4. Separate [0.154.0 acceptance](docs/release-finish-line.md#codex-current-version-acceptance)
-> covers native-app text coexistence and browser/TUI approvals and questions; images, interrupt,
-> recovery, and native-app approval/question UI were not requalified on that newer tuple.
+> records the newer tuple's tested journeys and exclusions in one place.
 > Version 0.151.0 approvals/questions and unsupported request shapes remain native-owned. Other
 > controls and general files remain disabled. These
 > additions do not rewrite the historical 0.151.0 acceptance; see the release roadmap for their current

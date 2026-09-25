@@ -107,9 +107,8 @@ tool actions; they are not planning-only and add no separate policy/session-gran
 forms and all 0.151.0 approvals/questions remain native-owned.
 Current acceptance is tracked in the
 [release roadmap](release-finish-line.md), without rewriting the historical 0.151.0 results.
-The separate [0.154.0 result](release-finish-line.md#codex-current-version-acceptance) accepts native-app
-text coexistence and browser/TUI approvals and questions; image, interrupt, recovery, and native-app
-approval/question UI acceptance remain outside that run.
+The separate [0.154.0 result](release-finish-line.md#codex-current-version-acceptance) records that
+tuple's tested journeys and exclusions.
 Other controls, general files, streaming partials, file
 changes, task lifecycle, and other versions/platforms remain outside this implementation.
 
