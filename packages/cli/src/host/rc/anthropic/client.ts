@@ -64,6 +64,21 @@ export interface RcInterruptEventInput {
   requestId: string;
 }
 
+export interface RcSingleChoiceQuestion {
+  header: string;
+  question: string;
+  multiSelect: false;
+  options: readonly { label: string; description: string }[];
+}
+
+export interface RcQuestionResponseInput {
+  uuid: string;
+  requestId: string;
+  toolUseId: string;
+  question: RcSingleChoiceQuestion;
+  answer: string;
+}
+
 export interface RcPostAck {
   /** Anthropic's canonical event identity; this may differ from the submitted UUID. */
   eventId: string;
@@ -386,6 +401,49 @@ export class AnthropicRcClient {
             request_id: validatedEvent.requestId,
             request: { subtype: "interrupt" },
             uuid: validatedEvent.uuid,
+          },
+        },
+      ],
+    });
+    const raw = await this.#json(
+      operation,
+      "POST",
+      `/v1/code/sessions/${encodedSession}/events`,
+      options.signal,
+      body,
+      { retryAfter401: false },
+    );
+    return parsePostAck(raw, operation);
+  }
+
+  /** Answer one exact offered choice once; policy, free text, and skip are not this surface. */
+  async postQuestionResponse(
+    sessionId: string,
+    event: RcQuestionResponseInput,
+    options: RcRequestOptions = {},
+  ): Promise<RcPostAck> {
+    const operation = "postQuestionResponse";
+    const encodedSession = encodeSessionId(sessionId, operation);
+    const validated = validateQuestionResponse(event, operation);
+    const body = JSON.stringify({
+      events: [
+        {
+          payload: {
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: validated.requestId,
+              response: {
+                behavior: "allow",
+                toolUseID: validated.toolUseId,
+                tool_name: "AskUserQuestion",
+                updatedInput: {
+                  questions: [validated.question],
+                  answers: { [validated.question.question]: validated.answer },
+                },
+              },
+            },
+            uuid: validated.uuid,
           },
         },
       ],
@@ -872,6 +930,114 @@ function validateInterruptEvent(
     uuid: boundedInputString(uuid, operation, "uuid", MAX_EVENT_METADATA_CHARS),
     requestId: boundedInputString(requestId, operation, "requestId", MAX_EVENT_METADATA_CHARS),
   };
+}
+
+/** Shared admission parser; accepted JSON is copied before it can authorize a response. */
+export function parseSingleChoiceQuestion(value: unknown): RcSingleChoiceQuestion | null {
+  const operation = "parseSingleChoiceQuestion";
+  try {
+    const question = questionInputSnapshot(
+      value,
+      ["header", "question", "multiSelect", "options"],
+      operation,
+    );
+    if (
+      question.multiSelect !== false ||
+      typeof question.header !== "string" ||
+      question.header.length > 256 ||
+      !Array.isArray(question.options)
+    ) {
+      throw AnthropicRcError.protocol(operation, "invalid single-choice question");
+    }
+    const optionCount = question.options.length;
+    if (!Number.isInteger(optionCount) || optionCount < 1 || optionCount > 20) {
+      throw AnthropicRcError.protocol(operation, "invalid question option count");
+    }
+    const options: { label: string; description: string }[] = [];
+    const labels = new Set<string>();
+    for (let index = 0; index < optionCount; index += 1) {
+      const option = questionInputSnapshot(
+        question.options[index],
+        ["label", "description"],
+        operation,
+      );
+      const label = nonblankQuestionString(option.label, operation, "option label", 1024);
+      if (
+        labels.has(label) ||
+        typeof option.description !== "string" ||
+        option.description.length > 4096
+      ) {
+        throw AnthropicRcError.protocol(operation, "invalid question option");
+      }
+      labels.add(label);
+      options.push({ label, description: option.description });
+    }
+    return {
+      header: question.header,
+      question: nonblankQuestionString(question.question, operation, "question", 16_384),
+      multiSelect: false,
+      options,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function validateQuestionResponse(
+  event: RcQuestionResponseInput,
+  operation: string,
+): RcQuestionResponseInput {
+  try {
+    const input = questionInputSnapshot(
+      event,
+      ["uuid", "requestId", "toolUseId", "question", "answer"],
+      operation,
+    );
+    const question = parseSingleChoiceQuestion(input.question);
+    if (
+      question === null ||
+      typeof input.answer !== "string" ||
+      !question.options.some((option) => option.label === input.answer)
+    ) {
+      throw AnthropicRcError.protocol(operation, "answer is not an offered choice");
+    }
+    return {
+      uuid: nonblankQuestionString(input.uuid, operation, "uuid", 256),
+      requestId: nonblankQuestionString(input.requestId, operation, "requestId", 256),
+      toolUseId: nonblankQuestionString(input.toolUseId, operation, "toolUseId", 256),
+      question,
+      answer: input.answer,
+    };
+  } catch {
+    // Reject unreadable/getter-backed input without exposing arbitrary caller errors or dispatching.
+    throw AnthropicRcError.protocol(operation, "invalid question response input");
+  }
+}
+
+function questionInputSnapshot(
+  value: unknown,
+  fields: readonly string[],
+  operation: string,
+): Record<string, unknown> {
+  const input = expectRecord(value, operation, "question response");
+  const keys = Reflect.ownKeys(input);
+  if (keys.length !== fields.length || fields.some((field) => !Object.hasOwn(input, field))) {
+    throw AnthropicRcError.protocol(operation, "unexpected question response fields");
+  }
+  return Object.fromEntries(fields.map((field) => [field, input[field]]));
+}
+
+function nonblankQuestionString(
+  value: unknown,
+  operation: string,
+  field: string,
+  maxChars: number,
+): string {
+  const parsed = boundedInputString(value, operation, field, maxChars);
+  if (parsed.trim() === "") {
+    throw AnthropicRcError.protocol(operation, `${field} is blank`);
+  }
+  return parsed;
 }
 
 function validateUserEvent(event: RcUserEventInput, operation: string): RcUserEventInput {

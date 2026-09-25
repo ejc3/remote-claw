@@ -10,6 +10,7 @@ import {
   optimisticMessage,
   reconcileAccepted,
   Transcript,
+  viewerInteractionPolicy,
 } from "../app/page.js";
 import { uniqueIdentity } from "./helpers.js";
 
@@ -45,6 +46,67 @@ function renderBubble(
 }
 
 describe("stable viewer surface", () => {
+  it("admits Claude native questions without claiming general remote permission ownership", async () => {
+    const harness = { agent: "claude-code", mode: "native-rc" };
+    const capabilities = parseCapabilities(
+      {
+        textInput: "plain",
+        structuredPermissions: true,
+        permissionResolution: "native",
+        structuredQuestions: true,
+        status: false,
+        controls: { interrupt: true, setModel: false, setMode: false, end: false },
+        attachments: true,
+      },
+      harness,
+    );
+    expect(viewerInteractionPolicy(harness, capabilities)).toEqual({
+      textInput: "plain",
+      text: true,
+      structuredPermissions: true,
+      interrupt: true,
+      attachments: true,
+      setModel: false,
+      setMode: false,
+    });
+    const viewer = await Viewer.fromPass(
+      await formatPass(await uniqueIdentity()),
+      "https://broker",
+    );
+    const html = renderToStaticMarkup(
+      createElement(Transcript, {
+        viewer,
+        sessionId: "claude-native-question",
+        title: "Claude native",
+        announce: {
+          sessionId: "claude-native-question",
+          title: "Claude native",
+          cwd: null,
+          sentAt: 1_000,
+          freshnessAt: 1_000,
+          incarnation: "host-1",
+          incarnationStartedAt: 1_000,
+          announceSeq: 0,
+          status: "running",
+          phase: "idle",
+          needs: false,
+          git: null,
+          harness,
+          ...(capabilities === undefined ? {} : { capabilities }),
+        },
+        now: 1_000,
+        reconnectingSince: 0,
+        onBack: () => {},
+      }),
+    );
+    expect(html).toContain(
+      "Supported single-choice questions here; other permissions stay in Claude",
+    );
+    expect(html).not.toContain("Permissions off");
+    expect(html).not.toContain("Permission prompts can be answered here");
+    expect(html).not.toContain("stay in Codex");
+  });
+
   it("renders current tmux permission mode, not the local launch snapshot, after mode changes", async () => {
     const viewer = await Viewer.fromPass(
       await formatPass(await uniqueIdentity()),
@@ -313,6 +375,23 @@ describe("stable viewer surface", () => {
     expect(html).not.toContain(">Dismiss<");
     expect(html).not.toContain('data-selected="true"');
     expect(html).not.toContain("Claude is asking");
+  });
+
+  it("reuses the native question card for Claude with only its offered single choice", () => {
+    const html = renderBubble(
+      nativeQuestionMessage({
+        ...nativeQuestionInput,
+        questions: nativeQuestionInput.questions.slice(0, 1),
+      }),
+      { ...nativeQuestionOpts, permissionAgent: "Claude" },
+    );
+    expect(html).toContain("Claude is asking");
+    expect(html).toContain("Your answers may authorize tool actions in Claude");
+    expect(html).toContain("q-options");
+    expect(html.match(/class="q-block"/g)).toHaveLength(1);
+    expect(html).not.toContain("q-freeform");
+    expect(html).not.toContain(">Dismiss<");
+    expect(html).not.toContain("Codex");
   });
 
   it("keeps native question submissions pending and resolutions neutral without publishing answers", () => {

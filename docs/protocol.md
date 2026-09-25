@@ -198,8 +198,9 @@ restart form never revives or consumes commands from the retired projection.
 
 One reconciler owns provider order. It opens and validates one client SSE stream before paging bounded
 ascending history, follows `next_cursor` or `resume_cursor` under cursor/page/event caps, sorts by
-arbitrary-precision provider sequence, and then drains the already-open stream. Reconnect pauses new
-writes, opens the replacement stream first, reconciles history, and resumes only after continuity is
+arbitrary-precision provider sequence, and then drains the already-open stream. A live-stream loss with
+an unresolved question retires only the companion; history cannot restore question authority. Otherwise,
+reconnect pauses new writes, opens the replacement stream first, reconciles history, and resumes only after continuity is
 restored. Exact provider repeats are no-ops; a changed event identity, reused sequence, or unseen event
 behind the committed high-water mark closes the projection. Opposite-source client/worker replicas with
 the same provider user UUID and normalized text are one logical prompt whichever source arrives first;
@@ -231,7 +232,8 @@ fresh-history backfill without changing provider order or receipt semantics. See
 The writer
 fences the projection after a rejected or outcome-unknown POST, before any successor. It also accepts
 the allowlisted session-scoped Interrupt described in [control verbs](#11-compatibility-control-verbs),
-without enabling status or other control families. Accepted provider events and browser mutations share
+and [fresh single-choice responses](#claude-native-single-choice-questions), without enabling status or
+other control families. Accepted provider events and browser mutations share
 a fixed lifetime ceiling; exhausting it
 fails only the projection instead of growing companion state without bound. Projection or broker
 failure closes only that remote-claw projection. In launch form the transparent proxy and healthy
@@ -458,7 +460,7 @@ cannot bypass a disabled button:
 | Driver | Structured permissions | Status | Interrupt | Set model | Set mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
-| Claude native companion | no | no | yes; session-scoped | no | no | no | yes; images only |
+| Claude native companion | fresh single-choice forms only; native resolution | no | yes; session-scoped | no | no | no | yes; images only |
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
@@ -484,6 +486,45 @@ The supported OpenCode M2 path does not mutate native policy and exposes no brow
 OpenCode and its local UI remain authoritative. Its separate positive mirroring opt-in is experimental,
 append-only, and carries documented child-first-tool and competing-local-answer races. “Structured
 permissions false” means native/local handling, not that permissions are disabled.
+
+### Claude-native single-choice questions
+
+On Linux with exact Claude Code 2.1.237, only a worker `control_request` first observed on the live
+stream after history reconciliation for `can_use_tool` / `AskUserQuestion` on the bound native session
+can grant browser answer authority.
+The request must have matching `tool_name` and `display_name`, `requires_user_interaction:true`, and
+exactly one question with `multiSelect:false` and 1–20 uniquely labelled offered options. Native
+request/tool IDs and UUID are non-empty and bounded to 256 characters; the header is bounded to 256,
+nonblank question text to 16,384, nonblank labels to 1,024, and descriptions to 4,096. Unexpected fields
+and malformed or unsupported shapes stay native. This is a structural allowlist, not semantic
+secret detection or a planning-only guarantee; the viewer warns that answers may authorize tool actions.
+Free text, multiple questions, multiselect, skip/Dismiss, and other tool approvals remain native-only.
+
+`structuredPermissions:true`, `structuredQuestions:true`, and `permissionResolution:"native"` advertise
+only this bounded question surface, not general Claude approvals. Fresh opaque viewer request/question
+IDs bind the recorded native request/tool IDs and copied form. A browser may choose one exact offered
+label; its supplied tool IDs and question text are ignored. `postQuestionResponse` sends one
+`control_response` through `POST /v1/code/sessions/{cse_*}/events`, with `behavior:"allow"`,
+`tool_name:"AskUserQuestion"`, the recorded `toolUseID` and questions, and answers keyed by the single
+recorded native question text. Local authority is consumed before that POST; no retry occurs, including
+after a 401. Rejection or unknown delivery retires only the companion, without altering native policy.
+
+Broker/HTTP admission means pending, not a winning answer. A matching peer `control_response`
+conservatively consumes our remaining authority, but does not resolve the card. Only the bound
+worker's top-level `user` message carrying a `tool_result` for the exact recorded tool-use ID closes
+the card neutrally as “Resolved by Claude,” without claiming which peer won. Duplicate or stale browser
+answers cannot submit again. History, including a request repeated later on SSE, never grants fresh
+authority. Loss of the live event stream while a form is unresolved retires the companion instead of
+recovering its authority from history; native clients and the local TUI stay usable.
+This deliberately leaves requests first encountered during startup/reconnect history hydration
+native-owned, even when a buffered SSE copy is also received. An SSE duplicate is not evidence that
+the request is still pending: history may already contain a peer answer or completion. Recovering
+those overlapping requests requires a separately validated provider freshness boundary; the current
+adapter does not infer one or reopen them.
+The [release result](release-finish-line.md#claude-native-single-choice-questions) owns the bounded live
+acceptance, separately from historical M1 and other control families.
+
+### Codex command approvals
 
 The exact Codex 0.153.4/0.154.0/Linux arm64 command-approval path implements browser decisions only for observed
 `item/commandExecution/requestApproval` records on the selected thread with `kind:"command"` and

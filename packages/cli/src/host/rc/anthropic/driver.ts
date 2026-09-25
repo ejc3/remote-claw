@@ -21,11 +21,13 @@ import {
   type RcEventPage,
   type RcInterruptEventInput,
   type RcPostAck,
+  type RcQuestionResponseInput,
   type RcSseItem,
   type RcUserEventInput,
 } from "./client.js";
 import { AnthropicRcError } from "./errors.js";
 import { NativeImageStore } from "./images.js";
+import { ClaudeNativeQuestions } from "./questions.js";
 
 const HISTORY_PAGE_LIMIT = 100;
 const HISTORY_PAGE_CAP = 1_000;
@@ -54,6 +56,11 @@ export interface ClaudeNativeClient {
     sessionId: string,
     event: RcInterruptEventInput,
     options?: { signal?: AbortSignal },
+  ): Promise<RcPostAck>;
+  postQuestionResponse(
+    sessionId: string,
+    event: RcQuestionResponseInput,
+    options: { signal: AbortSignal },
   ): Promise<RcPostAck>;
 }
 
@@ -171,6 +178,7 @@ class NativeReconciler {
   readonly #trace: Tracer;
   readonly #onControlResponse: (event: AnthropicRcEvent) => void;
   readonly #images: NativeImageStore;
+  readonly #questions: ClaudeNativeQuestions;
   readonly #seenEvents = new Map<string, AnthropicRcEvent>();
   readonly #usersByUuid = new Map<string, UserObservation>();
   #lastSequence: bigint | null = null;
@@ -183,6 +191,7 @@ class NativeReconciler {
     trace: Tracer,
     onControlResponse: (event: AnthropicRcEvent) => void,
     images: NativeImageStore,
+    questions: ClaudeNativeQuestions,
   ) {
     this.#session = session;
     this.#nativeId = nativeId;
@@ -191,16 +200,17 @@ class NativeReconciler {
     this.#trace = trace;
     this.#onControlResponse = onControlResponse;
     this.#images = images;
+    this.#questions = questions;
   }
 
-  accept(event: AnthropicRcEvent): void {
+  accept(event: AnthropicRcEvent, live = false): void {
     const existing = this.#seenEvents.get(event.eventId);
     if (existing !== undefined) {
       if (sameProviderEvent(existing, event)) return;
       if (sameProviderUserEcho(existing, event)) {
         // The same logical prompt can be observed first from either provider source. Run the second
         // source through the UUID correlator even when Anthropic retained one event identity for both.
-        this.#project(event);
+        this.#project(event, live);
         return;
       }
       throw new NativeProjectionError("provider event identity changed across reconciliation");
@@ -214,10 +224,15 @@ class NativeReconciler {
     this.#budget.claim();
     this.#seenEvents.set(event.eventId, event);
     this.#lastSequence = sequence;
-    this.#project(event);
+    this.#project(event, live);
   }
 
-  #project(event: AnthropicRcEvent): void {
+  #project(event: AnthropicRcEvent, live: boolean): void {
+    try {
+      this.#questions.observe(event, live);
+    } catch {
+      throw new NativeProjectionError("native question projection failed");
+    }
     if (event.eventType === "user") {
       const user = providerUser(event, this.#nativeId);
       const mutation = this.#mutations.get(user.uuid);
@@ -335,7 +350,7 @@ class NativeReconciler {
       return;
     }
 
-    // Permissions, other controls, attachments, and protocol-evolution frames remain native.
+    // Unsupported permissions, other controls, and protocol-evolution frames remain native.
     this.#trace.debug("native event retained outside text projection", {
       event: event.eventType,
       source: event.source,
@@ -355,6 +370,7 @@ export class ClaudeNativeDriver implements Driver {
   readonly #projectionCoordinateCap: number;
   readonly #images: NativeImageStore;
   #pendingInterrupt: PendingInterrupt | null = null;
+  #questions: ClaudeNativeQuestions | null = null;
 
   constructor(ctx: DriverContext, options: ClaudeNativeDriverOptions) {
     this.#ctx = ctx;
@@ -491,6 +507,7 @@ export class ClaudeNativeDriver implements Driver {
   ): Promise<void> {
     const nativeId = await raceAbort(binding, signal);
     const budget = new ProjectionBudget(this.#projectionCoordinateCap);
+    this.#questions = new ClaudeNativeQuestions(session, nativeId, this.#client);
     const reconciler = new NativeReconciler(
       session,
       nativeId,
@@ -499,6 +516,7 @@ export class ClaudeNativeDriver implements Driver {
       this.#trace,
       (event) => this.#observeInterruptResponse(event),
       this.#images,
+      this.#questions,
     );
 
     // Subscribe first, then read all bounded ascending history. This closes the snapshot gap: live
@@ -605,6 +623,11 @@ export class ClaudeNativeDriver implements Driver {
         connection.close();
         if (signal.aborted || session.closed) return;
         this.#writeGate.pause();
+        // Native clients/TUI remain live, but a missed peer answer could make this form stale.
+        // Do not recover browser question authority from history or silently label it resolved.
+        if (this.#questions?.pending) {
+          throw new NativeProjectionError("native question lost its live event stream");
+        }
         let recovered = false;
         for (let attempt = 1; attempt <= RECONNECT_ATTEMPTS; attempt += 1) {
           await sleepAbortable(this.#options.reconnectDelayMs ?? RECONNECT_DELAY_MS, signal);
@@ -645,7 +668,7 @@ export class ClaudeNativeDriver implements Driver {
     for (;;) {
       if (signal.aborted) throw abortError();
       if (next.done) return;
-      if (next.value.kind === "event") reconciler.accept(next.value.event);
+      if (next.value.kind === "event") reconciler.accept(next.value.event, true);
       next = await connection.iterator.next();
     }
   }
@@ -667,6 +690,13 @@ export class ClaudeNativeDriver implements Driver {
       }
       if (event.eventType === "control_request" && controlSubtype(event) === "interrupt") {
         await this.#interrupt(session, nativeId, event, signal);
+        session.ack(event.eventId);
+        continue;
+      }
+      if (event.eventType === "control_response") {
+        await this.#writeGate.wait(signal);
+        if (signal.aborted || session.closed) return;
+        await this.#questions?.respond(event.payload, signal);
         session.ack(event.eventId);
         continue;
       }

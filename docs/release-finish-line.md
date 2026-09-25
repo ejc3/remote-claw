@@ -193,15 +193,43 @@ home-folder UI artifacts, outside Git.
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | Managed Unix/paginated recovery passed; official Remote pending external availability | Same managed-socket thread survives companion restart and broker loss with its local TUI, official Remote, and our browsers; the current result excludes the official client |
 | Screenshot/file input | Codex and Claude-native images implemented and live-accepted; general files remain queued | Phone/desktop send encrypted grouped images with native-confirmed delivery and bounded input handling |
-| Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance) | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
+| Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance). Claude [single-choice acceptance](#claude-native-single-choice-questions) passed separately | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted; 0.154.0 native-app text and browser/TUI mutation [acceptance passed](#codex-current-version-acceptance) | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
-Claude is active again as of 2026-09-24; native approval/question work and live comparisons have resumed,
-without claiming a Claude-native approval/question implementation. Codex 0.153.4 native questions and
+Claude is active again as of 2026-09-24; the bounded
+[single-choice question slice](#claude-native-single-choice-questions) is implemented and live-accepted,
+while other Claude approvals and forms remain native. Codex 0.153.4 native questions and
 managed Unix/paginated recovery are complete; shared desktop/mobile daily-use finish remains queued.
 Official-Remote recovery requires a literal
 same-thread Remote client to be available, not merely a logged-in cloud-Codex page. These sequencing
 decisions do not remove Claude or official Remote from the target.
+
+### Claude-native single-choice questions
+
+**Implemented; bounded live acceptance passed 2026-09-25.** Exact Claude 2.1.237/Linux supports single
+offered-choice forms first observed live after history reconciliation through the existing encrypted
+question card. The
+[protocol section](protocol.md#claude-native-single-choice-questions) owns admission, one-shot response,
+native completion, and pending-stream-loss boundaries; this is not general Claude approval support.
+
+On one existing native session, a prompt entered in the actual Mac Claude app produced a question
+answered Blue from the phone-layout viewer; a desktop-viewer prompt was answered Green there; then
+native Mac Blue beat a held stale browser Green. The stale POST demonstrably reached the broker after
+native resolution without causing another native answer. Each case had one matching native request,
+client response, exact worker tool result, assistant answer, and successful completion. Both independent
+viewers resolved neutrally and reloaded all three cards without actionable controls; the native TUI
+and actual Mac app corroborated the answers. The native child and its inherited policy were unchanged.
+This checks stale-after-native-resolution rejection, not every simultaneous-winner race. It does not
+claim free text, multiple questions, multiselect, skip, other approvals, semantic secret detection,
+physical-phone/WebKit transport, or full feature parity. Evidence remains outside Git under
+`/home/ubuntu/remote-claw-ui-artifacts/native-controls-2026-09-24.ZV0QLy/LIVE-ACCEPTANCE.md`.
+
+**Queued startup/reconnect limitation:** a request first encountered in history hydration stays
+native-owned even if the open SSE stream buffered the same request. Hosted review on PR #245
+identified this overlap; current code intentionally does not promote a duplicate into fresh authority.
+Native clients remain usable and post-reconciliation questions are supported. Broader overlap recovery
+needs a demonstrated provider freshness boundary and causal regression before changing this rule,
+not an unchecked replay of history or a new generic coordinator.
 
 ### Codex current-version acceptance
 
@@ -249,6 +277,13 @@ and React rendering caused the defect; a new state abstraction or another native
 not be a cheaper faithful boundary. The fixture can reuse a test identity for distinct sessions.
 Native recovery, tombstones, delivery, permissions, broker behavior, and capability claims are unchanged.
 This closes one presentation defect, not the whole daily-use audit or official-client recovery.
+
+**Sending-viewer ordering — 2026-09-25, merged in #244.** Canonical transcript content now precedes
+provisional local sends, and a confirmed echo replaces its optimistic row at the native-order boundary.
+The cheapest causal reducer regression covers receipt/echo order and multiple pending sends while
+preserving pending/unknown identity and receipt state; light/dark phone/desktop component renders
+were inspected. Evidence is outside Git under `optimistic-ordering-2026-09-25.OimfLd`; no provider,
+permission, retry, or delivery guarantee changed.
 
 Future CLI harnesses (for example Grok) should require a native adapter, validated CLI configuration,
 and one explicit metadata/capability entry, reusing broker, encryption, and viewer renderers. The shared

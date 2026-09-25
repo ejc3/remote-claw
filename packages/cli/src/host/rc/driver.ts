@@ -64,11 +64,13 @@ export const STABLE_MITM_CAPABILITIES: DriverCapabilities = {
 /** The Anthropic app-client companion exposes provider-ordered text and read-only tool activity.
  * Mutations are ordinary text, host-owned images, and one-shot native session Interrupt. The client-side RC seam does
  * not currently prove worker phase transitions, so `status` is deliberately false rather than inferred
- * from transcript traffic. Permission prompts and every other control remain native/local. */
+ * from transcript traffic. Only fresh single-choice AskUserQuestion forms are browser-answerable;
+ * other permissions and controls remain native/local. */
 export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {
   textInput: "plain",
-  permissionPosture: "local",
-  structuredPermissions: false,
+  structuredPermissions: true,
+  permissionResolution: "native",
+  structuredQuestions: true,
   status: false,
   controls: { interrupt: true, setModel: false, setMode: false, end: false },
   attachments: true,

@@ -51,7 +51,7 @@ Remote control (relay sessions to the broker so a phone/laptop can watch + steer
   --rc-driver <d>    capture/inject driver (or set RC_DRIVER): mitm | claude-native | tmux | opencode |
                      codex
                      (default mitm). mitm is the supported private relay and replaces Anthropic RC.
-                     claude-native is the Linux/Claude 2.1.237 text/image/interrupt companion: it leaves ordinary
+                     claude-native is the Linux/Claude 2.1.237 text/image/interrupt/question companion: it leaves ordinary
                      Anthropic Remote Control intact alongside the local TUI and remote-claw browsers.
                      Literal official-client coexistence acceptance passed for the pinned release.
                      Use it with claude's own --remote-control.
@@ -69,9 +69,15 @@ Claude native companion (--rc-driver=claude-native):
   Attempted uploads remain for native ingestion; the 256 MiB decoded-image budget is per companion run,
   not a global or cross-restart disk quota. Remove uploads only when the native session no longer needs them.
   Stop is sent once and waits for the matching native acknowledgement before
-  later browser text; it has no exact-turn target and a delayed Stop may affect newer work. No native
-  running/idle status is inferred. Permissions, questions, model/mode changes, general files, and end
-  remain native/local and disabled in the viewer. --rc-inference, --rc-bedrock-*, and --rc-accountless
+  later browser text; it has no exact-turn target and a delayed Stop may affect newer work.
+  Supported single-choice questions can be answered here; other permissions stay in Claude.
+  Only AskUserQuestion forms first observed after history reconciliation can be answered here;
+  questions overlapping attachment or reconnect history stay native-owned. Supported forms have
+  one offered-label choice; free text, multiselect, and skip stay native.
+  Answers are sent once and wait for matching native tool completion.
+  History never restores answer authority; a stream drop with an open question retires only the companion.
+  No native running/idle status is inferred. Model/mode changes, general files, and end remain
+  native/local and disabled in the viewer. --rc-inference, --rc-bedrock-*, and --rc-accountless
   are rejected for this driver.
   --rc-native-session <cse_…>  attach a fresh remote-claw projection to this exact already-running
                      Anthropic RC session. This form starts no interactive Claude session or proxy and

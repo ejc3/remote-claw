@@ -14,6 +14,7 @@ import {
   type RcEventPage,
   type RcInterruptEventInput,
   type RcPostAck,
+  type RcQuestionResponseInput,
   type RcSseItem,
   type RcUserEventInput,
 } from "./client.js";
@@ -118,6 +119,12 @@ class FakeNativeClient implements ClaudeNativeClient {
   readonly historyCalls: Array<{ sessionId: string; cursor: string | undefined }> = [];
   readonly postCalls: Array<{ sessionId: string; input: RcUserEventInput }> = [];
   readonly interruptCalls: Array<{ sessionId: string; input: RcInterruptEventInput }> = [];
+  readonly questionCalls: Array<{ sessionId: string; input: RcQuestionResponseInput }> = [];
+  questionImpl: () => Promise<RcPostAck> = async () => ({
+    eventId: "question-ack",
+    sequenceNum: "2",
+    duplicate: false,
+  });
   historyImpl: (
     sessionId: string,
     cursor: string | undefined,
@@ -165,6 +172,11 @@ class FakeNativeClient implements ClaudeNativeClient {
   postInterrupt(sessionId: string, input: RcInterruptEventInput): Promise<RcPostAck> {
     this.interruptCalls.push({ sessionId, input });
     return this.interruptImpl(input);
+  }
+
+  postQuestionResponse(sessionId: string, input: RcQuestionResponseInput): Promise<RcPostAck> {
+    this.questionCalls.push({ sessionId, input });
+    return this.questionImpl();
   }
 }
 
@@ -476,6 +488,84 @@ function interruptResponse(
     payload,
     raw: { event_id: eventId, event_type: "control_response", sequence_num: sequence, payload },
   };
+}
+
+function nativeQuestion(sequence = "1"): AnthropicRcEvent {
+  const payload = {
+    type: "control_request",
+    session_id: "cse_question",
+    request_id: "native-question",
+    uuid: `question-${sequence}`,
+    request: {
+      subtype: "can_use_tool",
+      tool_name: "AskUserQuestion",
+      display_name: "AskUserQuestion",
+      description: "",
+      requires_user_interaction: true,
+      tool_use_id: "native-tool",
+      input: {
+        questions: [
+          {
+            header: "Color",
+            question: "Which test color?",
+            multiSelect: false,
+            options: [
+              { label: "Blue", description: "Select blue." },
+              { label: "Green", description: "Select green." },
+            ],
+          },
+        ],
+      },
+    },
+  };
+  return {
+    ...assistant(`question-${sequence}`, sequence, ""),
+    eventType: "control_request",
+    payload,
+    raw: {
+      event_id: `question-${sequence}`,
+      event_type: "control_request",
+      sequence_num: sequence,
+      payload,
+    },
+  };
+}
+
+function nativeQuestionDone(sequence = "2"): AnthropicRcEvent {
+  const payload = {
+    type: "user",
+    uuid: `question-done-${sequence}`,
+    session_id: "cse_question",
+    parent_tool_use_id: null,
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "native-tool", content: "Blue" }],
+    },
+  };
+  return {
+    ...assistant(`question-done-${sequence}`, sequence, ""),
+    eventType: "user",
+    payload,
+    raw: {
+      event_id: `question-done-${sequence}`,
+      event_type: "user",
+      sequence_num: sequence,
+      payload,
+    },
+  };
+}
+
+function questionAnswer(harness: Harness): string {
+  const posted = harness.broker.posts.find(
+    ({ header }) => header.recordKind === "permission_request",
+  );
+  if (posted === undefined) throw new Error("question was not projected");
+  const form = JSON.parse(posted.text);
+  return JSON.stringify({
+    request_id: form.request_id,
+    behavior: "allow",
+    answers: { [form.tool_input.questions[0].id]: "Blue" },
+  });
 }
 
 function userEvent(
@@ -1558,6 +1648,162 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       await harness.stop();
     }
     expect(harness.proxy.closed).toBe(true);
+  });
+
+  it("carries a fresh native question through the existing browser card and worker resolution", async () => {
+    const harness = await startHarness();
+    try {
+      await bindReady(harness, "cse_question");
+      harness.native.streams[0]?.push(nativeQuestion());
+      await waitFor(() =>
+        harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
+      );
+      const answer = questionAnswer(harness);
+      harness.broker.push(inbound(harness, "permission", "answer-a", answer));
+      harness.broker.push(inbound(harness, "permission", "answer-b", answer));
+      await waitFor(() => harness.native.questionCalls.length === 1);
+      expect(harness.native.questionCalls[0]).toMatchObject({
+        sessionId: "cse_question",
+        input: { requestId: "native-question", toolUseId: "native-tool", answer: "Blue" },
+      });
+      expect(
+        harness.broker.posts
+          .filter(({ header }) => header.recordKind === "permission_resolved")
+          .map(({ text }) => JSON.parse(text).behavior),
+      ).toEqual(["pending"]);
+      harness.native.streams[0]?.push(nativeQuestionDone());
+      await waitFor(
+        () =>
+          harness.broker.posts.filter(({ header }) => header.recordKind === "permission_resolved")
+            .length === 2,
+      );
+      expect(
+        harness.broker.posts
+          .filter(({ header }) => header.recordKind === "permission_resolved")
+          .map(({ text }) => JSON.parse(text).behavior),
+      ).toEqual(["pending", "resolved"]);
+      harness.broker.push(inbound(harness, "permission", "late-answer", answer));
+      await tick();
+      expect(harness.native.questionCalls).toHaveLength(1);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it.each([
+    false,
+    true,
+  ])("keeps a question overlapping history hydration native-owned (resolved in history=%s)", async (resolvedInHistory) => {
+    const harness = await startHarness();
+    const historyStarted = Promise.withResolvers<void>();
+    const history = Promise.withResolvers<RcEventPage>();
+    harness.native.historyImpl = async () => {
+      historyStarted.resolve();
+      return history.promise;
+    };
+    const question = nativeQuestion();
+    const payload = {
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: "native-question",
+        response: { behavior: "allow" },
+      },
+    };
+    const peer: AnthropicRcEvent = {
+      ...assistant("question-answer", "2", ""),
+      eventType: "control_response",
+      source: "client",
+      payload,
+      raw: {
+        event_id: "question-answer",
+        event_type: "control_response",
+        sequence_num: "2",
+        payload,
+      },
+    };
+    const result = nativeQuestionDone("3");
+    try {
+      harness.proxy.bridge("cse_question");
+      await historyStarted.promise;
+      // The cursorless stream is open, but readiness waits for history. Its buffered event
+      // might be new or replayed; an overlap never proves fresh response authority.
+      expect(harness.native.streams[0]?.sessionIds).toEqual(["cse_question"]);
+      expect(harness.brokerState.creations).toBe(0);
+      harness.native.streams[0]?.push(question);
+      history.resolve({
+        data: resolvedInHistory ? [question, peer, result] : [question],
+        nextCursor: null,
+      });
+      await waitFor(() => harness.broker.announcements.length === 1);
+      harness.native.streams[0]?.push(peer);
+      harness.native.streams[0]?.push(result);
+      // Neither the same provider event nor a new event reusing the request/tool can reopen it.
+      harness.native.streams[0]?.push(question);
+      harness.native.streams[0]?.push(nativeQuestion("4"));
+      harness.native.streams[0]?.push(assistant("barrier", "5", "after history"));
+      await waitFor(() => harness.broker.content.some(({ text }) => text === "after history"));
+      expect(
+        harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
+      ).toBe(false);
+      expect(harness.native.questionCalls).toEqual([]);
+      expect(harness.session.closed).toBe(false);
+      expect(harness.proxy.closed).toBe(false);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      history.resolve({ data: [], nextCursor: null });
+      await harness.stop();
+    }
+  });
+
+  it.each([
+    false,
+    true,
+  ])("fences only the companion on stream EOF with a submitted=%s question", async (submitted) => {
+    const harness = await startHarness();
+    try {
+      await bindReady(harness, "cse_question");
+      harness.native.streams[0]?.push(nativeQuestion());
+      await waitFor(() =>
+        harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
+      );
+      if (submitted) {
+        harness.broker.push(inbound(harness, "permission", "answer", questionAnswer(harness)));
+        await waitFor(() => harness.native.questionCalls.length === 1);
+      }
+      harness.native.streams[0]?.end();
+      await waitFor(() => harness.session.closed);
+      expect(harness.native.historyCalls).toHaveLength(1);
+      expect(harness.proxy.closed).toBe(false);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("fences an ambiguous question POST before any later browser mutation", async () => {
+    const harness = await startHarness();
+    harness.native.questionImpl = async () => {
+      throw AnthropicRcError.network("postQuestionResponse", {
+        retryable: false,
+        outcomeUnknown: true,
+      });
+    };
+    try {
+      await bindReady(harness, "cse_question");
+      harness.native.streams[0]?.push(nativeQuestion());
+      await waitFor(() =>
+        harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
+      );
+      harness.broker.push(inbound(harness, "permission", "answer", questionAnswer(harness)));
+      harness.broker.push(inbound(harness, "user", "later", "must not post"));
+      await waitFor(() => harness.session.closed);
+      expect(harness.native.questionCalls).toHaveLength(1);
+      expect(harness.native.postCalls).toEqual([]);
+      expect(harness.isRunSettled()).toBe(false);
+    } finally {
+      await harness.stop();
+    }
   });
 
   it("does not POST unsupported downstream controls to Anthropic", async () => {

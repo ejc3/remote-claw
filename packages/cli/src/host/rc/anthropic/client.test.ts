@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AnthropicRcClient, type RcInterruptEventInput, type RcUserEventInput } from "./client.js";
+import {
+  AnthropicRcClient,
+  type RcInterruptEventInput,
+  type RcQuestionResponseInput,
+  type RcUserEventInput,
+} from "./client.js";
 import { AnthropicRcError } from "./errors.js";
 import type { AnthropicRcTransport, AnthropicRcTransportRequest } from "./transport.js";
 
@@ -427,6 +432,276 @@ describe("AnthropicRcClient.postInterrupt", () => {
       retryable: false,
       outcomeUnknown: true,
     });
+    expect(transport.requests).toHaveLength(1);
+  });
+});
+
+describe("AnthropicRcClient.postQuestionResponse", () => {
+  function questionInput(): RcQuestionResponseInput {
+    return {
+      uuid: "question-event-uuid",
+      requestId: "question-request-id",
+      toolUseId: "question-tool-id",
+      question: {
+        header: "Color",
+        question: "Which color?",
+        multiSelect: false,
+        options: [
+          { label: "Blue", description: "Use blue" },
+          { label: "Green", description: "Use green" },
+        ],
+      },
+      answer: "Blue",
+    };
+  }
+
+  it("posts only the captured single-choice response and returns the canonical acknowledgement", async () => {
+    const transport = new FakeTransport(
+      json({ results: [{ event_id: "evt_answer", sequence_num: "43", duplicate: false }] }),
+    );
+    const client = new AnthropicRcClient({ transport });
+
+    await expect(client.postQuestionResponse("cse/a", questionInput())).resolves.toEqual({
+      eventId: "evt_answer",
+      sequenceNum: "43",
+      duplicate: false,
+    });
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0]).toMatchObject({
+      operation: "postQuestionResponse",
+      method: "POST",
+      path: "/v1/code/sessions/cse%2Fa/events",
+      accept: "application/json",
+      retryAfter401: false,
+    });
+    expect(JSON.parse(transport.requests[0]?.body ?? "{}")).toEqual({
+      events: [
+        {
+          payload: {
+            type: "control_response",
+            response: {
+              subtype: "success",
+              request_id: "question-request-id",
+              response: {
+                behavior: "allow",
+                toolUseID: "question-tool-id",
+                tool_name: "AskUserQuestion",
+                updatedInput: {
+                  questions: [questionInput().question],
+                  answers: { "Which color?": "Blue" },
+                },
+              },
+            },
+            uuid: "question-event-uuid",
+          },
+        },
+      ],
+    });
+  });
+
+  it("preserves prototype-like question wording as an own answer key", async () => {
+    const transport = new FakeTransport(
+      json({ results: [{ event_id: "evt_answer", sequence_num: "43", duplicate: false }] }),
+    );
+    const input = questionInput();
+    input.question.question = "__proto__";
+    await new AnthropicRcClient({ transport }).postQuestionResponse("cse_input", input);
+    const body = JSON.parse(transport.requests[0]?.body ?? "{}");
+    const answers = body.events[0].payload.response.response.updatedInput.answers;
+    expect(Object.keys(answers)).toEqual(["__proto__"]);
+    expect(answers.__proto__).toBe("Blue");
+  });
+
+  it("accepts the exact size limits and twenty distinct offered choices", async () => {
+    const transport = new FakeTransport(
+      json({ results: [{ event_id: "evt_answer", sequence_num: "43", duplicate: false }] }),
+    );
+    const input = questionInput();
+    input.uuid = "u".repeat(256);
+    input.requestId = "r".repeat(256);
+    input.toolUseId = "t".repeat(256);
+    input.question.header = "h".repeat(256);
+    input.question.question = "q".repeat(16_384);
+    input.question.options = Array.from({ length: 20 }, (_, index) => ({
+      label: String(index).padEnd(1024, "x"),
+      description: "d".repeat(4096),
+    }));
+    input.answer = "0".padEnd(1024, "x");
+    await expect(
+      new AnthropicRcClient({ transport }).postQuestionResponse("cse_input", input),
+    ).resolves.toMatchObject({ eventId: "evt_answer" });
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  it("rejects malformed, non-offered, and additional-policy input before transport", async () => {
+    const valid = questionInput();
+    const invalid: unknown[] = [null, undefined, [], "question"];
+    for (const field of ["uuid", "requestId", "toolUseId"]) {
+      for (const value of ["", " \t", "i".repeat(257), 1]) {
+        invalid.push({ ...valid, [field]: value });
+      }
+    }
+    for (const override of [
+      { question: "" },
+      { question: " \n" },
+      { question: "q".repeat(16_385) },
+      { header: "h".repeat(257) },
+      { header: null },
+      { multiSelect: true },
+      { multiSelect: undefined },
+      { options: [] },
+      { options: Array.from({ length: 21 }, (_, i) => ({ label: `${i}`, description: "" })) },
+      {
+        options: [
+          { label: "Blue", description: "" },
+          { label: "Blue", description: "" },
+        ],
+      },
+      { options: [{ label: "Blue", description: "d".repeat(4097) }] },
+      { options: [{ label: "Blue", description: null }] },
+      { options: [{ label: "Blue" }] },
+      { options: [{ label: "", description: "" }] },
+      { options: [{ label: " \t", description: "" }] },
+      { options: [{ label: "l".repeat(1025), description: "" }] },
+      { options: [null] },
+      { options: null },
+    ]) {
+      invalid.push({ ...valid, question: { ...valid.question, ...override } });
+    }
+    for (const answer of ["", "blue", " Blue", "Other", "Blue, Green", null, ["Blue"]]) {
+      invalid.push({ ...valid, answer });
+    }
+    for (const field of ["freeform", "secret", "skip", "permissionMode", "updatedPermissions"]) {
+      invalid.push(
+        { ...valid, [field]: true },
+        { ...valid, question: { ...valid.question, [field]: true } },
+        {
+          ...valid,
+          question: {
+            ...valid.question,
+            options: [{ label: "Blue", description: "", [field]: true }],
+          },
+        },
+      );
+    }
+    const missingOwnId = { ...valid };
+    Reflect.deleteProperty(missingOwnId, "requestId");
+    Object.setPrototypeOf(missingOwnId, { requestId: valid.requestId });
+    invalid.push(missingOwnId);
+    const hiddenExtra = { ...valid };
+    Object.defineProperty(hiddenExtra, "secret", { value: true });
+    invalid.push(hiddenExtra, { ...valid, [Symbol("extra")]: true });
+
+    const transport = new FakeTransport();
+    const client = new AnthropicRcClient({ transport });
+    for (const input of invalid) {
+      await expect(
+        client.postQuestionResponse("cse_input", input as RcQuestionResponseInput),
+      ).rejects.toMatchObject({
+        kind: "protocol",
+        operation: "postQuestionResponse",
+        retryable: false,
+        outcomeUnknown: false,
+      });
+    }
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it("snapshots fields and nested options once without retaining caller mutation", async () => {
+    const transport = new FakeTransport(
+      json({ results: [{ event_id: "evt_answer", sequence_num: "43", duplicate: false }] }),
+    );
+    const input = questionInput();
+    const original = structuredClone(input);
+    let questionReads = 0;
+    let labelReads = 0;
+    const question = input.question;
+    Object.defineProperty(input, "question", {
+      get() {
+        questionReads += 1;
+        return questionReads === 1 ? question : null;
+      },
+    });
+    Object.defineProperty(question.options[0], "label", {
+      get() {
+        labelReads += 1;
+        return labelReads === 1 ? "Blue" : "not offered";
+      },
+    });
+    const pending = new AnthropicRcClient({ transport }).postQuestionResponse("cse_input", input);
+    input.answer = "Green";
+    question.question = "Changed after dispatch";
+    question.options = [];
+    await pending;
+    expect(questionReads).toBe(1);
+    expect(labelReads).toBe(1);
+    const body = JSON.parse(transport.requests[0]?.body ?? "{}");
+    expect(body.events[0].payload.response.response.updatedInput).toEqual({
+      questions: [original.question],
+      answers: { "Which color?": "Blue" },
+    });
+  });
+
+  it("sanitizes throwing input accessors without dispatching", async () => {
+    const transport = new FakeTransport();
+    const input = questionInput();
+    Object.defineProperty(input.question, "options", {
+      get() {
+        throw new Error("private-question-getter-canary");
+      },
+    });
+    const error = await new AnthropicRcClient({ transport })
+      .postQuestionResponse("cse_input", input)
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ kind: "protocol", outcomeUnknown: false });
+    expect(String(error)).not.toContain("private-question-getter-canary");
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it("does not wait for OAuth rotation or replay a 401 response", async () => {
+    const authRequests: boolean[] = [];
+    let fetchCalls = 0;
+    const client = new AnthropicRcClient({
+      oauth: {
+        async accessToken(options) {
+          authRequests.push(options.forceRefresh);
+          return options.forceRefresh ? "rotated-test-token" : "test-token";
+        },
+      },
+      fetchFn: async () => {
+        fetchCalls += 1;
+        return json({}, 401);
+      },
+    });
+    await expect(client.postQuestionResponse("cse_input", questionInput())).rejects.toMatchObject({
+      kind: "http",
+      status: 401,
+      retryable: false,
+    });
+    expect(authRequests).toEqual([false]);
+    expect(fetchCalls).toBe(1);
+  });
+
+  it.each([
+    [
+      "network failure",
+      () => {
+        throw new Error("private-network-canary");
+      },
+    ],
+    ["server error", () => json({}, 500)],
+    ["malformed acknowledgement", () => json({ results: [] })],
+  ] as const)("never retries an ambiguous %s", async (_label, reply) => {
+    const transport = new FakeTransport(reply);
+    const error = await new AnthropicRcClient({ transport })
+      .postQuestionResponse("cse_input", questionInput())
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({
+      operation: "postQuestionResponse",
+      retryable: false,
+      outcomeUnknown: true,
+    });
+    expect(String(error)).not.toContain("private-network-canary");
     expect(transport.requests).toHaveLength(1);
   });
 });
