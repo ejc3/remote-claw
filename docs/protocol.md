@@ -436,6 +436,13 @@ capability vector may include `permissionPosture:"local"|"bypassed"|"unknown"` w
 `structuredPermissions:false`; absence never proves a native gate, and explicit `unknown` is distinct
 from legacy absence.
 
+Current native-companion titles are display metadata, never routing or selection authority. Codex
+uses the optional name from its exact-thread resume response (trimmed and limited to 512 code units),
+falling back to `Codex <native thread ID>` if absent or invalid. Claude-native uses
+`Claude <bound native session ID>` without a session-discovery request. These labels distinguish
+otherwise identical working-directory rows; native renames are not followed within a running
+projection. The encrypted announcement and exact-ID attachment boundaries are unchanged.
+
 Current supported drivers also declare optional `textInput:"plain"|"terminal"`. This input boundary
 is independent of feature booleans: enabling interrupt or attachments cannot admit slash commands or
 unsafe terminal controls. The shared [harness contract](pluggable-harness.md#2-driver-and-context)

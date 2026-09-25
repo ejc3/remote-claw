@@ -512,6 +512,25 @@ describe("Codex M3a companion", () => {
     for (const controller of controllers.splice(0)) controller.abort();
   });
 
+  it.each([
+    ["Run native parity smoke test", "Run native parity smoke test"],
+    [undefined, `Codex ${THREAD_ID}`],
+  ])("announces an exact native thread label (%s)", async (name, expected) => {
+    const client = new FakeCodexClient();
+    if (name !== undefined) client.resumeResult.thread.name = name;
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    try {
+      const announce = launched.broker.posts.find((post) => post.recordKind === "session_announce");
+      expect(JSON.parse(announce?.text ?? "{}").title).toBe(expected);
+      expect(client.resumeCalls).toEqual([THREAD_ID]);
+      expect(client.startCalls).toEqual([]);
+    } finally {
+      launched.ac.abort();
+      await expect(launched.run).resolves.toBe(0);
+    }
+  });
+
   it("keeps presence private until exact-thread resume and bounded history complete", async () => {
     const barrier = deferred();
     const client = new FakeCodexClient();

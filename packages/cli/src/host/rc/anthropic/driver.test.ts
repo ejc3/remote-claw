@@ -717,6 +717,32 @@ function acceptedBodies(harness: Harness): Array<Record<string, unknown>> {
 }
 
 describe("ClaudeNativeDriver direct attachment lifecycle", () => {
+  it("announces distinct exact native session labels without discovery", async () => {
+    const labels: unknown[] = [];
+    for (const nativeSessionId of [
+      "cse_first_exact_native_session",
+      "cse_second_exact_native_session",
+    ]) {
+      const native = new FakeNativeClient();
+      const broker = new FakeBroker();
+      const harness = await startAttachHarness({ native, broker, nativeSessionId });
+      try {
+        await harness.ready();
+        labels.push(broker.announcements[0]?.title);
+        expect(native.historyCalls).toEqual([{ sessionId: nativeSessionId, cursor: undefined }]);
+        expect(native.streams[0]?.sessionIds).toEqual([nativeSessionId]);
+        expect(native.postCalls).toEqual([]);
+        expect(harness.unusedOwnerCalls()).toEqual({ proxy: 0, spawn: 0 });
+      } finally {
+        await expect(harness.stop()).resolves.toBe(0);
+      }
+    }
+    expect(labels).toEqual([
+      "Claude cse_first_exact_native_session",
+      "Claude cse_second_exact_native_session",
+    ]);
+  });
+
   it("reattaches one native session through a fresh isolated projection without repeating a prior write", async () => {
     const nativeId = "cse_restart_exact";
     const native = new FakeNativeClient();

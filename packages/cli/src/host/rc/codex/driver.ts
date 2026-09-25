@@ -388,7 +388,7 @@ export class CodexDriver implements Driver {
         this.#acceptInbound(inbound, session, reconciler, gate);
       }
       const handle = bridge.start({
-        title: this.#ctx.title,
+        title: resumed.thread.name ?? `Codex ${this.#options.threadId}`,
         cwd: this.#ctx.cwd,
         git: this.#ctx.git,
         capabilities: this.capabilities,

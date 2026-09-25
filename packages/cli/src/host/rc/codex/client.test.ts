@@ -377,6 +377,55 @@ describe("Codex app-server boundary", () => {
     expect(codexAppServerVersion(userAgent as string)).toBe(expected);
   });
 
+  it.each([
+    ["  Run native parity smoke test  ", "Run native parity smoke test"],
+    [undefined, undefined],
+    [null, undefined],
+    ["  \t\n", undefined],
+    [42, undefined],
+    [{ title: "not a name" }, undefined],
+    ["x".repeat(10_000), "x".repeat(512)],
+  ])("preserves optional native session names without rejecting usable threads %#", async (name, expected) => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    socket.send = (data: string): void => {
+      const message = JSON.parse(data) as Record<string, unknown>;
+      if (message.method !== "thread/resume") {
+        originalSend(data);
+        return;
+      }
+      socket.sent.push(message);
+      socket.respond(message.id, {
+        thread: {
+          id: THREAD_ID,
+          name,
+          status: { type: "idle" },
+          canAcceptDirectInput: true,
+          historyMode: "paginated",
+        },
+      });
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    try {
+      await client.initialize(signal);
+      const resumed = await client.resume(THREAD_ID, signal);
+      expect(resumed.thread).toEqual({
+        id: THREAD_ID,
+        ...(expected === undefined ? {} : { name: expected }),
+        status: { type: "idle" },
+        canAcceptDirectInput: true,
+        historyMode: "paginated",
+      });
+      expect(socket.sent.at(-1)).toMatchObject({
+        method: "thread/resume",
+        params: { threadId: THREAD_ID, excludeTurns: true },
+      });
+    } finally {
+      client.close();
+    }
+  });
+
   it("rejects a resumed thread without a recognized history mode", async () => {
     const socket = new FakeSocket();
     const originalSend = socket.send.bind(socket);

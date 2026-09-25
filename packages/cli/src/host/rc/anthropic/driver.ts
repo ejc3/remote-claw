@@ -532,7 +532,7 @@ export class ClaudeNativeDriver implements Driver {
     if (signal.aborted || session.closed) throw abortError();
 
     bridge.start({
-      title: this.#ctx.title,
+      title: `Claude ${nativeId}`,
       cwd: this.#ctx.cwd,
       git: this.#ctx.git,
       capabilities: CLAUDE_NATIVE_CAPABILITIES,
