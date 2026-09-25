@@ -237,7 +237,9 @@ accepted cases, screenshots, and exclusions remain outside Git under
 
 That run exposed indistinguishable native session rows: each companion advertised `remote-claw`, even
 when native Codex supplied a thread name. Codex now preserves that optional display name, trimmed and
-bounded to 512 code units, and falls back to `Codex <exact native thread ID>`. Claude-native uses
+bounded to 512 code units, followed by the exact native thread ID so duplicate names remain
+distinguishable. Without a valid name it uses `Codex <exact native thread ID>`. Compact rows can
+truncate the label; Session actions → Details shows the full name and ID. Claude-native uses
 `Claude <exact bound native session ID>` without adding discovery or metadata requests. These are
 display-only, launch-time labels; they do not follow later native renames, provide stable projection
 IDs, or change attachment authority. Detailed regressions live at the existing native client/driver
