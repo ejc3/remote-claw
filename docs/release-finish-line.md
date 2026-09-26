@@ -322,8 +322,12 @@ form retained single `"[No preference]"` and multi `["[No preference]"]`. Actual
 the native TUI corroborated both completed replies, with no permission update. Private evidence remains under
 `~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/native-forms.L2sIW6/`.
 
-Focused client/control tests own form bounds, exact string/array values, malformed and duplicate
-answers, original-input ownership, and existing history/peer/stream-loss fences. The browser sentinel
+Focused client/control tests own form bounds, exact string/array values, rejection before native POST,
+original-input ownership, and existing history/peer/stream-loss fences. The existing relay consumes
+the first browser submission before adapter validation: a malformed authenticated peer answer can
+leave browser cards pending until a native client answers. Browser correction after that rejection
+is not supported or claimed; it is a separate liveness limitation, not an approval bypass.
+The browser sentinel
 owns multi-question interaction and honest pending/resolved state. This two-form live outcome does
 not repeat every stale-peer race, startup/reconnect case, or four-question maximum on native clients;
 the corresponding boundary tests and historical narrower acceptance remain separate. It does not

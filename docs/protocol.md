@@ -545,8 +545,13 @@ and unsupported approvals remain native-only.
 `structuredPermissions:true`, `structuredQuestions:true`, and `permissionResolution:"native"` advertise
 this bounded question surface and the Bash boundary below, not general Claude approvals. Fresh opaque
 viewer request/question IDs bind the recorded native request/tool IDs and copied form. Every question
-must have one correctly typed answer. Missing/extra answer keys, malformed values, and duplicate
-multiselect entries are rejected without consuming authority.
+must have one correctly typed answer. The native adapter rejects missing/extra answer keys,
+malformed values, and duplicate multiselect entries before attempting a native response.
+The relay separately consumes its one browser submission and publishes pending **before** adapter
+validation. Therefore a malformed authenticated peer submission can leave all remote-claw viewers
+pending even though no native response was attempted; a later browser answer is not retried, and the
+form must be answered in a native client. This existing conservative relay boundary does not grant
+an invalid approval. Native-adapter validation tests do not prove browser correction after rejection.
 Viewer-supplied tool IDs and question text are ignored. `postQuestionResponse` sends one
 `control_response` through `POST /v1/code/sessions/{cse_*}/events`, with `behavior:"allow"`,
 `tool_name:"AskUserQuestion"`, the recorded `toolUseID` and original questions (including explicit
