@@ -790,6 +790,7 @@ describe("Codex app-server boundary", () => {
 
     for (let sequence = 0; sequence < 4; sequence += 1) {
       await client.resume(THREAD_ID, controller.signal);
+      await client.listTurnMetadata(THREAD_ID, undefined, controller.signal);
       await client.listItems(THREAD_ID, undefined, controller.signal);
       await client.startTurn(
         THREAD_ID,
@@ -801,6 +802,156 @@ describe("Codex app-server boundary", () => {
     }
 
     client.close();
+  });
+
+  it("copies bounded turn statuses without loading or retaining item bodies", async () => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    socket.send = (data) => {
+      const message = JSON.parse(data);
+      if (message.method !== "thread/turns/list") {
+        originalSend(data);
+        return;
+      }
+      socket.sent.push(message);
+      socket.respond(message.id, {
+        data: ["inProgress", "completed", "failed", "interrupted"].map((status, index) => ({
+          id: `turn-${index}`,
+          status,
+          items: [{ text: "not retained" }],
+          itemsView: "notLoaded",
+        })),
+        nextCursor: "next-metadata",
+      });
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    try {
+      await client.initialize(signal);
+      expect(await client.listTurnMetadata(THREAD_ID, "metadata-cursor", signal)).toEqual({
+        data: ["inProgress", "completed", "failed", "interrupted"].map((status, index) => ({
+          id: `turn-${index}`,
+          status,
+        })),
+        nextCursor: "next-metadata",
+      });
+      expect(socket.sent.at(-1)).toMatchObject({
+        method: "thread/turns/list",
+        params: {
+          threadId: THREAD_ID,
+          limit: 100,
+          cursor: "metadata-cursor",
+          itemsView: "notLoaded",
+          sortDirection: "asc",
+        },
+      });
+    } finally {
+      client.close();
+    }
+  });
+
+  it.each([
+    { data: [{ id: "turn", status: "future" }], nextCursor: null },
+    { data: [{ id: "turn" }], nextCursor: null },
+    { data: [{ id: "", status: "completed" }], nextCursor: null },
+    { data: [{ id: "x".repeat(257), status: "completed" }], nextCursor: null },
+    {
+      data: Array.from({ length: 101 }, (_, i) => ({ id: `turn-${i}`, status: "completed" })),
+      nextCursor: null,
+    },
+    { data: [], nextCursor: 5 },
+  ])("rejects malformed or oversized native turn metadata %#", async (response) => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    socket.send = (data) => {
+      const message = JSON.parse(data);
+      if (message.method !== "thread/turns/list") {
+        originalSend(data);
+        return;
+      }
+      socket.sent.push(message);
+      socket.respond(message.id, response);
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    try {
+      await client.initialize(signal);
+      await expect(client.listTurnMetadata(THREAD_ID, undefined, signal)).rejects.toThrow(
+        /invalid turn metadata/,
+      );
+    } finally {
+      client.close();
+    }
+  });
+
+  it("scopes repair reads to an exact turn and rejects wrong-turn data even for ignored item kinds", async () => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    let returnedTurn = "repair-turn";
+    socket.send = (data) => {
+      const message = JSON.parse(data);
+      if (message.method !== "thread/items/list") {
+        originalSend(data);
+        return;
+      }
+      socket.sent.push(message);
+      socket.respond(message.id, {
+        data: [{ turnId: returnedTurn, item: { type: "mcpToolCall", id: "ignored" } }],
+        nextCursor: null,
+      });
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    try {
+      await client.initialize(signal);
+      await expect(
+        client.listItems(THREAD_ID, "repair-cursor", signal, "repair-turn"),
+      ).resolves.toEqual({ data: [], nextCursor: null });
+      expect(socket.sent.at(-1)?.params).toEqual({
+        threadId: THREAD_ID,
+        turnId: "repair-turn",
+        cursor: "repair-cursor",
+        limit: 1,
+        sortDirection: "asc",
+      });
+      returnedTurn = "another-turn";
+      await expect(client.listItems(THREAD_ID, undefined, signal, "repair-turn")).rejects.toThrow(
+        /different turn/,
+      );
+    } finally {
+      client.close();
+    }
+  });
+
+  it.each([
+    undefined,
+    "future",
+    "",
+  ])("rejects legacy full turns with invalid status %s", async (status) => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    socket.send = (data) => {
+      const message = JSON.parse(data);
+      if (message.method !== "thread/turns/list") {
+        originalSend(data);
+        return;
+      }
+      socket.sent.push(message);
+      socket.respond(message.id, {
+        data: [{ id: "turn", status, items: [{ type: "agentMessage", id: "a", text: "text" }] }],
+        nextCursor: null,
+      });
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    try {
+      await client.initialize(signal);
+      await expect(client.listTurnItems(THREAD_ID, undefined, signal)).rejects.toThrow(
+        /invalid full turn/,
+      );
+    } finally {
+      client.close();
+    }
   });
 
   it("hydrates legacy remote-store turns without using the unsupported item pager", async () => {
@@ -817,6 +968,7 @@ describe("Codex app-server boundary", () => {
         data: [
           {
             id: "turn-legacy",
+            status: "completed",
             items: [
               {
                 type: "commandExecution",
@@ -847,7 +999,7 @@ describe("Codex app-server boundary", () => {
       data: [
         { turnId: "turn-legacy", item: { id: "command-visible", type: "commandExecution" } },
         { turnId: "turn-legacy", item: { id: "user-legacy" } },
-        { turnId: "turn-legacy", item: { id: "agent-legacy" } },
+        { turnId: "turn-legacy", turnStatus: "completed", item: { id: "agent-legacy" } },
       ],
       nextCursor: "next-page",
     });
@@ -880,6 +1032,7 @@ describe("Codex app-server boundary", () => {
         data: [
           {
             id: "turn-legacy",
+            status: "completed",
             items: [
               ...Array.from({ length: 10_001 }, (_, index) => ({
                 type: "mcpToolCall",

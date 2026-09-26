@@ -180,6 +180,13 @@ The immutable projection coordinate is `(turnId,itemId)`, because Codex may reus
 different turns. Same-coordinate, same-byte history/live overlap deduplicates; changed projected bytes
 at the same coordinate fence the companion.
 
+Current assistant history also requires native terminal-turn evidence. Active/unknown text waits
+without consuming final identity; one terminal-triggered read repair recovers earlier completed text
+without releasing idle or blocking approval capture. Recovered rows append rather than reorder. See
+the [active-turn history boundary](protocol.md#active-turn-history) and separate
+[0.154.0 active-attach acceptance](release-finish-line.md#codex-active-turn-attachment--2026-09-26);
+neither changes the historical M3b result below.
+
 The bounded live acceptance used an exact official Remote thread on Codex 0.151.0/Linux arm64, the
 literal managed Unix socket, legacy full-turn hydration, one attached local TUI, and two independent
 remote-claw browsers. The TUI remained the sole owner of approval and question handling. One marker

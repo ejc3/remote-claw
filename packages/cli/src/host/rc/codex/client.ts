@@ -82,7 +82,9 @@ export interface CodexTurnMetadataPage {
 }
 
 export function isCodexTurnStatus(value: unknown): value is CodexTurnStatus {
-  return value === "inProgress" || value === "completed" || value === "interrupted" || value === "failed";
+  return (
+    value === "inProgress" || value === "completed" || value === "interrupted" || value === "failed"
+  );
 }
 
 /** Only explicitly selected, observed command approvals and supported native input forms can receive
@@ -90,7 +92,11 @@ export function isCodexTurnStatus(value: unknown): value is CodexTurnStatus {
 export interface CodexClient {
   initialize(signal: AbortSignal): Promise<CodexInitializeResult>;
   resume(threadId: string, signal: AbortSignal): Promise<CodexResumeResult>;
-  listTurnMetadata(threadId: string, cursor: string | undefined, signal: AbortSignal): Promise<CodexTurnMetadataPage>;
+  listTurnMetadata(
+    threadId: string,
+    cursor: string | undefined,
+    signal: AbortSignal,
+  ): Promise<CodexTurnMetadataPage>;
   listItems(
     threadId: string,
     cursor: string | undefined,
@@ -363,17 +369,34 @@ export class CodexAppServerClient implements CodexClient {
     cursor: string | undefined,
     signal: AbortSignal,
   ): Promise<CodexTurnMetadataPage> {
-    const result = record(await this.#request("thread/turns/list", {
-      threadId, limit: 100, sortDirection: "asc", itemsView: "notLoaded",
-      ...(cursor === undefined ? {} : { cursor }),
-    }, signal));
-    if (!Array.isArray(result?.data) || result.data.length > 100 ||
-      (result.nextCursor !== null && typeof result.nextCursor !== "string"))
+    const result = record(
+      await this.#request(
+        "thread/turns/list",
+        {
+          threadId,
+          limit: 100,
+          sortDirection: "asc",
+          itemsView: "notLoaded",
+          ...(cursor === undefined ? {} : { cursor }),
+        },
+        signal,
+      ),
+    );
+    if (
+      !Array.isArray(result?.data) ||
+      result.data.length > 100 ||
+      (result.nextCursor !== null && typeof result.nextCursor !== "string")
+    )
       throw new CodexAppServerError("Codex returned invalid turn metadata");
     const data: CodexTurnMetadataPage["data"] = [];
     for (const value of result.data) {
       const turn = record(value);
-      if (typeof turn?.id !== "string" || turn.id === "" || turn.id.length > 256 || !isCodexTurnStatus(turn.status))
+      if (
+        typeof turn?.id !== "string" ||
+        turn.id === "" ||
+        turn.id.length > 256 ||
+        !isCodexTurnStatus(turn.status)
+      )
         throw new CodexAppServerError("Codex returned invalid turn metadata");
       data.push({ id: turn.id, status: turn.status });
     }
@@ -389,7 +412,13 @@ export class CodexAppServerClient implements CodexClient {
     const result = record(
       await this.#request(
         "thread/items/list",
-        { threadId, limit: 1, sortDirection: "asc", ...(cursor ? { cursor } : {}), ...(turnId === undefined ? {} : { turnId }) },
+        {
+          threadId,
+          limit: 1,
+          sortDirection: "asc",
+          ...(cursor ? { cursor } : {}),
+          ...(turnId === undefined ? {} : { turnId }),
+        },
         signal,
       ),
     );
@@ -450,7 +479,13 @@ export class CodexAppServerClient implements CodexClient {
     const data: CodexItemsPage["data"] = [];
     for (const value of result.data) {
       const turn = record(value);
-      if (typeof turn?.id !== "string" || turn.id === "" || turn.id.length > 256 || !Array.isArray(turn.items) || !isCodexTurnStatus(turn.status)) {
+      if (
+        typeof turn?.id !== "string" ||
+        turn.id === "" ||
+        turn.id.length > 256 ||
+        !Array.isArray(turn.items) ||
+        !isCodexTurnStatus(turn.status)
+      ) {
         throw new CodexAppServerError("Codex returned an invalid full turn");
       }
       for (const rawItem of turn.items) {
@@ -529,11 +564,7 @@ export class CodexAppServerClient implements CodexClient {
     }
     if (result.data.length === 0) return null;
     const turn = record(result.data[0]);
-    if (
-      typeof turn?.id !== "string" ||
-      turn.id === "" ||
-      !isCodexTurnStatus(turn.status)
-    ) {
+    if (typeof turn?.id !== "string" || turn.id === "" || !isCodexTurnStatus(turn.status)) {
       throw new CodexAppServerError("Codex returned invalid active-turn metadata");
     }
     return turn.status === "inProgress" ? turn.id : null;
