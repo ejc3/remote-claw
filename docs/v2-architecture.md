@@ -505,7 +505,11 @@ advisory-presence path on initial discovery, catalog change, or authenticated ca
 persisting full catalogs every 20 seconds on durable brokers without requiring complete bus replay.
 one-field `set_session_settings` changes use the shared browser-input FIFO, expire, and never retry.
 Mode-only updates preserve the current native model and explicit supported effort. No permission,
-sandbox, or persistent-configuration fields are exposed. Missing catalogs disable only this optional
+sandbox, or persistent-configuration fields are exposed. A pending expected-confirmation guard blocks
+later settings writes after RPC acceptance/failure until matching native state arrives; mode also
+requires its preserved model/effort. Confirmed targets are no-ops. Text/interrupt remain usable, but
+unconfirmed settings require native reconciliation or a fresh companion before more browser settings.
+Missing catalogs disable only this optional
 surface, and native confirmation rather than RPC acceptance owns the UI. Other controls remain disabled.
 General files are enabled only for exact 0.154.0, never 0.151.0/0.153.4. A bounded local text FIFO keeps interrupt and approval/question responses reachable while
 text waits for native idle.

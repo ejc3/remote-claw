@@ -607,6 +607,14 @@ kinds, and nonblocking bounded refresh recovery. The browser sentinel advances b
 discovery window before reload and recovers the catalog through session-selection catch-up. This
 transport check does not repeat or broaden the separate actual-native settings acceptance below.
 
+A separate writer follow-up prevents a peer's later mode choice from restoring stale model/effort
+after an earlier RPC returns before native confirmation. One expected-state guard is set before the
+RPC and cleared only by matching native state, including preserved model/effort for mode. Later
+settings are consumed without a native write while unconfirmed; already-confirmed targets are
+no-ops. Text/interrupt remain usable. If confirmation never arrives, further browser settings require
+native reconciliation or a fresh companion, not browser reload. Deterministic adapter tests own this
+ordering/timeout case; no additional native-setting or policy acceptance is inferred.
+
 The separate actual 0.154.0/Linux arm64/managed-Unix run used one retained native thread and
 independent 390×844 phone-layout and 1280×900 desktop viewers. Effort changed from ultra to high;
 the first native settings notification established Default mode rather than the viewer guessing it

@@ -305,7 +305,11 @@ settings with browser input, rechecks expiry/catalog before one `thread/settings
 only native resume/`thread/settings/updated` values. A mode change requires and preserves the current
 native model plus explicit supported effort, with no permission/sandbox/config update. Catalog
 failure leaves a healthy conversation usable with settings native-only; uncertain settings writes
-never retry. Relay keepalives/current-value updates carry only native `current` settings; full catalogs
+never retry. A single expected-confirmation guard prevents later browser settings from using stale
+model/effort after an RPC response or timeout. Only matching native state clears it (including the
+preserved model/effort for mode); already-confirmed targets are no-ops. Until matching reconciliation
+or a fresh companion, later settings are consumed without a write while text/interrupt stay usable.
+Relay keepalives/current-value updates carry only native `current` settings; full catalogs
 are included initially, on catalog change, and on authenticated `catch_up` for either backend. A
 viewer may reuse a catalog only within the same accepted host incarnation and capability; session
 selection/reload requests a fresh snapshot because discovery is bounded to the last 64 bus frames.

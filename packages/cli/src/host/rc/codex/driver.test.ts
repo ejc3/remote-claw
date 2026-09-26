@@ -747,6 +747,166 @@ describe("Codex native-confirmed settings", () => {
     }
   });
 
+  it.each([
+    false,
+    true,
+  ])("drops later settings until native confirmation after an RPC response (timeout=%s)", async (timeout) => {
+    const client = settingsClient();
+    client.activeTurnId = "native-running-turn";
+    if (timeout) client.settingsError = new CodexAppServerError("timed out");
+    const launched = await start(client);
+    const ack = vi.spyOn(launched.session, "ack");
+    const choose = async (change: unknown) => {
+      const event = launched.session.pushControlRequest("set_session_settings", {
+        change,
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => ack.mock.calls.some(([id]) => id === event.eventId));
+    };
+    try {
+      await choose({ model: "model-b" });
+      await choose({ collaborationMode: "plan" });
+      expect(client.settingsCalls).toEqual([{ threadId: THREAD_ID, update: { model: "model-b" } }]);
+      // Even target-shaped notices from another thread or malformed state cannot release it.
+      client.emit(changed("model-b", "low", "default", OTHER_THREAD_ID));
+      client.emit({
+        kind: "notification",
+        value: {
+          method: "thread/settings/updated",
+          params: { threadId: THREAD_ID, threadSettings: { model: "model-b", effort: {} } },
+        },
+      });
+      client.emit(changed("model-a", "low", "default"));
+      await waitFor(() => launched.session.sessionSettings?.current.effort === "low");
+      await choose({ effort: "high" });
+      expect(client.settingsCalls).toHaveLength(1);
+      launched.session.pushUserInput("text remains usable while settings are unconfirmed");
+      launched.session.pushControlRequest("interrupt");
+      await waitFor(() => client.startCalls.length === 1 && client.interruptCalls.length === 1);
+      const input = client.startCalls[0];
+      if (!input) throw new Error("missing text call");
+      client.emit(completed(userItem("after-setting", input.text, input.clientUserMessageId)));
+      client.emit(changed("model-b", "low", "default"));
+      await waitFor(() => launched.session.sessionSettings?.current.model === "model-b");
+      client.settingsError = null;
+      await choose({ collaborationMode: "plan" });
+      expect(client.settingsCalls).toEqual([
+        { threadId: THREAD_ID, update: { model: "model-b" } },
+        {
+          threadId: THREAD_ID,
+          update: {
+            collaborationMode: {
+              mode: "plan",
+              settings: {
+                model: "model-b",
+                reasoning_effort: "low",
+                developer_instructions: null,
+              },
+            },
+          },
+        },
+      ]);
+      expect(launched.session.closed).toBe(false);
+    } finally {
+      ack.mockRestore();
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it("requires a mode confirmation to match its preserved model and effort too", async () => {
+    const client = settingsClient();
+    const launched = await start(client);
+    const ack = vi.spyOn(launched.session, "ack");
+    const choose = async (change: unknown) => {
+      const event = launched.session.pushControlRequest("set_session_settings", {
+        change,
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => ack.mock.calls.some(([id]) => id === event.eventId));
+    };
+    try {
+      await choose({ collaborationMode: "plan" });
+      for (const [model, effort, mode] of [
+        ["model-b", "high", "plan"],
+        ["model-a", "low", "plan"],
+        ["model-a", "high", "default"],
+      ] as const) {
+        client.emit(changed(model, effort, mode));
+        await waitFor(
+          () =>
+            launched.session.sessionSettings?.current.model === model &&
+            launched.session.sessionSettings?.current.effort === effort &&
+            launched.session.sessionSettings?.current.collaborationMode === mode,
+        );
+        await choose({ model: "model-b" });
+        expect(client.settingsCalls).toHaveLength(1);
+      }
+      client.emit(changed("model-a", "high", "plan"));
+      await waitFor(() => launched.session.sessionSettings?.current.collaborationMode === "plan");
+      await choose({ model: "model-b" });
+      expect(client.settingsCalls).toHaveLength(2);
+    } finally {
+      ack.mockRestore();
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it("retains confirmation received before the settings RPC response", async () => {
+    const client = settingsClient();
+    const pending = Promise.withResolvers<void>();
+    client.settingsBarrier = pending.promise;
+    const launched = await start(client);
+    try {
+      launched.session.pushControlRequest("set_session_settings", {
+        change: { model: "model-b" },
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => client.settingsCalls.length === 1);
+      client.emit(changed("model-b", "low", "default"));
+      await waitFor(() => launched.session.sessionSettings?.current.model === "model-b");
+      launched.session.pushControlRequest("set_session_settings", {
+        change: { collaborationMode: "plan" },
+        expiry: Date.now() + 30_000,
+      });
+      pending.resolve();
+      await waitFor(() => client.settingsCalls.length === 2);
+      expect(client.settingsCalls[1]?.update).toMatchObject({
+        collaborationMode: { settings: { model: "model-b", reasoning_effort: "low" } },
+      });
+    } finally {
+      pending.resolve();
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it.each([
+    { model: "model-a" },
+    { effort: "high" },
+    { collaborationMode: "plan" },
+  ])("consumes an already native-confirmed target without an RPC or new guard: %j", async (change) => {
+    const client = settingsClient();
+    client.resumeResult.settings = { ...SETTINGS.current, collaborationMode: "plan" };
+    const launched = await start(client);
+    const ack = vi.spyOn(launched.session, "ack");
+    try {
+      const event = launched.session.pushControlRequest("set_session_settings", {
+        change,
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => ack.mock.calls.some(([id]) => id === event.eventId));
+      expect(client.settingsCalls).toEqual([]);
+      launched.session.pushControlRequest("set_session_settings", {
+        change: { model: "model-b" },
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => client.settingsCalls.length === 1);
+      expect(client.settingsCalls[0]?.update).toEqual({ model: "model-b" });
+    } finally {
+      ack.mockRestore();
+      await stop(launched.ac, launched.run);
+    }
+  });
+
   it("serializes mode changes behind text, revalidates latest peer state, and drops expired queued choices", async () => {
     const client = settingsClient();
     client.resumeResult.thread.status = { type: "active", activeFlags: [] };

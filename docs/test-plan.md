@@ -619,7 +619,11 @@ The later milestones use the same shared security checks but keep product-specif
 | tmux | Complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: packed install, recoverable local pane, two browsers, reload, active-turn isolation at a focused native permission modal, queued browser completion after both browsers depart, and broker-loss isolation; idle-editor concurrency, independent peer ordering, and provider-native/official-client coexistence are explicitly not advertised |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 
-For native settings, focused relay/viewer tests own compact keepalives, full catalogs on change or
+For native settings, focused adapter tests own the expected-confirmation guard: RPC-before-notice,
+ambiguous timeout, unrelated/mismatched notices, notice-before-response, preserved model/effort on
+mode confirmation, confirmed no-ops, and text/interrupt remaining usable. Later settings must not
+embed stale state or automatically retry while the preceding write is unconfirmed.
+Focused relay/viewer tests own compact keepalives, full catalogs on change or
 authenticated catch-up for both backend kinds, bounded/stalled/failed advisory publication, and
 same-incarnation-only catalog reuse with malformed/capability-removal invalidation. The existing
 two-browser sentinel advances beyond 64 current-only bus frames before reloading: it owns actual

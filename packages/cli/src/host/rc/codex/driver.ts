@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { parseSessionSettings } from "../../../harness.js";
+import { parseSessionSettings, type SessionSettings } from "../../../harness.js";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import {
   CODEX_APPROVAL_CAPABILITIES,
@@ -28,12 +28,29 @@ import {
   parseCodexStatus,
 } from "./client.js";
 import { CodexUserQuestions } from "./questions.js";
-import { codexSettingsUpdate, parseCodexCurrentSettings } from "./settings.js";
+import {
+  type CodexSettingsUpdate,
+  codexSettingsUpdate,
+  parseCodexCurrentSettings,
+} from "./settings.js";
 
 // One native item per page keeps retained inline images from combining into an oversized frame.
 // Preserve the existing roughly 100k raw-item scan budget, independently of projected item limits.
 const HISTORY_PAGE_LIMIT = 100_000;
 const CORRELATION_TIMEOUT_MS = 15_000;
+
+function settingsConfirmed(
+  update: CodexSettingsUpdate,
+  current: SessionSettings["current"],
+): boolean {
+  if ("model" in update) return current.model === update.model;
+  if ("effort" in update) return current.effort === update.effort;
+  return (
+    current.collaborationMode === update.collaborationMode.mode &&
+    current.model === update.collaborationMode.settings.model &&
+    current.effort === update.collaborationMode.settings.reasoning_effort
+  );
+}
 
 export class CodexProjectionError extends Error {
   constructor(message: string) {
@@ -400,6 +417,8 @@ export class CodexDriver implements Driver {
   readonly #historyRepairs = new HistoryRepairQueue();
   #filesSupported = false;
   #settingsSupported = false;
+  /** RPC acceptance is not native application; dependent writes must not embed stale settings. */
+  #expectedSettings: CodexSettingsUpdate | null = null;
 
   constructor(ctx: DriverContext, options: CodexDriverOptions) {
     this.#ctx = ctx;
@@ -658,6 +677,8 @@ export class CodexDriver implements Driver {
       const settings = parseSessionSettings({ ...session.sessionSettings, current });
       if (settings === null) return;
       session.sessionSettings = settings;
+      if (this.#expectedSettings !== null && settingsConfirmed(this.#expectedSettings, current))
+        this.#expectedSettings = null;
       session.wake();
       return;
     }
@@ -752,6 +773,10 @@ export class CodexDriver implements Driver {
     try {
       const request = record(event.payload.request);
       if (!this.#settingsSupported || session.sessionSettings === null || request === null) return;
+      if (this.#expectedSettings !== null) {
+        this.#trace.warn("Codex settings choice dropped: prior update lacks native confirmation");
+        return;
+      }
       const update = codexSettingsUpdate(request.change, session.sessionSettings);
       // A settings choice may have waited behind a browser turn. Re-check current native choices and
       // expiry here, immediately before the one RPC, rather than using admission-time values.
@@ -764,6 +789,9 @@ export class CodexDriver implements Driver {
         session.closed
       )
         return;
+      if (settingsConfirmed(update, session.sessionSettings.current)) return;
+      // Set before invoking the client: the matching native notification may precede its response.
+      this.#expectedSettings = update;
       try {
         await this.#client.updateSettings(this.#options.threadId, update, signal);
       } catch {

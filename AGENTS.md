@@ -111,7 +111,11 @@ model, effort, or collaboration-mode selection; legacy `set_model` and permissio
 disabled. Native resume/`thread/settings/updated` state owns displayed values, never RPC acceptance.
 Mode-only updates preserve the current native model and explicit supported effort; no permission,
 sandbox, or persistent configuration fields are sent. Settings share the bounded browser-input FIFO,
-recheck expiry/catalog before one native RPC, and never retry an uncertain update. Catalog failure
+recheck expiry/catalog before one native RPC, and never retry an uncertain update. An expected-state
+guard consumes later settings without writing until matching native confirmation (including preserved
+model/effort for mode); RPC acceptance/failure does not clear it. Confirmed targets are no-ops. If
+confirmation never arrives, native reconciliation or a fresh companion is required for more browser
+settings; text/interrupt remain usable. Catalog failure
 leaves settings native-only without failing a healthy conversation. Encrypted presence includes the
 full catalog only initially, on catalog change, or on authenticated catch-up; other announces carry
 current values only. Session selection/reload refreshes catalogs beyond the bounded 64-frame discovery

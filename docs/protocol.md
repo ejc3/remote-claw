@@ -912,6 +912,15 @@ the current native model and explicit supported effort. Unknown/unsupported curr
 prevents a mode change. The null instruction field uses the selected mode's built-in instructions;
 this path exposes no custom instructions, permission, sandbox, or persistent-configuration update.
 
+One adapter-local expected-confirmation guard is set before each settings RPC. While it is pending,
+later browser settings are consumed without a native write and produce a trace warning; they are not
+queued for automatic retry. Only a valid exact-thread native notification matching the attempted
+field clears the guard. A mode confirmation must also match its preserved model and effort. RPC
+success, failure, timeout, unrelated notices, and mismatched current values do not clear it. An
+already native-confirmed effective target is a no-op with no RPC or new guard. Text and interrupt
+remain usable after an unconfirmed settings RPC settles. Further browser settings require matching
+native reconciliation or a fresh companion; browser reload alone does not reset this host guard.
+
 The settings sheet retains one pending selection, disables further picks while waiting, and ticks
 only native-current values. HTTP/RPC acceptance is not confirmation. Matching native state confirms;
 a conflicting native change or a 60-second wait reports unconfirmed without retry. A failed/uncertain
