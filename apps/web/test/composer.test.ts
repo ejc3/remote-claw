@@ -8,6 +8,7 @@ import {
   isOpenCodeNativeTextSurface,
   isStableClaudeSurface,
   isSupportedOpenCodeSurface,
+  prepareComposerAttachment,
   remoteMutationEnabled,
   reportsWorkerStatus,
   sendComposer,
@@ -134,6 +135,14 @@ describe("stable Claude mutation surface", () => {
     expect(stableTextBlockReason("delete\u007f", true, true)).toBe("control");
     expect(stableTextBlockReason("c1\u009b31m", true, true)).toBe("control");
     expect(stableTextBlockReason("native api\u001b", true, false)).toBeNull();
+  });
+
+  it("blocks native file/resource references only for Claude companion text and captions", () => {
+    expect(stableTextBlockReason('@"/private/file"', true, false, true)).toBe("reference");
+    expect(stableTextBlockReason("describe @image.png", true, false, true)).toBe("reference");
+    expect(stableTextBlockReason("ej@example.com", true, false, true)).toBeNull();
+    expect(stableTextBlockReason("read /private/file", true, false, true)).toBeNull();
+    expect(stableTextBlockReason("@image.png", true, false, false)).toBeNull();
   });
 
   it("requires fresh connected presence in addition to capability support", () => {
@@ -270,6 +279,7 @@ describe("supported Codex mutation surface", () => {
         textInput: "blocked",
         interrupt: false,
         attachments: false,
+        files: false,
         setMode: false,
         setModel: false,
         structuredPermissions: false,
@@ -292,6 +302,63 @@ describe("supported Codex mutation surface", () => {
     expect(
       viewerInteractionPolicy(undefined, parseCapabilities({ textInput: "plain" })).interrupt,
     ).toBe(false);
+  });
+});
+
+describe("grouped files and image preparation", () => {
+  it("keeps one caption with mixed images and raw files, sanitizing labels", async () => {
+    const downscale = vi.fn(async () => "PHOTO");
+    const readFile = vi.fn(async () => "RklMRQ==");
+    const attachment = await prepareComposerAttachment(
+      [
+        { id: "photo", name: "a.jpg", file: img("a.jpg"), url: "blob:a" },
+        {
+          id: "file",
+          name: "../notes\n.txt",
+          file: new File(["FILE"], "notes.txt", { type: "text/plain" }),
+          url: "",
+        },
+      ],
+      "Read these together",
+      downscale,
+      readFile,
+    );
+    expect(attachment).toEqual({
+      images: [{ name: "a.jpg", mime: "image/jpeg", data: "PHOTO" }],
+      files: [{ name: ".._notes_.txt", mime: "text/plain", data: "RklMRQ==" }],
+      caption: "Read these together",
+    });
+    expect(downscale).toHaveBeenCalledTimes(1);
+    expect(readFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects too many or oversized files before reading bytes", async () => {
+    const file = new File([new Uint8Array(12 * 1024 * 1024 + 1)], "large.bin");
+    const item = { id: "f", name: file.name, file, url: "" };
+    const readFile = vi.fn(async () => "");
+    await expect(prepareComposerAttachment([item], "", async () => "", readFile)).rejects.toThrow(
+      "12 MiB",
+    );
+    await expect(
+      prepareComposerAttachment(Array(25).fill(item), "", async () => "", readFile),
+    ).rejects.toThrow("24");
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("requires explicit files and attachments capability; legacy does not inherit it", () => {
+    const caps = {
+      structuredPermissions: false,
+      status: false,
+      controls: { interrupt: false, setModel: false, setMode: false, end: false },
+      attachments: true,
+    };
+    const harness = { agent: "claude-code", mode: "native-rc" };
+    expect(viewerInteractionPolicy(harness, caps).files).toBe(false);
+    expect(viewerInteractionPolicy(harness, { ...caps, files: true }).files).toBe(true);
+    expect(
+      viewerInteractionPolicy(harness, { ...caps, files: true, attachments: false }).files,
+    ).toBe(false);
+    expect(viewerInteractionPolicy(undefined, undefined).files).toBe(false);
   });
 });
 

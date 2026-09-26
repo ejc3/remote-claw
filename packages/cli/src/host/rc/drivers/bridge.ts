@@ -83,6 +83,9 @@ function snapshotAnnouncement(announcement: BridgeAnnouncement): BridgeAnnouncem
         : {}),
       status: announcement.capabilities.status,
       attachments: announcement.capabilities.attachments,
+      ...(announcement.capabilities.files !== undefined
+        ? { files: announcement.capabilities.files }
+        : {}),
       controls: {
         interrupt: announcement.capabilities.controls.interrupt,
         setModel: announcement.capabilities.controls.setModel,

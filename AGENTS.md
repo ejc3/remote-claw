@@ -31,21 +31,28 @@ complete and advertised; its separate real-TUI/two-browser status acceptance pas
 Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text and read-only worker
 tool calls/textual results to remote-claw while
 ordinary Anthropic Remote Control remains active. Current browser mutations are ordinary non-empty
-non-slash text, image groups with an optional non-slash caption, one-shot session-scoped Interrupt,
+non-slash text, image/file groups with an optional non-slash caption, one-shot session-scoped Interrupt,
 fresh live single offered-choice question responses, and
 [bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals). The
 [question boundary](docs/protocol.md#claude-native-single-choice-questions) and Bash boundary preserve
 native ownership of unsupported permissions/forms; history never grants response authority. The separate
 [live acceptance](docs/release-finish-line.md#claude-native-single-choice-questions) does not rewrite M1.
-Images become private host-owned upload files referenced by ordinary native text; only the exact
-generated reference-group form is stripped for display, leaving sanitized names/caption on backfill.
-Prepared image bytes are released; attempted uploads remain available to native Claude, under a
-256 MiB decoded-image budget per companion run, not a global or cross-restart quota. See the
-[current image acceptance](docs/release-finish-line.md#claude-native-images--complete).
+Images/files become private host-owned uploads referenced by ordinary native text; only the exact
+generated reference-group form is stripped for display, leaving sanitized names/caption and bounded
+available image previews. Prepared attachment bytes are released; attempted uploads remain available
+to native Claude, under a 256 MiB decoded-upload budget per companion run, not a global or cross-restart
+quota. Upload references intentionally give the native harness the uploaded bytes, without changing
+persistent permission rules or sandbox settings; no GC is added. Browser-origin Claude text/captions
+reject pinned native `@` file-reference syntax before host-generated upload references are added;
+ordinary emails/path prose and native/provider history are unaffected. Canonical previews share a
+32 MiB decoded budget per reconciler across history/live, with labels retained when it is exhausted.
+See historical
+[image acceptance](docs/release-finish-line.md#claude-native-images--complete) and the separate
+[files/previews slice](docs/release-finish-line.md#native-files-and-image-previews).
 Interrupt has no native turn ID: a delayed Stop
 may affect newer peer work. The serial writer waits for the matching canonical worker success before
 later browser text; HTTP admission and generic results are not idle. Status, other permissions,
-other controls, general files, and image previews stay unsupported. Current Interrupt acceptance belongs to the
+other controls stay unsupported. Current Interrupt acceptance belongs to the
 [release roadmap](docs/release-finish-line.md), not the historical M1 text result. Its packed-install restart, broker-loss, and
 credential/log checks passed. The literal logged-in official Claude web UI on the user's phone, the
 local TUI, and two remote-claw browsers then completed the bounded coexistence run, including liveness
@@ -70,15 +77,19 @@ sentinel also passed on 2026-09-08 for exact 0.153.4/Linux arm64 through managed
 paginated history, without a production change. Those historical runs exclude official-client recovery.
 The separate [0.154.0 official desktop Remote recovery](docs/release-finish-line.md#codex-official-remote-recovery--complete)
 qualifies managed Unix/paginated history with the actual Mac app and reopened viewers selecting a fresh
-projection. Legacy/mobile-app recovery and automatic stable-ID reconnect remain unqualified.
+projection. A separate [actual Android background/resume check](docs/release-finish-line.md#native-phone-backgroundresume--2026-09-26)
+passed for both agents, without proving a connection drop or screen-lock/deep-sleep recovery.
+Legacy-history and mobile network-loss/deep-sleep recovery and automatic stable-ID reconnect remain unqualified.
 The current code accepts exact Codex 0.151.0, 0.153.4, and 0.154.0 on
 Linux arm64
 and also projects completed `commandExecution` as read-only `Shell` calls and bounded results,
 including failed/declined/nonzero-exit outcomes. Browser mutations are non-empty non-slash text,
-images with an optional non-slash caption, and interrupt. Images use the existing encrypted composer
-payload and host-constructed inline data URLs, never viewer URLs or file paths. Full ordered native
-input is digest-correlated; only sanitized names/caption or an image-count placeholder is projected.
-Raw pending images are bounded and released after native submission settles or the session closes.
+images with an optional non-slash caption, and interrupt; exact 0.154.0 additionally advertises
+general files, never 0.151.0/0.153.4. Images use the existing encrypted composer payload and
+host-constructed inline data URLs; files use host-generated private references, never viewer URLs
+or paths. Full ordered native input is digest-correlated. Canonical rows include bounded available
+image previews, otherwise sanitized names/caption or image-count placeholders. Raw pending attachments
+are bounded and released after native submission settles or the session closes.
 Interrupt binds the latest active native turn once and never retargets or retries; queued
 text still waits for native idle, not interrupt RPC acceptance. Native background commands may outlive
 the interrupted model turn. Exact 0.153.4 and 0.154.0 implement one-shot ordinary local-command approvals;
@@ -92,7 +103,7 @@ Secret, optionless, nonblocking, malformed, and all 0.151.0 questions stay nativ
 Dismiss or multiselect is sent. Fresh opaque viewer IDs bind exact connection-owned native requests;
 answers use native question IDs rather than display wording. Broker admission
 means pending, and only native resolution closes the card without claiming which peer won. Ambiguous
-writes never retry or stop native work. Other controls, general files, streaming partials, file
+writes never retry or stop native work. Other controls, streaming partials, file
 changes, and task lifecycle remain unsupported. The [release roadmap](docs/release-finish-line.md)
 owns current-version/activity/interrupt/image, command-approval, and question acceptance; the bounded
 question phone/desktop/native-TUI run passed on 0.153.4. The separate
@@ -134,10 +145,10 @@ Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-
   (`runClaudeNativeDriverPath`, `run.ts`) — transparently forwards ordinary Anthropic Remote Control,
   binds only the spawned child's successful bridge request, and projects provider-ordered text plus
   read-only worker tool activity through our encrypted broker. Browser mutations are ordinary text,
-  host-owned image uploads, one-shot session-scoped Interrupt, supported single-choice responses,
+  host-owned image/file uploads with bounded image previews, one-shot session-scoped Interrupt, supported single-choice responses,
   and bounded one-time Bash decisions;
   a delayed Stop can affect newer native/peer work. The local TUI and provider RC API remain live;
-  other permissions, unsupported question forms, other controls, general files, image previews,
+  other permissions, unsupported question forms, other controls,
   and status are disabled. Linux and exact Claude 2.1.237 only.
 - **`--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>`** — attaches a fresh
   remote-claw projection to that exact already-running native session. Apart from the required pinned-

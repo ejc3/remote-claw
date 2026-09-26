@@ -60,11 +60,18 @@ for official ordering, rendering, busy-state behavior, and local/official-client
 
 ## 2. Current code truth
 
+Current browser-origin Claude text/captions exclude pinned native `@` file-reference syntax, which
+can ingest host files without a model Read approval. The driver checks that boundary before adding
+its own references for uploaded bytes. Ordinary emails/path prose and native/provider history are
+unchanged. Upload references deliberately supply those bytes to native Claude, without changing
+persistent permission rules or sandbox settings. Canonical previews share a 32 MiB decoded budget per
+reconciler across history/live; budget-excluded previews retain labels.
+
 | Piece | What exists now | What is missing |
 | --- | --- | --- |
 | `--rc-app` / `runRcLaunch` | A synthetic RC backend bridged to the encrypted broker; durable, text-only, fail-stop supported path | Anthropic registration and official-client coexistence |
 | `--rc-trace` / `runRcTrace` | Transparent pass-through to Anthropic with redacted protocol tracing | Projection to the broker and remote mutation |
-| `--rc-app … --rc-driver=claude-native --remote-control` | Launch ordinary Claude, bind its exact successful bridge request, reconcile live SSE/history, and project provider-ordered text plus read-only worker tool activity; current code also supports one-shot session Interrupt, private image-file references through ordinary text, [fresh single-choice responses](protocol.md#claude-native-single-choice-questions), and [bounded Bash decisions](protocol.md#claude-native-bash-approvals) | Historical M1 accepted literal official-client coexistence; current image/Interrupt, question and Bash acceptance live in the release roadmap; other controls, general files, platforms, and versions remain separate |
+| `--rc-app … --rc-driver=claude-native --remote-control` | Launch ordinary Claude, bind its exact successful bridge request, reconcile live SSE/history, and project provider-ordered text plus read-only worker tool activity; current code also supports one-shot session Interrupt, private image/file references through ordinary text with bounded encrypted image previews, [fresh single-choice responses](protocol.md#claude-native-single-choice-questions), and [bounded Bash decisions](protocol.md#claude-native-bash-approvals) | Historical M1 accepted literal official-client coexistence; current image/Interrupt, question, Bash, and files/previews acceptance live in the release roadmap; other controls, platforms, and versions remain separate |
 | `--rc-app … --rc-driver=claude-native --rc-native-session <cse_…>` | Attach a fresh projection to one explicitly named, already-running native session without starting an interactive Claude session or proxy, forwarding Claude arguments, or discovering a session; the pinned-version probe still runs | Stable same-row identity; the caller must supply the exact native ID |
 | `--rc-driver=tmux` plus Claude's `--remote-control` | One bounded lower-fidelity run preserved the provider session while a local pane, Anthropic API client, and two browsers exchanged text | Structured event semantics, independent peer ordering, supported-version matrix, and official Claude app UI acceptance |
 | `AnthropicRcClient` | Typed session listing, bounded history with `next_cursor`/`resume_cursor`, client-side SSE readiness, one-user-event POST, and current one-shot Interrupt/single-choice/Bash-decision POSTs | Cross-platform credential sources and other control semantics |

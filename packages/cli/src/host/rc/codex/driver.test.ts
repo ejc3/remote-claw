@@ -1,7 +1,11 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { deriveIdentity, type Frame, type FrameHeader } from "@remote-claw/clawsec";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
 import type { DriverContext } from "../driver.js";
+import { NativeUploadStore } from "../native-uploads.js";
 import type { HostImage, Session } from "../session.js";
 import {
   CODEX_APP_SERVER_VERSION,
@@ -18,6 +22,19 @@ import { CodexDriver } from "./driver.js";
 const THREAD_ID = "01993d50-6c31-7e11-9f70-3a8d9b5e7201";
 const OTHER_THREAD_ID = "01993d50-6c31-7e11-af70-3a8d9b5e7202";
 const enc = (value: string): Uint8Array => new TextEncoder().encode(value);
+const UPLOAD_ROOT = mkdtempSync(join(tmpdir(), "rc-codex-driver-uploads-"));
+afterAll(() => rmSync(UPLOAD_ROOT, { recursive: true, force: true }));
+const FILES = [
+  {
+    name: "notes.txt",
+    mime: "text/plain",
+    data: Buffer.from("native file bytes").toString("base64"),
+  },
+];
+const MIXED_IMAGES = [{ name: "screen.png", url: "data:image/png;base64,YWJj" }];
+const MIXED_TEXT = "📎 screen.png, 📎 notes.txt\nReview both";
+const uploadPaths = (text: string) =>
+  [...text.matchAll(/@"([^"]+)"/g)].map((match) => match[1] ?? "");
 
 function deferred(): { promise: Promise<void>; resolve(): void } {
   let resolve = (): void => {};
@@ -107,6 +124,7 @@ class FakeCodexClient implements CodexClient {
     images?: readonly HostImage[];
   }> = [];
   closeCalls = 0;
+  startError: Error | null = null;
   readonly activeTurnCalls: string[] = [];
   readonly interruptCalls: Array<{ threadId: string; turnId: string }> = [];
   activeTurnId: string | null = null;
@@ -181,6 +199,7 @@ class FakeCodexClient implements CodexClient {
     images?: readonly HostImage[],
   ): Promise<void> {
     this.startCalls.push({ threadId, clientUserMessageId, text, ...(images ? { images } : {}) });
+    if (this.startError !== null) throw this.startError;
   }
 
   async activeTurn(threadId: string): Promise<string | null> {
@@ -358,6 +377,8 @@ async function context(
 async function start(
   client = new FakeCodexClient(),
   threadId = THREAD_ID,
+  uploadStore?: NativeUploadStore,
+  projectionPreviewByteLimit?: number,
 ): Promise<{
   ac: AbortController;
   broker: FakeDurableBroker;
@@ -376,6 +397,8 @@ async function start(
     threadId,
     client,
     runtime: { platform: "linux", arch: "arm64" },
+    ...(uploadStore === undefined ? {} : { uploadStore }),
+    ...(projectionPreviewByteLimit === undefined ? {} : { projectionPreviewByteLimit }),
   });
   const ac = new AbortController();
   const run = driver.run(ac.signal);
@@ -1105,12 +1128,270 @@ describe("Codex M3a companion", () => {
     expect(event.images).toBeUndefined();
   });
 
+  it("projects mixed file refs and inline previews only after full canonical correlation, including fresh history", async () => {
+    const root = mkdtempSync(join(UPLOAD_ROOT, "mixed-"));
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    const launched = await start(client, THREAD_ID, new NativeUploadStore(root));
+    controllers.push(launched.ac);
+    try {
+      const announce = launched.broker.posts.find((post) => post.recordKind === "session_announce");
+      expect(JSON.parse(announce?.text ?? "{}")).toMatchObject({ capabilities: { files: true } });
+      const event = launched.session.pushUserInput(MIXED_TEXT, {
+        images: MIXED_IMAGES,
+        files: FILES,
+        clientMsgId: "mixed-files",
+      });
+      await waitFor(() => client.startCalls.length === 1);
+      const call = client.startCalls[0];
+      if (call === undefined) throw new Error("missing native turn");
+      const paths = uploadPaths(call.text);
+      expect(paths).toHaveLength(1);
+      expect(readFileSync(paths[0] ?? "", "utf8")).toBe("native file bytes");
+      expect(call.text).toBe(`@"${paths[0]}"\n${MIXED_TEXT}`);
+      expect(call.images).toEqual(MIXED_IMAGES);
+      await waitFor(() => event.images === undefined && event.files === undefined);
+      expect(accepted(launched.broker)).toEqual([]);
+      const item: CodexThreadItem = {
+        ...userItem("mixed-native", call.text, event.eventId),
+        content: [
+          { type: "text", text: call.text },
+          { type: "image", url: MIXED_IMAGES[0]?.url },
+        ],
+      };
+      client.emit(completed(item));
+      await waitFor(() =>
+        accepted(launched.broker).some(
+          (value) => value.client_msg_id === "mixed-files" && value.seq === 0,
+        ),
+      );
+      const projected = upstream(launched.session, "user");
+      expect(projected).toHaveLength(1);
+      expect(projected[0]).toMatchObject({
+        message: { content: MIXED_TEXT, images: [{ mime: "image/png", data: "YWJj" }] },
+      });
+      expect(JSON.stringify(projected)).not.toContain(root);
+      const content = launched.broker.posts.find((post) => post.recordKind === "user_attachment");
+      expect(JSON.parse(content?.text ?? "{}")).toMatchObject({
+        text: MIXED_TEXT,
+        images: [{ mime: "image/png", data: "YWJj" }],
+      });
+      client.emit(completed(item));
+      client.emit(completed(assistantItem("mixed-barrier", "done")));
+      await waitFor(() => upstream(launched.session, "assistant").length === 1);
+      expect(upstream(launched.session, "user")).toHaveLength(1);
+
+      const freshClient = new FakeCodexClient();
+      freshClient.nativeVersion = "0.154.0";
+      freshClient.pages = [{ data: [{ turnId: "turn-1", item }], nextCursor: null }];
+      const fresh = await start(freshClient, THREAD_ID, new NativeUploadStore(root));
+      controllers.push(fresh.ac);
+      try {
+        expect(upstream(fresh.session, "user")).toMatchObject([{ message: projected[0]?.message }]);
+        expect(freshClient.startCalls).toEqual([]);
+        expect(accepted(fresh.broker)).toEqual([]);
+      } finally {
+        await stop(fresh.ac, fresh.run);
+      }
+      expect(paths.every((path) => existsSync(path))).toBe(true);
+    } finally {
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it("shares one retained-preview budget across owned and inline history, duplicates and browser receipts", async () => {
+    const store = new NativeUploadStore(mkdtempSync(join(UPLOAD_ROOT, "preview-budget-")));
+    const owned = { name: "owned.png", mime: "image/png", data: "YWJj" };
+    const prepared = await store.prepare([owned], "📎 owned.png", new AbortController().signal);
+    const first = {
+      ...userItem("budget-1", prepared.text),
+      content: [
+        { type: "text", text: prepared.text },
+        { type: "image", url: "data:image/png;base64,ZGVm" },
+      ],
+    };
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    client.pages = [{ data: [{ turnId: "turn-1", item: first }], nextCursor: null }];
+    const launched = await start(client, THREAD_ID, store, 9);
+    controllers.push(launched.ac);
+    try {
+      client.emit(completed(first));
+      client.emit(
+        completed({
+          ...userItem("budget-2", "📎 second.png"),
+          content: [
+            { type: "text", text: "📎 second.png" },
+            { type: "image", url: "data:image/png;base64,Z2hp" },
+          ],
+        }),
+      );
+      await waitFor(() => upstream(launched.session, "user").length === 2);
+      const event = launched.session.pushUserInput("📎 screen.png", {
+        images: MIXED_IMAGES,
+        clientMsgId: "budget-receipt",
+      });
+      await waitFor(() => client.startCalls.length === 1);
+      const call = client.startCalls[0];
+      if (call === undefined) throw new Error("missing native turn");
+      const last = {
+        ...userItem("budget-3", call.text, event.eventId),
+        content: [
+          { type: "text", text: call.text },
+          { type: "image", url: MIXED_IMAGES[0]?.url },
+        ],
+      };
+      client.emit(completed(last));
+      await waitFor(() =>
+        accepted(launched.broker).some(
+          (value) => value.client_msg_id === "budget-receipt" && value.seq === 2,
+        ),
+      );
+      const messages = upstream(launched.session, "user");
+      expect(messages).toMatchObject([
+        { message: { content: "📎 owned.png", images: [{ data: "ZGVm" }, owned] } },
+        { message: { content: "📎 second.png", images: [{ data: "Z2hp" }] } },
+        { message: { content: "📎 screen.png", images: [] } },
+      ]);
+      expect(messages).toHaveLength(3);
+      expect(client.startCalls[0]?.images).toEqual(MIXED_IMAGES);
+      expect(launched.session.closed).toBe(false);
+      client.emit(completed(last));
+      client.emit(
+        completed({
+          ...last,
+          content: [
+            { type: "text", text: call.text },
+            { type: "image", url: "data:image/png;base64,YWJk" },
+          ],
+        }),
+      );
+      expect(await launched.run).toBe(1);
+      expect(upstream(launched.session, "user")).toHaveLength(3);
+      expect(
+        accepted(launched.broker).filter((value) => value.client_msg_id === "budget-receipt"),
+      ).toHaveLength(1);
+    } finally {
+      launched.ac.abort();
+      await launched.run;
+    }
+  });
+
+  it("fences changed generated file references before granting a browser receipt", async () => {
+    const root = mkdtempSync(join(UPLOAD_ROOT, "changed-"));
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    const store = new NativeUploadStore(root);
+    const launched = await start(client, THREAD_ID, store);
+    controllers.push(launched.ac);
+    const event = launched.session.pushUserInput("📎 notes.txt", {
+      files: FILES,
+      clientMsgId: "changed-file",
+    });
+    await waitFor(() => client.startCalls.length === 1);
+    const native = client.startCalls[0]?.text ?? "";
+    const changed = native.replace('/1.txt"', '/1.pdf"');
+    expect(changed).not.toBe(native);
+    expect(store.display(changed).text).toBe("📎 notes.txt");
+    client.emit(completed(userItem("changed-native", changed, event.eventId)));
+    await expect(launched.run).resolves.toBe(1);
+    expect(accepted(launched.broker)).toEqual([]);
+    expect(upstream(launched.session, "user")).toEqual([]);
+    expect(client.externalThreadRunning).toBe(true);
+  });
+
+  it("discards prepared files when the projection closes before native startTurn", async () => {
+    const root = mkdtempSync(join(UPLOAD_ROOT, "discard-"));
+    const store = new NativeUploadStore(root);
+    const ready = Promise.withResolvers<Awaited<ReturnType<NativeUploadStore["prepare"]>>>();
+    const release = Promise.withResolvers<void>();
+    const prepare = store.prepare.bind(store);
+    vi.spyOn(store, "prepare").mockImplementation(async (...args) => {
+      const prepared = await prepare(...args);
+      ready.resolve(prepared);
+      await release.promise;
+      return prepared;
+    });
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    const launched = await start(client, THREAD_ID, store);
+    controllers.push(launched.ac);
+    try {
+      const event = launched.session.pushUserInput(MIXED_TEXT, {
+        files: FILES,
+        images: MIXED_IMAGES,
+      });
+      const prepared = await ready.promise;
+      const paths = uploadPaths(prepared.text);
+      expect(paths).toHaveLength(1);
+      expect(paths.every((path) => existsSync(path))).toBe(true);
+      const discard = vi.spyOn(prepared, "discard");
+      launched.session.close("broker lost during file preparation");
+      release.resolve();
+      await waitFor(
+        () => discard.mock.calls.length === 1 && paths.every((path) => !existsSync(path)),
+      );
+      expect(client.startCalls).toEqual([]);
+      expect(event.files).toBeUndefined();
+      expect(event.images).toBeUndefined();
+      await expect(launched.run).resolves.toBe(1);
+      expect(client.externalThreadRunning).toBe(true);
+    } finally {
+      release.resolve();
+      launched.ac.abort();
+      await launched.run;
+    }
+  });
+
+  it("retains attempted files after ambiguous native submission and releases pending bytes", async () => {
+    const root = mkdtempSync(join(UPLOAD_ROOT, "ambiguous-"));
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    client.startError = new CodexAppServerError("ambiguous startTurn");
+    const launched = await start(client, THREAD_ID, new NativeUploadStore(root));
+    controllers.push(launched.ac);
+    const event = launched.session.pushUserInput(MIXED_TEXT, {
+      images: MIXED_IMAGES,
+      files: FILES,
+    });
+    const queued = launched.session.pushUserInput("📎 notes.txt", { files: FILES });
+    await expect(launched.run).resolves.toBe(1);
+    expect(client.startCalls).toHaveLength(1);
+    const paths = uploadPaths(client.startCalls[0]?.text ?? "");
+    expect(paths).toHaveLength(1);
+    expect(readFileSync(paths[0] ?? "", "utf8")).toBe("native file bytes");
+    expect(event.images).toBeUndefined();
+    expect(event.files).toBeUndefined();
+    expect(queued.files).toBeUndefined();
+    expect(accepted(launched.broker)).toEqual([]);
+    expect(client.externalThreadRunning).toBe(true);
+  });
+
+  it.each([
+    "0.151.0",
+    "0.153.4",
+  ])("keeps general files unsupported on Codex %s", async (version) => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = version;
+    const root = join(UPLOAD_ROOT, `unsupported-${version}`);
+    const launched = await start(client, THREAD_ID, new NativeUploadStore(root));
+    controllers.push(launched.ac);
+    const announce = launched.broker.posts.find((post) => post.recordKind === "session_announce");
+    expect(JSON.parse(announce?.text ?? "{}").capabilities.files).not.toBe(true);
+    const event = launched.session.pushUserInput("📎 notes.txt", { files: FILES });
+    await expect(launched.run).resolves.toBe(1);
+    expect(client.startCalls).toEqual([]);
+    expect(existsSync(root)).toBe(false);
+    expect(event.files).toBeUndefined();
+    expect(client.externalThreadRunning).toBe(true);
+  });
+
   it.each([
     { label: "caption", texts: ["describe"], expected: "describe" },
     { label: "no text", texts: [], expected: "📎 2 image(s)" },
     { label: "empty text", texts: [""], expected: "📎 2 image(s)" },
     { label: "whitespace text", texts: [" \t", "\n "], expected: "📎 2 image(s)" },
-  ])("projects native image history with $label without retaining inline bytes or reading local paths", async ({
+  ])("projects bounded inline previews from native image history with $label without reading local paths", async ({
     texts,
     expected,
   }) => {
@@ -1135,8 +1416,16 @@ describe("Codex M3a companion", () => {
     ];
     const launched = await start(client);
     controllers.push(launched.ac);
-    expect(upstream(launched.session, "user")).toMatchObject([{ message: { content: expected } }]);
+    expect(upstream(launched.session, "user")).toMatchObject([
+      {
+        message: {
+          content: expected,
+          images: [{ name: "Image_1", mime: "image/png", data: "A".repeat(1024 * 1024) }],
+        },
+      },
+    ]);
     expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("data:image");
+    expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("/not-readable.png");
     await stop(launched.ac, launched.run);
   });
 

@@ -29,6 +29,24 @@ async function viewerWithMockFetch() {
 const VERCEL_BODY_LIMIT = 4.5 * 1024 * 1024;
 
 describe("viewer grouped/chunked attachment upload (#44/#114)", () => {
+  it("sends a mixed file/photo group as one encrypted message with one client ID", async () => {
+    const { viewer, calls } = await viewerWithMockFetch();
+    await viewer.sendAttachment(
+      "cse_x",
+      {
+        images: [{ name: "photo.jpg", mime: "image/jpeg", data: "QUJDRA==" }],
+        files: [{ name: "notes.txt", mime: "text/plain", data: "Tk9URVM=" }],
+        caption: "Read these together",
+      },
+      "mixed-message",
+    );
+    expect(calls).toHaveLength(1);
+    const frame = JSON.parse(calls[0]?.body ?? "{}");
+    expect(frame.record_kind).toBe("attachment");
+    expect(frame.msg_id).toBe("mixed-message");
+    expect(calls[0]?.body).not.toContain("notes.txt");
+    expect(calls[0]?.body).not.toContain("Read these together");
+  });
   it("a small grouped attachment seals + posts ONE frame (ct is real ciphertext, not the plaintext)", async () => {
     const { viewer, calls } = await viewerWithMockFetch();
     const msgId = await viewer.sendAttachment("cse_x", {

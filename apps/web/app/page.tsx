@@ -13,7 +13,11 @@ import { Spinner } from "@astryxdesign/core/Spinner";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Text } from "@astryxdesign/core/Text";
 import { parsePass, toHex } from "@remote-claw/clawsec";
-import { harnessMetadata, harnessPolicy } from "@remote-claw/cli/harness";
+import {
+  harnessMetadata,
+  harnessPolicy,
+  hasClaudeNativeReferences,
+} from "@remote-claw/cli/harness";
 import {
   type CSSProperties,
   memo,
@@ -57,16 +61,23 @@ import {
 } from "./lib/transcript";
 import {
   type Announce,
+  type AttachmentImage,
+  AttachmentTooLargeError,
   type Capabilities,
   CONNECTED_WINDOW_MS,
+  type ComposerAttachment,
   type ConnState,
   connState,
   connStateLabel,
   emptyTranscriptHint,
   type GitInfo,
   type Harness,
+  MAX_ATTACHMENT_FILE_BYTES,
+  MAX_ATTACHMENT_ITEMS,
+  MAX_ATTACHMENT_TOTAL_BYTES,
   type Message,
   nextReconnectAnchor,
+  safeAttachmentName,
   shouldAcceptAnnounce,
   TRANSCRIPT_GAP_STALL_MS,
   Viewer,
@@ -92,7 +103,7 @@ const BUS_UNREACHABLE_MSG = "Can’t reach the broker — retrying…";
 
 /** Max images staged for one send — a bound so a runaway pick can't balloon the staged array + its object
  *  URLs. (Per-image + total BYTES are enforced separately at send time via AttachmentTooLargeError.) */
-const MAX_STAGED_IMAGES = 24;
+const MAX_STAGED_IMAGES = MAX_ATTACHMENT_ITEMS;
 /** How long an unconfirmed optimistic permission-mode pick survives before reverting to the announced mode
  *  — a fallback so a set_mode the host never confirms (or that silently failed) can't stick indefinitely. */
 const OPTIMISTIC_MODE_TTL_MS = 8000;
@@ -131,7 +142,12 @@ export function appendUniqueMessage(prev: Message[], msg: Message): Message[] {
       existing.optimistic === false
     ) {
       messages = prev.filter((m) => m !== existing);
-      incoming = { ...msg, clientMsgId, optimistic: false, deliveryUnknown: false };
+      incoming = {
+        ...msg,
+        clientMsgId,
+        optimistic: false,
+        deliveryUnknown: false,
+      };
     } else return prev;
   }
   // The stream is already ordered. Keep its next row before locally provisional sends, including
@@ -175,17 +191,51 @@ export async function sendComposer(
   clientMsgId: string,
 ): Promise<void> {
   if (staged.length > 0) {
-    const images = await Promise.all(
-      staged.map(async (item) => ({
-        name: item.name,
-        mime: "image/jpeg",
-        data: await downscale(item.file),
-      })),
+    await viewer.sendAttachment(
+      sessionId,
+      await prepareComposerAttachment(staged, text, downscale),
+      clientMsgId,
     );
-    await viewer.sendAttachment(sessionId, { images, caption: text }, clientMsgId);
   } else if (text !== "") {
     await viewer.sendPrompt(sessionId, text, clientMsgId);
   }
+}
+
+/** Finish local reads/encoding before clearing the draft or creating a delivery claim. */
+export async function prepareComposerAttachment(
+  staged: readonly StagedImage[],
+  caption: string,
+  downscale: (file: File) => Promise<string>,
+  readFile: (file: Blob) => Promise<string> = blobToBase64,
+): Promise<ComposerAttachment> {
+  if (staged.length > MAX_ATTACHMENT_ITEMS)
+    throw new Error(`Attach up to ${MAX_ATTACHMENT_ITEMS} files or photos per message.`);
+  const images: AttachmentImage[] = [];
+  const files: AttachmentImage[] = [];
+  // Sequential preparation avoids holding 24 large FileReader results alongside conversion buffers.
+  for (const item of staged) {
+    const image = item.file.type.startsWith("image/");
+    if (!image && item.file.size > MAX_ATTACHMENT_FILE_BYTES)
+      throw new Error(
+        `${safeAttachmentName(item.name)} is too large. Files can be up to 12 MiB each.`,
+      );
+    const attachment = {
+      name: safeAttachmentName(item.name),
+      mime: image ? "image/jpeg" : item.file.type || "application/octet-stream",
+      data: await (image ? downscale(item.file) : readFile(item.file)),
+    };
+    (image ? images : files).push(attachment);
+    if (
+      images.reduce((sum, entry) => sum + entry.data.length, 0) +
+        files.reduce((sum, entry) => sum + entry.data.length, 0) >
+      MAX_ATTACHMENT_TOTAL_BYTES
+    )
+      throw new AttachmentTooLargeError(MAX_ATTACHMENT_TOTAL_BYTES + 1);
+  }
+  const result = { images, ...(files.length ? { files } : {}), caption };
+  const size = new TextEncoder().encode(JSON.stringify(result)).length;
+  if (size > MAX_ATTACHMENT_TOTAL_BYTES) throw new AttachmentTooLargeError(size);
+  return result;
 }
 
 /** The stable Claude text-only surfaces. Both transports disable every browser mutation family except
@@ -292,10 +342,12 @@ export function stableTextBlockReason(
   text: string,
   nativeTextOnly: boolean,
   tmuxPaneText = false,
-): "control" | "empty" | "slash" | null {
+  claudeNativeText = false,
+): "control" | "empty" | "slash" | "reference" | null {
   const trimmed = text.trim();
   if (trimmed === "") return "empty";
   if (nativeTextOnly && trimmed.startsWith("/")) return "slash";
+  if (claudeNativeText && hasClaudeNativeReferences(text)) return "reference";
   if (tmuxPaneText) {
     for (let index = 0; index < text.length; index++) {
       const code = text.charCodeAt(index);
@@ -714,7 +766,10 @@ export function Pairing(props: {
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [revealed, setRevealed] = useState<{ pass: string; idHex: string } | null>(null);
+  const [revealed, setRevealed] = useState<{
+    pass: string;
+    idHex: string;
+  } | null>(null);
   const claiming = useRef(false); // synchronous re-entry guard (a fast double-tap must not claim twice)
 
   const reveal = useCallback(async () => {
@@ -887,6 +942,7 @@ export function viewerInteractionPolicy(
     setModel: enabled && (caps?.controls.setModel ?? legacy),
     interrupt: enabled && (caps?.controls.interrupt ?? legacy),
     attachments: enabled && (caps?.attachments ?? legacy),
+    files: enabled && caps?.attachments === true && caps.files === true,
     structuredPermissions: enabled && (caps?.structuredPermissions ?? legacy),
   };
 }
@@ -1290,6 +1346,13 @@ export function Transcript(props: {
   appControls?: ReactNode;
 }) {
   const { viewer, sessionId, announce, now, reconnectingSince } = props;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const [messages, setMessages] = useState<Message[]>([]);
   const [activitySheetId, setActivitySheetId] = useState<string | null>(null);
   const transcriptItems = useMemo(() => groupTranscriptActivity(messages), [messages]);
@@ -1384,6 +1447,8 @@ export function Transcript(props: {
   const metadata = harnessMetadata(announce?.harness);
   const interaction = viewerInteractionPolicy(announce?.harness, caps);
   const stableClaude = isStableClaudeSurface(announce?.harness, caps);
+  const claudeNative =
+    announce?.harness?.agent === "claude-code" && announce.harness.mode === "native-rc";
   const codex = announce?.harness?.agent === "codex" && announce.harness.mode === "app-server";
   const nativeCommandApprovals =
     codex && interaction.structuredPermissions && caps?.permissionResolution === "native";
@@ -1429,6 +1494,19 @@ export function Transcript(props: {
   const supportsSetModel = interaction.setModel;
   const supportsInterrupt = interaction.interrupt;
   const supportsAttachments = interaction.attachments;
+  const supportsFiles = interaction.files;
+  const sendPolicyRef = useRef({
+    connected,
+    text: interaction.text,
+    attachments: supportsAttachments,
+    files: supportsFiles,
+  });
+  sendPolicyRef.current = {
+    connected,
+    text: interaction.text,
+    attachments: supportsAttachments,
+    files: supportsFiles,
+  };
   const supportsRemotePermissions = interaction.structuredPermissions;
   const canSetMode = remoteMutationEnabled(connected, supportsSetMode);
   const canSetModel = remoteMutationEnabled(connected, supportsSetModel);
@@ -1455,6 +1533,7 @@ export function Transcript(props: {
     input,
     nativeTextOnly,
     interaction.textInput === "terminal",
+    claudeNative,
   );
   const slashBlocked = textBlockReason === "slash";
   const controlBlocked = textBlockReason === "control";
@@ -1645,7 +1724,12 @@ export function Transcript(props: {
         );
         return;
       }
-      const picked = Array.from(files).filter((f) => f.type.startsWith("image/"));
+      const eligible = Array.from(files).filter(
+        (f) => f.type.startsWith("image/") || supportsFiles,
+      );
+      const picked = eligible.filter(
+        (f) => f.type.startsWith("image/") || f.size <= MAX_ATTACHMENT_FILE_BYTES,
+      );
       // Bound the staged count (each image holds a File + an object URL); drop the overflow with a notice
       // rather than silently, and don't mint URLs for files we won't keep.
       const { accept, dropped } = fitStaged(
@@ -1655,19 +1739,24 @@ export function Transcript(props: {
       );
       const items = picked.slice(0, accept).map((f) => ({
         id: crypto.randomUUID(),
-        name: f.name,
+        name: safeAttachmentName(f.name),
         file: f,
-        url: URL.createObjectURL(f),
+        url: f.type.startsWith("image/") ? URL.createObjectURL(f) : "",
       }));
       setStagedNotice(
-        dropped > 0 ? `You can attach up to ${MAX_STAGED_IMAGES} images per message.` : null,
+        eligible.length > picked.length
+          ? "Files can be up to 12 MiB each. Larger files weren’t added."
+          : dropped > 0
+            ? `You can attach up to ${MAX_STAGED_IMAGES} files or photos per message.`
+            : null,
       );
       if (items.length > 0) setStaged((prev) => [...prev, ...items]);
     },
-    [canAttach, connected, setStaged],
+    [canAttach, connected, setStaged, supportsFiles],
   );
   const removeStaged = useCallback(
     (id: string) => {
+      if (sendingRef.current) return;
       setStagedNotice(null); // back under the cap → drop any "max images" notice
       setStaged((prev) => {
         const hit = prev.find((s) => s.id === id);
@@ -1690,6 +1779,10 @@ export function Transcript(props: {
   useEffect(() => {
     if (!supportsAttachments) clearStaged();
   }, [supportsAttachments, clearStaged]);
+  useEffect(() => {
+    if (!supportsFiles)
+      setStaged((prev) => prev.filter((item) => item.file.type.startsWith("image/")));
+  }, [supportsFiles, setStaged]);
   const send = useCallback(async () => {
     // OpenCode's native message identity binds immutable text. Validate with trim, but preserve every
     // original text byte for an admitted prompt; other surfaces retain their established trim behavior.
@@ -1700,14 +1793,17 @@ export function Transcript(props: {
       clearStaged();
       return;
     }
+    if (!supportsFiles && staged.some((item) => !item.file.type.startsWith("image/"))) return;
     const blockReason = stableTextBlockReason(
       text,
       nativeTextOnly,
       interaction.textInput === "terminal",
+      claudeNative,
     );
     if (
       blockReason === "slash" ||
       blockReason === "control" ||
+      blockReason === "reference" ||
       (blockReason === "empty" && staged.length === 0)
     )
       return;
@@ -1720,16 +1816,46 @@ export function Transcript(props: {
     const toSend = staged; // capture before clearStaged resets it (downscale reads item.file, not the URL)
     setSending(true);
     setSendError(null);
+    let attachment: ComposerAttachment | undefined;
+    try {
+      if (toSend.length > 0)
+        attachment = await prepareComposerAttachment(toSend, text, downscaleToBase64);
+    } catch (error) {
+      setSendError(friendlySendError(error));
+      setSending(false);
+      sendingRef.current = false;
+      return;
+    }
+    const latest = sendPolicyRef.current;
+    if (
+      !mountedRef.current ||
+      !latest.connected ||
+      !latest.text ||
+      (attachment && !latest.attachments) ||
+      (attachment?.files?.length && !latest.files)
+    ) {
+      setSending(false);
+      sendingRef.current = false;
+      return;
+    }
     // Optimistic echo (#113): render the message INSTANTLY and clear the composer, so the image/text is
     // never in neither place during the host round-trip (or an iOS-suspended stream). The host's `accepted`
     // ack reconciles it; the transport watchdog (#125) recovers the stream — so no post-send reviveKey bump.
     setMessages((prev) => appendUniqueMessage(prev, optimisticMessage(clientMsgId, text, toSend)));
     atBottomRef.current = true; // your own send always snaps you to the message you just posted
     setShowJump(false);
-    if (toSend.length > 0) clearStaged();
-    setInput("");
+    // Typing or picking more files during preparation belongs to the next draft, not this send.
+    updateDraft(sessionId, (draft) => {
+      const sent = new Set(toSend.map((item) => item.id));
+      for (const item of toSend) if (item.url) URL.revokeObjectURL(item.url);
+      return {
+        input: draft.input === input ? "" : draft.input,
+        staged: draft.staged.filter((item) => !sent.has(item.id)),
+      };
+    });
     try {
-      await sendComposer(viewer, sessionId, text, toSend, downscaleToBase64, clientMsgId);
+      if (attachment) await viewer.sendAttachment(sessionId, attachment, clientMsgId);
+      else await viewer.sendPrompt(sessionId, text, clientMsgId);
     } catch {
       // A rejected fetch does not prove rejection: the broker may have committed the exact source frame
       // and lost only the response. Preserve the bubble and source id in an absorbing unknown state. There
@@ -1747,11 +1873,13 @@ export function Transcript(props: {
     clearStaged,
     connected,
     supportsAttachments,
+    supportsFiles,
     metadata.preserveText,
     interaction.text,
     interaction.textInput,
     nativeTextOnly,
-    setInput,
+    updateDraft,
+    claudeNative,
   ]);
 
   // Auto-grow the composer textarea up to a cap; recompute whenever the text changes (incl. on clear).
@@ -1979,15 +2107,24 @@ export function Transcript(props: {
         {staged.length > 0 && (
           <div className="staged">
             {staged.map((s) => (
-              <div className="staged-item" key={s.id}>
-                {/* biome-ignore lint/performance/noImgElement: a local object-URL blob preview — next/image can't optimize a blob: URL */}
-                <img src={s.url} alt={s.name} />
+              <div className={s.url ? "staged-item" : "staged-item staged-file"} key={s.id}>
+                {s.url ? (
+                  // biome-ignore lint/performance/noImgElement: private local object URL, not fetchable by Next.
+                  <img src={s.url} alt={s.name} />
+                ) : (
+                  <>
+                    <UiIcon name="file" size={20} />
+                    <span title={s.name}>{s.name}</span>
+                    <small>{Math.max(1, Math.ceil(s.file.size / 1024))} KB</small>
+                  </>
+                )}
                 <IconButton
                   className="staged-remove"
                   variant="secondary"
                   size="sm"
                   icon={<UiIcon name="close" size={15} />}
                   label={`Remove ${s.name}`}
+                  isDisabled={sending}
                   onClick={() => removeStaged(s.id)}
                 />
               </div>
@@ -2009,6 +2146,12 @@ export function Transcript(props: {
             Terminal control characters aren’t available remotely. Remove them and try again.
           </p>
         )}
+        {textBlockReason === "reference" && (
+          <p className="staged-notice" role="status">
+            Native @ references can read host files without approval. Attach the file, or describe
+            its path without @ so Claude can request permission normally.
+          </p>
+        )}
         <div className="composer-shell">
           <textarea
             ref={taRef}
@@ -2019,7 +2162,11 @@ export function Transcript(props: {
             onKeyDown={(e) => {
               if (
                 enterShouldSend(
-                  { key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing },
+                  {
+                    key: e.key,
+                    shiftKey: e.shiftKey,
+                    isComposing: e.nativeEvent.isComposing,
+                  },
                   coarsePointer,
                 )
               ) {
@@ -2057,10 +2204,12 @@ export function Transcript(props: {
             <IconButton
               variant="ghost"
               icon={<UiIcon name="attach" size={18} />}
-              label="Attach photos"
+              label={supportsFiles ? "Attach files or photos" : "Attach photos"}
               tooltip={
                 canAttach
-                  ? "Attach photos"
+                  ? supportsFiles
+                    ? "Attach files or photos"
+                    : "Attach photos"
                   : connected
                     ? "Attachments aren’t available for this session"
                     : "Reconnect to the host before attaching photos"
@@ -2071,7 +2220,7 @@ export function Transcript(props: {
             <input
               ref={fileRef}
               type="file"
-              accept="image/*"
+              accept={supportsFiles ? undefined : "image/*"}
               multiple
               hidden
               disabled={!canAttach}
@@ -2258,7 +2407,12 @@ const MODES = [
     icon: "auto",
     desc: "Claude decides which actions need confirmation",
   },
-  { id: "default", label: "Code", icon: "code", desc: "Claude writes and edits code directly" },
+  {
+    id: "default",
+    label: "Code",
+    icon: "code",
+    desc: "Claude writes and edits code directly",
+  },
   {
     id: "plan",
     label: "Plan",
@@ -2307,11 +2461,13 @@ function Sheet({
   onClose,
   children,
   wide = false,
+  image = false,
 }: {
   label: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  image?: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   // onClose is a fresh arrow each parent render; read it through a ref so the focus/scroll-lock effect
@@ -2332,6 +2488,7 @@ function Sheet({
       // Safari quirk where clicking a <button> doesn't focus it, so activeElement is <body>: anchoring to the
       // full-viewport body rect would shove the panel off-screen — a centered bottom sheet is the safe fallback.
       if (
+        image ||
         !trigger ||
         trigger === document.body ||
         !window.matchMedia?.("(min-width: 761px)").matches
@@ -2374,7 +2531,7 @@ function Sheet({
     // a desktop window. Otherwise the old inline offset can leave the dialog entirely off-screen.
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
-  }, [wide]);
+  }, [wide, image]);
   useEffect(() => {
     const trigger = document.activeElement as HTMLElement | null; // the button that opened the sheet
     const focusables = () =>
@@ -2437,7 +2594,7 @@ function Sheet({
         onClick={onClose}
       />
       <div
-        className={`${anchored ? "sheet sheet--anchored" : "sheet"}${wide ? " sheet--activity" : ""}`}
+        className={`${anchored ? "sheet sheet--anchored" : "sheet"}${wide ? " sheet--activity" : ""}${image ? " sheet--image" : ""}`}
         style={anchorStyle ?? undefined}
         ref={dialogRef}
         role="dialog"
@@ -2638,6 +2795,65 @@ export function SessionSheet({
   );
 }
 
+/** URLs are owned by the mounted canonical row, never by a global cache or the optimistic draft. */
+export function createImagePreviews(images: readonly AttachmentImage[]) {
+  const previews: { name: string; url: string }[] = [];
+  const release = () => {
+    for (const image of previews) URL.revokeObjectURL(image.url);
+  };
+  try {
+    for (const image of images) {
+      const raw = atob(image.data);
+      const bytes = Uint8Array.from(raw, (char) => char.charCodeAt(0));
+      previews.push({
+        name: image.name,
+        url: URL.createObjectURL(new Blob([bytes], { type: image.mime })),
+      });
+    }
+    return { previews, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+export function MessageImages({ images }: { images: readonly AttachmentImage[] }) {
+  const [previews, setPreviews] = useState<readonly { name: string; url: string }[]>([]);
+  const [selected, setSelected] = useState<number | null>(null);
+  useEffect(() => {
+    const owned = createImagePreviews(images);
+    setPreviews(owned.previews);
+    setSelected(null);
+    return owned.release;
+  }, [images]);
+  const open = selected === null ? undefined : previews[selected];
+  return (
+    <>
+      <div className="message-images">
+        {previews.map((image, index) => (
+          <button
+            key={image.url}
+            type="button"
+            className="message-image"
+            aria-label={`View image ${index + 1}: ${image.name}`}
+            aria-haspopup="dialog"
+            onClick={() => setSelected(index)}
+          >
+            {/* biome-ignore lint/performance/noImgElement: private, local blob URL */}
+            <img src={image.url} alt={image.name} loading="lazy" />
+          </button>
+        ))}
+      </div>
+      {open && (
+        <Sheet label={open.name} onClose={() => setSelected(null)} image>
+          {/* biome-ignore lint/performance/noImgElement: private, local blob URL */}
+          <img className="image-preview-full" src={open.url} alt={open.name} />
+        </Sheet>
+      )}
+    </>
+  );
+}
+
 function ActivityRollup({
   group,
   expanded,
@@ -2728,7 +2944,10 @@ function ActivityMessageRow({ message }: { message: Message }) {
 // right-aligned pills; ASSISTANT turns are full-width prose (no bubble). Tool calls are compact
 // tappable rows that expand to a Command/Diff detail; sub-agents and thinking nest/recede. (Inspired
 // by Claude Code's mobile UI — see the design spec.)
-type GrantExtra = { answers?: Record<string, string | string[]>; toolUseId?: string };
+type GrantExtra = {
+  answers?: Record<string, string | string[]>;
+  toolUseId?: string;
+};
 type GrantFn = (requestId: string, behavior: "allow" | "deny", extra?: GrantExtra) => Promise<void>;
 
 export function Bubble({
@@ -2773,7 +2992,10 @@ export function Bubble({
         <div className="row-user">
           {/* Dim the pill while it's an unconfirmed optimistic echo (#113); solid once the `accepted`
               ack reconciles it (optimistic→false). */}
-          <div className={message.optimistic ? "pill pill-pending" : "pill"}>{message.text}</div>
+          <div className={message.optimistic ? "pill pill-pending" : "pill"}>
+            {!message.optimistic && message.images && <MessageImages images={message.images} />}
+            {message.text}
+          </div>
           {message.clientMsgId !== undefined && (
             <div
               className="delivery-status"
@@ -3172,7 +3394,10 @@ function QuestionCard({
           return answer === undefined ? [] : [[questionAnswerKey(q), answer]];
         }),
       );
-      await onGrant(req.requestId, "allow", { answers: out, toolUseId: req.toolUseId });
+      await onGrant(req.requestId, "allow", {
+        answers: out,
+        toolUseId: req.toolUseId,
+      });
       if (!req.nativeQuestions) setSentAnswers(out);
       setSentBehavior("allow");
     } catch (e) {
@@ -3536,7 +3761,10 @@ function DiffView({ input }: { input: ToolInput }) {
   const code = [...remShown, ...addShown].join("\n");
   const highlightLines = [
     ...remShown.map((_, i) => ({ line: i + 1, type: "remove" as const })),
-    ...addShown.map((_, i) => ({ line: remShown.length + i + 1, type: "add" as const })),
+    ...addShown.map((_, i) => ({
+      line: remShown.length + i + 1,
+      type: "add" as const,
+    })),
   ];
   return (
     <div className="diff">

@@ -21,7 +21,7 @@ The separate [Codex recovery follow-on](release-finish-line.md#codex-recovery--c
 fresh-projection restart/backfill and broker-loss isolation on Linux arm64 with 0.151.0/explicit-port
 loopback WebSocket and 0.153.4/managed Unix, both with paginated history. Separate
 [0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app recovery
+adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
 and automatic stable-ID reconnect remain unqualified.
 Current evidence and remaining gates live in
 [native coexistence](native-rc-passthrough-scoping.md) and the
@@ -45,10 +45,14 @@ milestone as the entire product or delete working adapter foundations merely bec
 ### Claude Code
 
 M1's original text/coexistence result is complete and remains historical. Current native-companion code
-also projects read-only tool activity and supports host-owned image uploads plus one-shot session-scoped
+also projects read-only tool activity and supports host-owned image/file uploads plus one-shot session-scoped
 Interrupt. Images reuse ordinary native text references and canonical receipts; only generated
-references are hidden in the displayed names/caption. Attempted upload files are retained under a
-256 MiB decoded-image budget per companion run, not a global quota. See the separate
+references are hidden in the displayed names/caption; bounded available image previews are encrypted
+with canonical user rows under a 32 MiB decoded history/live budget per reconciler. Generated
+references intentionally supply uploaded bytes without changing persistent permissions or sandbox
+settings; browser-origin Claude text/captions cannot supply native `@` file references. Ordinary
+emails/path prose and native/provider history are unaffected. Attempted upload files are retained under a
+256 MiB decoded-upload budget per companion run, not a global quota. See the separate
 [image acceptance](release-finish-line.md#claude-native-images--complete). Stop has no native
 turn coordinate and can affect newer peer work if delayed; the companion waits for matching canonical
 worker success before later browser text without advertising idle status. Current acceptance belongs
@@ -58,7 +62,8 @@ and its [acceptance](release-finish-line.md#claude-native-single-choice-question
 responses. The separate [Bash boundary](protocol.md#claude-native-bash-approvals) adds one-time
 Allow/Deny for the captured command/description shape, with no inferred cwd or policy changes;
 its [acceptance](release-finish-line.md#claude-native-bash-approvals) is tracked separately.
-Unsupported permissions and forms, modes, slash commands, general files, image previews, end, and
+The [files/previews slice](release-finish-line.md#native-files-and-image-previews) tracks its own bounded
+native acceptance. Unsupported permissions and forms, modes, slash commands, end, and
 truthful status may graduate later one family at a time.
 Keep the private replacement relay as a separately labeled mode for environments that do not need the
 official client.
@@ -99,14 +104,16 @@ restart/backfill and broker-loss isolation for the pinned version/platform with 
 WebSocket, paginated history, a packed CLI, local SQLite, one TUI, and two browsers. The same sentinel
 passed separately on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
 paginated history. The separate [0.154.0 official desktop recovery result](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened-viewer restoration. Legacy/mobile-app recovery and automatic
+adds the actual Mac app and reopened-viewer restoration. Legacy-history and mobile network-loss/deep-sleep recovery and automatic
 stable-ID reconnect remain later adapter-local gates; they do not reopen M3a or M3b.
 Current code also accepts exact 0.153.4 and 0.154.0/Linux arm64,
 displays completed shell commands/results as read-only activity, and supports browser interrupt on all
 accepted versions. Interrupt binds one observed active turn without retargeting or retrying; queued
 text waits for native idle. The current image follow-on reuses encrypted composer groups and native
-inline image inputs, with bounded transient retention and no file upload or URL fetch. It does not
-add general-file support or native-image previews. A separate exact-0.153.4/0.154.0 implementation permits
+inline image inputs, with bounded transient retention and no arbitrary URL/path fetch. Current code
+also adds bounded encrypted image previews and exact-0.154.0 general files as private host-owned
+references; older versions remain image-only. Their [separate slice](release-finish-line.md#native-files-and-image-previews)
+tracks bounded native acceptance. A separate exact-0.153.4/0.154.0 implementation permits
 one-shot ordinary local-command approvals with native resolution; it excludes policy changes, session
 grants, stdin/file/network permissions, and questions. A separate 0.153.4/0.154.0 form adapter implements
 complete non-secret blocking groups of 1–3 questions with 1–20 choices each, free text only when
@@ -117,7 +124,7 @@ Current acceptance is tracked in the
 [release roadmap](release-finish-line.md), without rewriting the historical 0.151.0 results.
 The separate [0.154.0 result](release-finish-line.md#codex-current-version-acceptance) records that
 tuple's tested journeys and exclusions.
-Other controls, general files, streaming partials, file
+Other controls, streaming partials, file
 changes, task lifecycle, and other versions/platforms remain outside this implementation.
 
 ### tmux compatibility

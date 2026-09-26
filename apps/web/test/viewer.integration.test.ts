@@ -32,6 +32,25 @@ function fakeHost(id: Identity): BrokerClient {
 }
 
 describe("web client Viewer (browser-safe, against the real broker)", () => {
+  it("projects canonical attachment frames onto the user ID used by accepted receipts", async () => {
+    const id = await uniqueIdentity();
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
+    const host = fakeHost(id);
+    const images = [{ name: "photo.png", mime: "image/png", data: "QUJDRA==" }];
+    await host.postFrame(
+      header(id, {
+        recordKind: "user_attachment",
+        sessionId: "canonical-preview",
+        seq: 0,
+        msgId: "user_attachment-0",
+      }),
+      utf8(JSON.stringify({ text: "📎 photo.png\nA caption", images })),
+    );
+    expect(await takeGen(viewer.transcript("canonical-preview", never), 1)).toEqual([
+      { kind: "user", seq: 0, msgId: "user-0", text: "📎 photo.png\nA caption", images },
+    ]);
+  });
+
   it("caps a future host clock at local receipt so a crashed host cannot stay fresh indefinitely", async () => {
     const id = await uniqueIdentity();
     const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);

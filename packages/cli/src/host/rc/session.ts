@@ -135,6 +135,13 @@ export interface HostImage {
   url: string;
 }
 
+/** Authenticated bytes only: the native adapter chooses every filesystem path. */
+export interface HostFile {
+  name: string;
+  mime: string;
+  data: string;
+}
+
 /** Bound image bytes waiting for native submission across all queued browser turns. */
 export const MAX_PENDING_IMAGE_BYTES = 48 * 1024 * 1024;
 
@@ -142,6 +149,7 @@ export const MAX_PENDING_IMAGE_BYTES = 48 * 1024 * 1024;
 export class RcEvent {
   /** Transient host-only input. Deliberately omitted from payload/wire and released after submission. */
   images?: readonly HostImage[];
+  files?: readonly HostFile[];
 
   constructor(
     readonly eventId: string,
@@ -261,7 +269,11 @@ export class Session {
    * later canonical provider event can reconcile the viewer's optimistic echo without pre-ordering it. */
   pushUserInput(
     content: string,
-    options: { clientMsgId?: string; images?: readonly HostImage[] } = {},
+    options: {
+      clientMsgId?: string;
+      images?: readonly HostImage[];
+      files?: readonly HostFile[];
+    } = {},
   ): RcEvent {
     let imageBytes = 0;
     for (const image of options.images ?? []) {
@@ -270,8 +282,15 @@ export class Session {
         throw new Error("pending image input exceeded its byte bound");
       }
     }
+    for (const file of options.files ?? []) {
+      imageBytes += Buffer.byteLength(file.data, "utf8");
+      if (this.#pendingImageBytes + imageBytes > MAX_PENDING_IMAGE_BYTES) {
+        throw new Error("pending attachment input exceeded its byte bound");
+      }
+    }
     // Copy descriptors so the producer cannot mutate a retained URL after its bytes were counted.
     const images = options.images?.map(({ name, url }) => ({ name, url }));
+    const files = options.files?.map(({ name, mime, data }) => ({ name, mime, data }));
     const payload: Record<string, unknown> = {
       type: "user",
       // Claude 2.1.237 demotes an unclassified client event to peer/cross-session origin, whose kill
@@ -288,19 +307,23 @@ export class Session {
     const event = this.#pushDownstream("user", payload);
     if (images !== undefined && images.length > 0) {
       event.images = images;
+    }
+    if (files !== undefined && files.length > 0) event.files = files;
+    if (event.images !== undefined || event.files !== undefined) {
       this.#pendingImages.set(event, imageBytes);
       this.#pendingImageBytes += imageBytes;
     }
     return event;
   }
 
-  /** Drop raw image input without removing the immutable event/correlation coordinate. */
+  /** Drop raw attachment input without removing the immutable event/correlation coordinate. */
   releaseImages(event: RcEvent): void {
     const bytes = this.#pendingImages.get(event);
     if (bytes === undefined) return;
     this.#pendingImages.delete(event);
     this.#pendingImageBytes -= bytes;
     delete event.images;
+    delete event.files;
   }
 
   /** Append the `initialize` control_request — guaranteed first downstream event. Idempotent. */

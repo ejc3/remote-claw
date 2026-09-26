@@ -81,6 +81,7 @@ describe("reconcileAccepted", () => {
       seq: 4,
       text: "📎 Screen_Shot.png\ndescribe",
       msgId: "user-4",
+      images: [{ name: "Screen_Shot.png", mime: "image/png", data: "QUJDRA==" }],
     };
     if (ackFirst) msgs = reconcileAccepted(msgs, "cm-9", 4);
     msgs = appendUniqueMessage(msgs, echo);

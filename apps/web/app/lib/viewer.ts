@@ -317,6 +317,7 @@ export function parseCapabilities(raw: unknown, harness?: Harness): Capabilities
       end: bool(ctlRaw.end, legacyDefaults),
     },
     attachments: bool(c.attachments, legacyDefaults),
+    ...(typeof c.files === "boolean" ? { files: c.files } : {}),
   };
 }
 
@@ -350,6 +351,8 @@ export interface Message {
   seq: number | null;
   text: string;
   msgId: string;
+  /** Canonical host-projected bytes only; never an optimistic local upload or a remote URL. */
+  images?: readonly AttachmentImage[];
   /** Set on a locally-rendered OPTIMISTIC echo (#113): the user's own just-sent message, shown instantly
    *  (msgId `pending-<clientMsgId>`) before the host echoes it back. The `accepted` ack (matching
    *  clientMsgId) re-keys it to the real `user-<seq>` so the canonical echo settles its content/order. */
@@ -364,6 +367,66 @@ export interface Message {
   pending?: number;
   /** Present only on kind:"gap": when this missing-seq stall was first observed. */
   since?: number;
+}
+
+export interface AttachmentImage {
+  name: string;
+  mime: string;
+  data: string;
+}
+
+export interface ComposerAttachment {
+  images: AttachmentImage[];
+  files?: AttachmentImage[];
+  caption?: string;
+}
+
+export const MAX_ATTACHMENT_ITEMS = 24;
+export const MAX_ATTACHMENT_FILE_BYTES = 12 * 1024 * 1024;
+const MAX_PREVIEW_BYTES = 1024 * 1024;
+const MAX_PREVIEW_IMAGES = 8;
+const PREVIEW_MIMES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+
+export function safeAttachmentName(name: string): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: strip terminal controls from file labels.
+  return name.replace(/[\\/\u0000-\u001f\u007f-\u009f]/gu, "_").slice(0, 160) || "attachment";
+}
+
+/** An invalid preview never hides otherwise valid canonical caption/filename text. No URL is read. */
+export function parseUserAttachment(raw: string): Pick<Message, "text" | "images"> {
+  const fallback = { text: "[Attachment preview unavailable]" };
+  if (raw.length > 12 * 1024 * 1024) return fallback;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return fallback;
+    const body = value as Record<string, unknown>;
+    if (typeof body.text !== "string" || body.text.length > 100_000) return fallback;
+    const images: AttachmentImage[] = [];
+    if (Array.isArray(body.images) && body.images.length <= MAX_PREVIEW_IMAGES) {
+      for (const rawImage of body.images) {
+        if (typeof rawImage !== "object" || rawImage === null || Array.isArray(rawImage)) continue;
+        const img = rawImage as Record<string, unknown>;
+        if (
+          Object.keys(img).some((key) => !["name", "mime", "data"].includes(key)) ||
+          typeof img.name !== "string" ||
+          typeof img.mime !== "string" ||
+          !PREVIEW_MIMES.has(img.mime) ||
+          typeof img.data !== "string" ||
+          img.data.length === 0 ||
+          img.data.length > Math.ceil(MAX_PREVIEW_BYTES / 3) * 4 ||
+          img.data.length % 4 !== 0 ||
+          !/^[A-Za-z0-9+/]*={0,2}$/.test(img.data)
+        )
+          continue;
+        const bytes = atob(img.data);
+        if (bytes.length > MAX_PREVIEW_BYTES || btoa(bytes) !== img.data) continue;
+        images.push({ name: safeAttachmentName(img.name), mime: img.mime, data: img.data });
+      }
+    }
+    return { text: body.text, ...(images.length > 0 ? { images } : {}) };
+  } catch {
+    return fallback;
+  }
 }
 
 /** A session lifecycle terminal is absorbing: once the authenticated identity bus says the host has
@@ -789,7 +852,15 @@ export class Viewer {
               } catch {
                 continue; // a frame/message we can't open (not ours / corrupt) — skip, never crash the list
               }
-              yield { kind: f.recordKind, seq: f.seq, text, msgId: f.msgId };
+              yield f.recordKind === "user_attachment"
+                ? {
+                    kind: "user",
+                    seq: f.seq,
+                    // Receipts name the logical user turn, independent of its preview wire format.
+                    msgId: `user-${f.seq}`,
+                    ...parseUserAttachment(text),
+                  }
+                : { kind: f.recordKind, seq: f.seq, text, msgId: f.msgId };
             }
           }
         } catch {
@@ -910,12 +981,18 @@ export class Viewer {
    */
   async sendAttachment(
     sessionId: string,
-    att: { images: { name: string; mime: string; data: string }[]; caption?: string },
+    att: ComposerAttachment,
     clientMsgId = `att-${randomId()}`,
   ): Promise<string> {
     this.#assertSessionWritable(sessionId);
     const msgId = clientMsgId;
-    const payload = utf8(JSON.stringify({ images: att.images, caption: att.caption ?? "" }));
+    const payload = utf8(
+      JSON.stringify({
+        images: att.images,
+        ...(att.files?.length ? { files: att.files } : {}),
+        caption: att.caption ?? "",
+      }),
+    );
     // Chunking handles the per-frame ~4.5 MB body cap, but still bound the TOTAL so a pathological send
     // can't stream unbounded bytes at the host (it caps reassembly at MAX_ATTACHMENT_PARTS too). Surfaced
     // as a clear, typed error rather than the platform's opaque "Load failed".

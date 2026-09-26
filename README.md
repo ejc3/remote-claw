@@ -28,8 +28,10 @@ credentials.
 > fresh-projection restart/backfill and broker-loss isolation on 0.151.0/explicit-loopback WebSocket
 > and 0.153.4/managed Unix, both with paginated history. Separate
 > [0.154.0 official desktop Remote recovery](docs/release-finish-line.md#codex-official-remote-recovery--complete)
-> passed with the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app
+> passed with the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep
 > recovery and automatic stable-ID reconnect remain unclaimed.
+> A separate [physical Android background/resume check](docs/release-finish-line.md#native-phone-backgroundresume--2026-09-26)
+> passed for both agents without claiming an actual connection drop or screen-lock/deep-sleep recovery.
 > The current Codex implementation accepts exact 0.151.0, 0.153.4, and 0.154.0 on Linux arm64 and also displays
 > completed shell commands and bounded results as read-only activity. Browser mutations are ordinary
 > non-empty non-slash text, images with an optional caption, and interrupt. Exact 0.153.4 and 0.154.0 implement
@@ -39,7 +41,9 @@ credentials.
 > passed on 0.153.4. Separate [0.154.0 acceptance](docs/release-finish-line.md#codex-current-version-acceptance)
 > records the newer tuple's tested journeys and exclusions in one place.
 > Version 0.151.0 approvals/questions and unsupported request shapes remain native-owned. Other
-> controls and general files remain disabled. These
+> controls remain disabled. General files are implemented only for Claude-native and exact Codex
+> 0.154.0, with bounded encrypted image previews; the separate
+> [files/previews slice](docs/release-finish-line.md#native-files-and-image-previews) records its bounded native acceptance. These
 > additions do not rewrite the historical 0.151.0 acceptance; see the release roadmap for their current
 > acceptance result.
 > M4 is also complete for the lower-fidelity tmux fallback: a packed CLI with exact Claude 2.1.237 on
@@ -69,7 +73,7 @@ The intended surface matrix is:
 | Agent surface | Local native UI | Official provider collaboration | remote-claw browsers | Current truth |
 | --- | --- | --- | --- | --- |
 | Claude Code | Claude TUI | Claude Remote Control | Multiple browsers | Private replacement relay works; M1's exact-2.1.237 native companion passed local TUI, literal official web UI on the user's phone, two-browser, fresh-projection restart, broker-loss, packed-install, and exact-SHA deployed-broker acceptance |
-| Codex | Codex TUI | Codex Remote through ChatGPT; official desktop remote connection | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket. Separate [recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) covers 0.151.0/explicit WS and 0.153.4/managed Unix/paginated; [0.154.0 official desktop Remote recovery](docs/release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Legacy/mobile-app recovery, automatic stable-ID reconnect and per-device Remote unsubscribe remain unclaimed |
+| Codex | Codex TUI | Codex Remote through ChatGPT; official desktop remote connection | Multiple browsers | M3a and M3b complete for exact Codex 0.151.0 on Linux arm64: local TUI plus two browsers, native text/status, TUI-owned approvals/questions, and bounded same-thread official Remote coexistence through the managed Unix socket. Separate [recovery acceptance](docs/release-finish-line.md#codex-recovery--complete) covers 0.151.0/explicit WS and 0.153.4/managed Unix/paginated; [0.154.0 official desktop Remote recovery](docs/release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect and per-device Remote unsubscribe remain unclaimed |
 | OpenCode | OpenCode TUI | Preserve any native collaboration the selected version exposes | Multiple browsers | M2 complete for exact OpenCode 1.17.5 on Linux arm64 with the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux compatibility | Terminal pane | Not claimed by this fallback | Multiple browsers | M4 complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed CLI, local pane, two browsers, reload, non-empty non-slash text plus attachments, active-turn native-modal isolation, browser departure, and broker-loss isolation; idle-editor concurrency, raw controls, ordering, and native application remain lower fidelity or unsupported |
 
@@ -98,10 +102,10 @@ The implemented native modes are:
 | --- | --- |
 | `--rc-app <origin>` (default `--rc-driver=mitm`) | Runs real Claude Code behind a loopback TLS proxy, answers `/v1/code/sessions/**` locally, and relays through the E2E-encrypted broker. This replaces Anthropic Remote Control, so the official Claude client cannot join. |
 | `--rc-trace` | Passes traffic to Anthropic while recording bounded, redacted protocol diagnostics. The official client can drive the session, but remote-claw browsers cannot. |
-| `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text, image groups with an optional caption, one-shot session-scoped Interrupt, [fresh single-choice responses](docs/protocol.md#claude-native-single-choice-questions), and [bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals); unsupported permissions/forms, model/mode changes, general files, and end stay native/local. |
+| `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text, image/file groups with an optional caption, one-shot session-scoped Interrupt, [fresh single-choice responses](docs/protocol.md#claude-native-single-choice-questions), and [bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals). Bounded available image previews survive viewer reload; uploads deliberately supply bytes to native Claude without changing persistent permission settings. Browser-authored native `@` file references remain unsupported. Unsupported permissions/forms, model/mode changes, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
 | `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The mutable surface remains non-empty non-slash text plus interrupt. Read-only MAIN-session running/idle status is advertised; native/local UI still owns permissions, questions, model/mode, attachments, and end. |
-| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0, 0.153.4, or 0.154.0 on Linux arm64. Browser mutations are non-empty non-slash text, image groups with an optional caption, and interrupt; native status and completed shell commands/results are read-only. Exact 0.153.4 and 0.154.0 additionally implement one-shot ordinary local-command approvals and bounded non-secret blocking choice forms; 0.151.0 approvals/questions and unsupported request shapes remain native-owned. |
+| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0, 0.153.4, or 0.154.0 on Linux arm64. Browser mutations are non-empty non-slash text, image groups with an optional caption, and interrupt; exact 0.154.0 also accepts general files as private host-owned references. Available bounded image previews survive viewer reload. Native status and completed shell commands/results are read-only. Exact 0.153.4 and 0.154.0 additionally implement one-shot ordinary local-command approvals and bounded non-secret blocking choice forms; 0.151.0 approvals/questions and unsupported request shapes remain native-owned. |
 | `--rc-app <origin> --rc-driver=tmux [claude args]` | Runs plain Claude in a recoverable private tmux pane while the lower-fidelity adapter projects transcript and serializes browser injection against active native turns. It fail-fast requires Linux arm64 and exact Claude 2.1.237 before identity, broker, or pane startup. Browser input is ordinary non-empty non-slash text plus attachments; interrupt, model, mode, and end are disabled. Permissions, questions, and folder trust stay in that local pane unless the caller explicitly bypasses Claude policy. Idle editor/config UI concurrency and independent peer ordering are not isolated. M4's maintained Bedrock tuple is green; provider-native and official-client coexistence are not advertised for this mode. |
 
 The launch form waits for the exact successful bridge request from its Claude child. The attach form
@@ -255,16 +259,23 @@ node dist/remote-claw.js --rc-app https://your-app.example \
 ```
 
 Use a durable `sqlite`/Turso broker profile and the same backend in the viewer. Browser mutations are
-ordinary non-empty non-slash text, images with an optional non-slash caption, one-shot session-scoped
+ordinary non-empty non-slash text, images/files with an optional non-slash caption, one-shot session-scoped
 Interrupt, [supported single-choice responses](docs/protocol.md#claude-native-single-choice-questions),
 and [bounded one-time Bash decisions](docs/protocol.md#claude-native-bash-approvals).
-Images reuse the encrypted composer group. The host writes private image files and submits
-their references through ordinary native text, preserving native permissions and canonical receipts.
-The transcript shows sanitized names/caption rather than generated paths or image previews, including
-on fresh-projection backfill. Attempted uploads remain available after companion exit; remove them
-only when the native session no longer needs them. The decoded-image budget is 256 MiB per companion
-run, not a global or cross-restart disk quota. See [image limits and lifetime](docs/protocol.md#10-attachments)
-and [current image acceptance](docs/release-finish-line.md#claude-native-images--complete).
+Images/files reuse the encrypted composer group. The host writes private upload files and submits
+their references through ordinary native text, deliberately sharing the uploaded bytes with Claude
+without changing persistent permission rules or sandbox settings. A separate Read prompt is not
+guaranteed. Browser-origin text/captions cannot supply native `@` file references; ordinary emails
+and path prose remain normal text. Native/provider history is unaffected. Canonical receipts are unchanged.
+The transcript shows sanitized names/caption instead of generated paths, plus bounded available image
+previews. Canonical previews survive viewer reload; fresh-projection backfill rebuilds them only from
+still-available owned bytes. History/live previews share a 32 MiB decoded budget per reconciler;
+omitted previews retain file labels. Attempted uploads remain available after companion exit; remove them
+only when the native session no longer needs them. The decoded-upload budget is 256 MiB per companion
+run, not a global or cross-restart disk quota; no GC is added. See
+[attachment limits and lifetime](docs/protocol.md#10-attachments), historical
+[image acceptance](docs/release-finish-line.md#claude-native-images--complete), and separate
+[files/previews acceptance](docs/release-finish-line.md#native-files-and-image-previews).
 
 Interrupt has no native turn ID,
 so a delayed Stop may affect newer work from another native/provider peer. The companion waits for the
@@ -343,12 +354,14 @@ Use the real UUIDv7 supplied by Codex. remote-claw resumes/joins only that threa
 stops app-server, discovers/selects/creates/deletes/stops a thread, or owns the TUI. Browser mutations
 are non-empty non-slash text, images with an optional non-slash caption, and interrupt. Exact 0.153.4
 and 0.154.0 implement one-shot ordinary local-command approvals and bounded native choice forms;
-0.151.0 approvals/questions and unsupported request shapes stay native-owned. Model/mode, general
-files, and end are disabled. A durable
-SQLite/libSQL broker is required. The existing composer sends an encrypted image group; the host passes
-validated inline image bytes to Codex without creating upload files or fetching URLs. Native transcript
-rows retain sanitized image names/caption (or an image count for native image-only input), not image
-previews. Bounds and delivery semantics live in [Attachments](docs/protocol.md#10-attachments).
+0.151.0 approvals/questions and unsupported request shapes stay native-owned. Model/mode and end
+remain disabled; general files require exact 0.154.0. A durable SQLite/libSQL broker is required.
+The existing composer sends encrypted attachment groups. The host passes validated inline images
+to Codex and general files as private generated references, deliberately supplying the uploaded bytes
+without fetching provider URLs or changing persistent permission/sandbox settings. Transcript rows
+retain sanitized names/caption and available image previews within the shared 32 MiB decoded
+history/live budget per reconciler.
+Bounds and delivery semantics live in [Attachments](docs/protocol.md#10-attachments).
 Interrupt targets one observed active turn without retrying or switching to a newer turn. It remains
 available while browser text is queued; that text waits for native idle before starting. Interrupting
 the model turn does not guarantee cancellation of native background commands.

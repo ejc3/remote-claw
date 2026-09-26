@@ -7,6 +7,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
 import type { DriverContext } from "../driver.js";
 import type { MitmOptions } from "../mitm.js";
+import { NativeUploadStore } from "../native-uploads.js";
 import type { Session } from "../session.js";
 import {
   type AnthropicRcEvent,
@@ -21,7 +22,6 @@ import {
 } from "./client.js";
 import { type ClaudeNativeClient, ClaudeNativeDriver, type ClaudeNativeProxy } from "./driver.js";
 import { AnthropicRcError } from "./errors.js";
-import { NativeImageStore } from "./images.js";
 
 const ID = new Uint8Array(16);
 const enc = new TextEncoder();
@@ -34,6 +34,15 @@ const IMAGES = ["first.png", "second.png"].map((name) => ({
   url: `data:image/png;base64,${IMAGE_DATA}`,
 }));
 const IMAGE_DISPLAY = "📎 first.png, 📎 second.png\nDescribe both";
+const IMAGE_PREVIEWS = IMAGES.map(({ name }) => ({ name, mime: "image/png", data: IMAGE_DATA }));
+const FILES = [
+  {
+    name: "notes.txt",
+    mime: "text/plain",
+    data: Buffer.from("native file bytes").toString("base64"),
+  },
+];
+const MIXED_DISPLAY = "📎 first.png, 📎 second.png, 📎 notes.txt\nDescribe both";
 
 function haveOpenssl(): boolean {
   try {
@@ -306,7 +315,11 @@ interface Harness {
 }
 
 async function startHarness(
-  options: { projectionCoordinateCap?: number; imageStore?: NativeImageStore } = {},
+  options: {
+    projectionCoordinateCap?: number;
+    projectionPreviewByteLimit?: number;
+    uploadStore?: NativeUploadStore;
+  } = {},
 ): Promise<Harness> {
   const native = new FakeNativeClient();
   const broker = new FakeBroker();
@@ -337,11 +350,14 @@ async function startHarness(
     certsDir: CERTS_DIR,
     claudeBin: "claude-fixture",
     client: native,
-    imageStore: options.imageStore ?? new NativeImageStore(join(CERTS_DIR, "default-images")),
+    uploadStore: options.uploadStore ?? new NativeUploadStore(join(CERTS_DIR, "default-images")),
     reconnectDelayMs: 0,
     ...(options.projectionCoordinateCap === undefined
       ? {}
       : { projectionCoordinateCap: options.projectionCoordinateCap }),
+    ...(options.projectionPreviewByteLimit === undefined
+      ? {}
+      : { projectionPreviewByteLimit: options.projectionPreviewByteLimit }),
     proxyFactory: (options) => {
       proxy = new FakeProxy(options);
       return proxy;
@@ -398,7 +414,8 @@ async function startAttachHarness(options: {
   native: FakeNativeClient;
   broker: FakeBroker;
   nativeSessionId: string;
-  imageStore?: NativeImageStore;
+  uploadStore?: NativeUploadStore;
+  projectionPreviewByteLimit?: number;
 }): Promise<AttachHarness> {
   const parent = new AbortController();
   const announcementFloor = options.broker.announcements.length;
@@ -425,7 +442,10 @@ async function startAttachHarness(options: {
     certsDir: "",
     claudeBin: "must-not-spawn",
     client: options.native,
-    imageStore: options.imageStore ?? new NativeImageStore(join(CERTS_DIR, "default-images")),
+    uploadStore: options.uploadStore ?? new NativeUploadStore(join(CERTS_DIR, "default-images")),
+    ...(options.projectionPreviewByteLimit === undefined
+      ? {}
+      : { projectionPreviewByteLimit: options.projectionPreviewByteLimit }),
     reconnectDelayMs: 0,
     proxyFactory: () => {
       proxyCalls += 1;
@@ -1215,9 +1235,9 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
   it.each([
     "ack-before-sse",
     "sse-before-ack",
-  ] as const)("correlates an image group when provider order is %s, including fresh history", async (order) => {
+  ] as const)("correlates a mixed upload group when provider order is %s, including fresh preview history", async (order) => {
     const imageRoot = mkdtempSync(join(CERTS_DIR, "images-"));
-    const harness = await startHarness({ imageStore: new NativeImageStore(imageRoot) });
+    const harness = await startHarness({ uploadStore: new NativeUploadStore(imageRoot) });
     const pushed = vi.spyOn(harness.session, "pushUserInput");
     const acknowledgement = Promise.withResolvers<void>();
     harness.native.postImpl = async (_nativeId, input) => {
@@ -1247,6 +1267,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
           "browser-in",
           JSON.stringify({
             images: IMAGES.map(({ name }) => ({ name, mime: "image/png", data: IMAGE_DATA })),
+            files: FILES,
             caption: "Describe both",
           }),
           "browser-coordinate",
@@ -1258,17 +1279,20 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       const paths = [...input.message.content.matchAll(/@"([^"]+)"/g)].map(
         (match) => match[1] ?? "",
       );
-      expect(paths).toHaveLength(2);
-      for (const path of paths) {
-        expect(path.startsWith(`${imageRoot}/remote-claw-native-`)).toBe(true);
-        expect(readFileSync(path)).toEqual(Buffer.from(IMAGE_DATA, "base64"));
+      expect(paths).toHaveLength(3);
+      for (const [index, path] of paths.entries()) {
+        expect(path.startsWith(`${imageRoot}/remote-claw-upload-`)).toBe(true);
+        expect(readFileSync(path)).toEqual(
+          index < 2 ? Buffer.from(IMAGE_DATA, "base64") : Buffer.from("native file bytes"),
+        );
       }
       expect(input.message.content).toBe(
-        `${paths.map((path) => `@"${path}"`).join(" ")}\n${IMAGE_DISPLAY}`,
+        `${paths.map((path) => `@"${path}"`).join(" ")}\n${MIXED_DISPLAY}`,
       );
       expect(input.message.content).not.toContain("data:image");
       expect(pushed).toHaveBeenCalledTimes(1);
       expect(pushed.mock.results[0]?.value.images).toBeUndefined();
+      expect(pushed.mock.results[0]?.value.files).toBeUndefined();
 
       if (order === "ack-before-sse") {
         acknowledgement.resolve();
@@ -1293,8 +1317,8 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       expect(harness.native.postCalls[0]?.sessionId).toBe("cse_browser");
       expect(harness.broker.content).toEqual([
         expect.objectContaining({
-          header: expect.objectContaining({ recordKind: "user", seq: 0 }),
-          text: IMAGE_DISPLAY,
+          header: expect.objectContaining({ recordKind: "user_attachment", seq: 0 }),
+          text: JSON.stringify({ text: MIXED_DISPLAY, images: IMAGE_PREVIEWS }),
         }),
       ]);
       expect(acceptedBodies(harness)).toEqual([
@@ -1321,12 +1345,16 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
         native: freshNative,
         broker: freshBroker,
         nativeSessionId: "cse_browser",
-        imageStore: new NativeImageStore(imageRoot),
+        uploadStore: new NativeUploadStore(imageRoot),
       });
       try {
         await fresh.ready();
         await waitFor(() => freshBroker.content.length === 1);
-        expect(freshBroker.content[0]?.text).toBe(IMAGE_DISPLAY);
+        expect(freshBroker.content[0]?.header.recordKind).toBe("user_attachment");
+        expect(JSON.parse(freshBroker.content[0]?.text ?? "{}")).toEqual({
+          text: MIXED_DISPLAY,
+          images: IMAGE_PREVIEWS,
+        });
         expect(freshNative.postCalls).toEqual([]);
       } finally {
         await fresh.stop();
@@ -1338,10 +1366,92 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     }
   });
 
+  it("bounds retained owned previews across history and live rows without charging duplicates or losing receipts", async () => {
+    const uploadStore = new NativeUploadStore(mkdtempSync(join(CERTS_DIR, "preview-budget-")));
+    const image = { name: "screen.png", mime: "image/png", data: "YWJj" };
+    const displayText = "📎 screen.png\nKeep this label";
+    const prepared = await uploadStore.prepare([image], displayText, new AbortController().signal);
+    const harness = await startHarness({ uploadStore, projectionPreviewByteLimit: 6 });
+    const first = userEvent("preview-1", "1", "preview-user-1", prepared.text, "cse_previews");
+    harness.native.historyImpl = async () => ({ data: [first], nextCursor: null });
+    harness.native.postImpl = async (_nativeId, input) => {
+      harness.native.streams[0]?.push(
+        userEvent(
+          "preview-3",
+          "3",
+          input.uuid,
+          input.message.content,
+          "cse_previews",
+          "client",
+          input.timestamp,
+        ),
+      );
+      return { eventId: "preview-3", sequenceNum: "3", duplicate: false };
+    };
+    try {
+      await bindReady(harness, "cse_previews");
+      harness.native.streams[0]?.push(first);
+      harness.native.streams[0]?.push(
+        userEvent("preview-2", "2", "preview-user-2", prepared.text, "cse_previews"),
+      );
+      await waitFor(() => harness.broker.content.length === 2);
+      const event = harness.session.pushUserInput(displayText, {
+        images: [{ name: image.name, url: `data:image/png;base64,${image.data}` }],
+        clientMsgId: "preview-budget-receipt",
+      });
+      await waitFor(() =>
+        acceptedBodies(harness).some(
+          (value) => value.client_msg_id === "preview-budget-receipt" && value.seq === 2,
+        ),
+      );
+      await waitFor(() => harness.broker.content.length === 3);
+      const messages = harness.session
+        .snapshotUpstream()
+        .filter((entry) => entry.eventType === "user")
+        .map((entry) => entry.payload.message);
+      expect(messages).toEqual([
+        { role: "user", content: displayText, images: [image] },
+        { role: "user", content: displayText, images: [image] },
+        { role: "user", content: displayText, images: [] },
+      ]);
+      expect(harness.broker.content.map((entry) => entry.header.recordKind)).toEqual([
+        "user_attachment",
+        "user_attachment",
+        "user",
+      ]);
+      expect(harness.broker.content[2]?.text).toBe(displayText);
+      expect(event.images).toBeUndefined();
+      expect(harness.session.closed).toBe(false);
+      expect(harness.native.postCalls).toHaveLength(1);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it.each([
+    '@"/etc/passwd"',
+    "Read @/etc/passwd",
+    "See。@/etc/passwd",
+  ])("rejects browser native reference %s before preparation or native POST", async (text) => {
+    const uploadStore = new NativeUploadStore(mkdtempSync(join(CERTS_DIR, "native-ref-")));
+    const prepare = vi.spyOn(uploadStore, "prepare");
+    const harness = await startHarness({ uploadStore });
+    try {
+      await bindReady(harness, "cse_reject_reference");
+      const event = harness.session.pushUserInput(text, { images: IMAGES });
+      await waitFor(() => harness.session.closed);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(harness.native.postCalls).toEqual([]);
+      expect(event.images).toBeUndefined();
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it("fences changed native image references before projecting a browser receipt", async () => {
     const imageRoot = mkdtempSync(join(CERTS_DIR, "images-"));
-    const imageStore = new NativeImageStore(imageRoot);
-    const harness = await startHarness({ imageStore });
+    const uploadStore = new NativeUploadStore(imageRoot);
+    const harness = await startHarness({ uploadStore });
     try {
       await bindReady(harness, "cse_changed_images");
       const event = harness.session.pushUserInput(IMAGE_DISPLAY, {
@@ -1354,7 +1464,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       const changed = input.message.content.replace('/1.png"', '/1.gif"');
       expect(changed).not.toBe(input.message.content);
       // Display normalization must never substitute for exact native-input correlation.
-      expect(imageStore.displayText(changed)).toBe(IMAGE_DISPLAY);
+      expect(uploadStore.display(changed).text).toBe(IMAGE_DISPLAY);
       harness.native.streams[0]?.push(
         userEvent(
           "evt_ack_0",
@@ -1379,7 +1489,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
 
   it("rejects an oversized image caption before files or POST and releases pending image bytes", async () => {
     const imageRoot = join(mkdtempSync(join(CERTS_DIR, "images-")), "pending");
-    const harness = await startHarness({ imageStore: new NativeImageStore(imageRoot) });
+    const harness = await startHarness({ uploadStore: new NativeUploadStore(imageRoot) });
     try {
       await bindReady(harness, "cse_oversized_images");
       const event = harness.session.pushUserInput(
@@ -1397,25 +1507,25 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     }
   });
 
-  it("discards prepared images when the projection closes before the native POST", async () => {
+  it("discards prepared mixed uploads when the projection closes before the native POST", async () => {
     const imageRoot = mkdtempSync(join(CERTS_DIR, "images-"));
-    const imageStore = new NativeImageStore(imageRoot);
-    const prepared = Promise.withResolvers<Awaited<ReturnType<NativeImageStore["prepare"]>>>();
+    const uploadStore = new NativeUploadStore(imageRoot);
+    const prepared = Promise.withResolvers<Awaited<ReturnType<NativeUploadStore["prepare"]>>>();
     const continuePreparation = Promise.withResolvers<void>();
-    const prepare = imageStore.prepare.bind(imageStore);
-    vi.spyOn(imageStore, "prepare").mockImplementation(async (...args) => {
+    const prepare = uploadStore.prepare.bind(uploadStore);
+    vi.spyOn(uploadStore, "prepare").mockImplementation(async (...args) => {
       const result = await prepare(...args);
       prepared.resolve(result);
       await continuePreparation.promise;
       return result;
     });
-    const harness = await startHarness({ imageStore });
+    const harness = await startHarness({ uploadStore });
     try {
       await bindReady(harness, "cse_closed_images");
-      const event = harness.session.pushUserInput(IMAGE_DISPLAY, { images: IMAGES });
+      const event = harness.session.pushUserInput(MIXED_DISPLAY, { images: IMAGES, files: FILES });
       const result = await prepared.promise;
       const paths = [...result.text.matchAll(/@"([^"]+)"/g)].map((match) => match[1] ?? "");
-      expect(paths).toHaveLength(2);
+      expect(paths).toHaveLength(3);
       expect(paths.every((path) => existsSync(path))).toBe(true);
       const discard = vi.spyOn(result, "discard");
       harness.session.close("broker lost during image preparation");
@@ -1424,6 +1534,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       await waitFor(() => paths.every((path) => !existsSync(path)));
       expect(harness.native.postCalls).toEqual([]);
       expect(event.images).toBeUndefined();
+      expect(event.files).toBeUndefined();
       expect(harness.isRunSettled()).toBe(false);
     } finally {
       continuePreparation.resolve();
@@ -1431,22 +1542,23 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     }
   });
 
-  it("retains attempted image files after an ambiguous native POST and fences queued input", async () => {
+  it("retains attempted mixed uploads after an ambiguous native POST and fences queued input", async () => {
     const imageRoot = mkdtempSync(join(CERTS_DIR, "images-"));
-    const harness = await startHarness({ imageStore: new NativeImageStore(imageRoot) });
+    const harness = await startHarness({ uploadStore: new NativeUploadStore(imageRoot) });
     const outcome = Promise.withResolvers<RcPostAck>();
     harness.native.postImpl = async () => outcome.promise;
     let paths: string[] = [];
     try {
       await bindReady(harness, "cse_unknown_images");
-      const event = harness.session.pushUserInput(IMAGE_DISPLAY, { images: IMAGES });
+      const event = harness.session.pushUserInput(MIXED_DISPLAY, { images: IMAGES, files: FILES });
       await waitFor(() => harness.native.postCalls.length === 1);
       const input = harness.native.postCalls[0]?.input;
       if (input === undefined) throw new Error("missing provider post");
       paths = [...input.message.content.matchAll(/@"([^"]+)"/g)].map((match) => match[1] ?? "");
-      expect(paths).toHaveLength(2);
+      expect(paths).toHaveLength(3);
       expect(event.images).toBeUndefined();
-      const queued = harness.session.pushUserInput(IMAGE_DISPLAY, { images: IMAGES });
+      expect(event.files).toBeUndefined();
+      const queued = harness.session.pushUserInput(MIXED_DISPLAY, { images: IMAGES, files: FILES });
       outcome.reject(
         AnthropicRcError.network("postEvent", { retryable: false, outcomeUnknown: true }),
       );
@@ -1455,6 +1567,8 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       expect(harness.broker.content).toEqual([]);
       expect(event.images).toBeUndefined();
       expect(queued.images).toBeUndefined();
+      expect(event.files).toBeUndefined();
+      expect(queued.files).toBeUndefined();
       expect(paths.every((path) => existsSync(path))).toBe(true);
       expect(harness.isRunSettled()).toBe(false);
     } finally {

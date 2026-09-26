@@ -8,7 +8,8 @@ import {
   type DriverContext,
 } from "../driver.js";
 import { ReadyBridge } from "../drivers/ready-bridge.js";
-import { toolResultOutput } from "../relay.js";
+import { NativePreviewBudget, NativeUploadStore } from "../native-uploads.js";
+import { boundedImagePreviews, toolResultOutput } from "../relay.js";
 import { type HostImage, type RcEvent, RelayCore, type Session } from "../session.js";
 import { CodexCommandApprovals } from "./approvals.js";
 import {
@@ -43,6 +44,9 @@ export interface CodexDriverOptions {
   threadId: string;
   client?: CodexClient;
   runtime?: Readonly<{ platform: NodeJS.Platform; arch: string }>;
+  uploadStore?: NativeUploadStore;
+  /** Test seam for the projection-wide decoded preview allowance (32 MiB by default). */
+  projectionPreviewByteLimit?: number;
 }
 
 interface BrowserMutation {
@@ -92,10 +96,15 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function userInput(item: CodexThreadItem): { text: string; digest: string } | null {
+function userInput(item: CodexThreadItem): {
+  text: string;
+  digest: string;
+  images: ReturnType<typeof boundedImagePreviews>;
+} | null {
   if (!Array.isArray(item.content) || item.content.length === 0) return null;
   const parts: string[] = [];
   const blocks: [string, string][] = [];
+  const previews: { name: string; mime: string; data: string }[] = [];
   for (const value of item.content) {
     const input = record(value);
     if (input?.type === "text" && typeof input.text === "string") {
@@ -103,6 +112,10 @@ function userInput(item: CodexThreadItem): { text: string; digest: string } | nu
       blocks.push(["text", input.text]);
     } else if (input?.type === "image" && typeof input.url === "string" && input.url !== "") {
       blocks.push(["image", input.url]);
+      const match = /^data:(image\/(?:jpeg|png|webp|gif));base64,([\s\S]+)$/.exec(input.url);
+      if (match?.[1] !== undefined && match[2] !== undefined) {
+        previews.push({ name: `Image ${previews.length + 1}`, mime: match[1], data: match[2] });
+      }
     } else if (
       input?.type === "localImage" &&
       typeof input.path === "string" &&
@@ -120,6 +133,7 @@ function userInput(item: CodexThreadItem): { text: string; digest: string } | nu
     text:
       trimmed === "" ? `📎 ${blocks.filter(([type]) => type !== "text").length} image(s)` : text,
     digest: inputDigest(blocks),
+    images: boundedImagePreviews(previews),
   };
 }
 
@@ -192,10 +206,19 @@ class CodexReconciler {
   readonly #session: Session;
   readonly #mutations: Map<string, BrowserMutation>;
   readonly #seen = new Map<string, string>();
+  readonly #uploads: NativeUploadStore;
+  readonly #previews: NativePreviewBudget;
 
-  constructor(session: Session, mutations: Map<string, BrowserMutation>) {
+  constructor(
+    session: Session,
+    mutations: Map<string, BrowserMutation>,
+    uploads: NativeUploadStore,
+    previewByteLimit?: number,
+  ) {
     this.#session = session;
     this.#mutations = mutations;
+    this.#uploads = uploads;
+    this.#previews = new NativePreviewBudget(previewByteLimit);
   }
 
   accept(turnId: string, item: CodexThreadItem): void {
@@ -216,11 +239,16 @@ class CodexReconciler {
         }
         mutation.itemCoordinate = coordinate;
       }
+      const display = this.#uploads.display(text);
       this.#session.pushUpstream({
         type: "user",
         uuid: coordinate,
         local_prompt: true,
-        message: { role: "user", content: text },
+        message: {
+          role: "user",
+          content: display.text,
+          images: this.#previews.accept([...input.images, ...display.images]),
+        },
         ...(mutation?.clientMsgId !== undefined ? { client_msg_id: mutation.clientMsgId } : {}),
       });
       mutation?.correlated.resolve();
@@ -319,7 +347,8 @@ class CodexReconciler {
 
 export class CodexDriver implements Driver {
   get capabilities() {
-    return this.#approvals === null ? CODEX_CAPABILITIES : CODEX_APPROVAL_CAPABILITIES;
+    const base = this.#approvals === null ? CODEX_CAPABILITIES : CODEX_APPROVAL_CAPABILITIES;
+    return this.#filesSupported ? { ...base, files: true } : base;
   }
   readonly #ctx: DriverContext;
   readonly #options: CodexDriverOptions;
@@ -330,11 +359,14 @@ export class CodexDriver implements Driver {
   #lastInterruptedTurn: string | null = null;
   #approvals: CodexCommandApprovals | null = null;
   #questions: CodexUserQuestions | null = null;
+  readonly #uploads: NativeUploadStore;
+  #filesSupported = false;
 
   constructor(ctx: DriverContext, options: CodexDriverOptions) {
     this.#ctx = ctx;
     this.#options = options;
     this.#client = options.client ?? new CodexAppServerClient(options.url);
+    this.#uploads = options.uploadStore ?? new NativeUploadStore();
     this.#trace = (ctx.tracer ?? NOOP_TRACER).child({ driver: "codex" });
     if (!isCodexThreadId(options.threadId)) {
       throw new TypeError("threadId must be a canonical Codex UUIDv7");
@@ -366,6 +398,7 @@ export class CodexDriver implements Driver {
       assertCodexCompatibility(initialized, this.#options.runtime);
       // Approval/question replay and resolution belong to these exact versions, not the older tuple.
       const nativeVersion = codexAppServerVersion(initialized.userAgent);
+      this.#filesSupported = nativeVersion === "0.154.0";
       if (nativeVersion === "0.153.4" || nativeVersion === "0.154.0") {
         this.#approvals = new CodexCommandApprovals(session, this.#options.threadId, this.#client);
         this.#questions = new CodexUserQuestions(session, this.#options.threadId, this.#client);
@@ -381,7 +414,12 @@ export class CodexDriver implements Driver {
       }
 
       const gate = new IdleGate(resumed.thread.status);
-      const reconciler = new CodexReconciler(session, this.#mutations);
+      const reconciler = new CodexReconciler(
+        session,
+        this.#mutations,
+        this.#uploads,
+        this.#options.projectionPreviewByteLimit,
+      );
       session.workerStatus = resumed.thread.status.type === "active" ? "running" : "idle";
       await this.#reconcileHistory(reconciler, resumed.thread.historyMode, signal);
       for (const inbound of this.#client.drainInbound()) {
@@ -561,7 +599,7 @@ export class CodexDriver implements Driver {
     signal: AbortSignal,
   ): Promise<void> {
     const message = record(event.payload.message);
-    const text = typeof message?.content === "string" ? message.content : "";
+    let text = typeof message?.content === "string" ? message.content : "";
     if (text.trim() === "" || text.trimStart().startsWith("/")) {
       throw new CodexProjectionError("unsupported browser text reached the Codex writer");
     }
@@ -572,18 +610,28 @@ export class CodexDriver implements Driver {
     if (this.#mutations.size >= CODEX_HISTORY_ITEM_LIMIT || this.#mutations.has(event.eventId)) {
       throw new CodexProjectionError("Codex browser coordinate limit or reuse");
     }
-    await gate.wait(signal);
-    // Session closure precedes asynchronous bridge teardown. Native idle can arrive before the
-    // driver's signal aborts, so recheck the fence immediately before the irreversible write.
     if (session.closed) return;
-    const mutation: BrowserMutation = {
-      inputDigest: browserInputDigest(text, event.images ?? []),
-      ...(typeof clientMsgId === "string" ? { clientMsgId } : {}),
-      itemCoordinate: null,
-      correlated: Promise.withResolvers<void>(),
-    };
-    this.#mutations.set(event.eventId, mutation);
+    let prepared: Awaited<ReturnType<NativeUploadStore["prepare"]>> | undefined;
+    let attempted = false;
     try {
+      if (event.files !== undefined) {
+        if (!this.#filesSupported)
+          throw new CodexProjectionError("native file input is unsupported");
+        prepared = await this.#uploads.prepare(event.files, text, signal);
+        text = prepared.text;
+      }
+      // Claim idle once, after asynchronous file preparation. Closure can precede bridge teardown,
+      // so recheck the fence immediately before the irreversible native write.
+      await gate.wait(signal);
+      if (signal.aborted || session.closed) return;
+      const mutation: BrowserMutation = {
+        inputDigest: browserInputDigest(text, event.images ?? []),
+        ...(typeof clientMsgId === "string" ? { clientMsgId } : {}),
+        itemCoordinate: null,
+        correlated: Promise.withResolvers<void>(),
+      };
+      this.#mutations.set(event.eventId, mutation);
+      attempted = true;
       await this.#client.startTurn(
         this.#options.threadId,
         event.eventId,
@@ -604,6 +652,7 @@ export class CodexDriver implements Driver {
       );
     } finally {
       session.releaseImages(event);
+      if (!attempted) await prepared?.discard();
     }
   }
 }

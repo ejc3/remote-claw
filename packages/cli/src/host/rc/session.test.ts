@@ -169,6 +169,32 @@ describe("Session producers", () => {
     s.close();
   });
 
+  it("copies host-only file inputs and shares the pending budget and cleanup with images", () => {
+    const s = new Session("cse_files", "t", {});
+    const file = { name: "notes.txt", mime: "text/plain", data: "PRIVATE_FILE" };
+    const event = s.pushUserInput("read files", { files: [file] });
+    expect(event.files).toEqual([file]);
+    expect(JSON.stringify(event.wire())).not.toContain("PRIVATE_FILE");
+    expect(event.payload).not.toHaveProperty("files");
+    file.data = "changed";
+    expect(event.files?.[0]?.data).toBe("PRIVATE_FILE");
+    s.releaseImages(event);
+    expect(event.files).toBeUndefined();
+    const full = s.pushUserInput("at bound", {
+      images: [{ name: "a.png", url: "x" }],
+      files: [{ ...file, data: "y".repeat(MAX_PENDING_IMAGE_BYTES - 1) }],
+    });
+    expect(() => s.pushUserInput("over", { files: [file] })).toThrow(
+      "pending attachment input exceeded its byte bound",
+    );
+    s.onClose(() => {
+      expect(full.files).toBeUndefined();
+      expect(full.images).toBeUndefined();
+    });
+    s.close();
+    expect(s.pushUserInput.bind(s, "closed", { files: [file] })).toThrow("session closed");
+  });
+
   it("releases only owned image inputs and clears all remaining bytes before close listeners", () => {
     const s = new Session("cse_x", "t", {});
     const other = new Session("cse_y", "t", {});

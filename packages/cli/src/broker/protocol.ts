@@ -8,6 +8,7 @@ import type { Plane } from "../security/provider.js";
 /** Content frames (the transcript) — sealed under K_session, carry `seq`. */
 export const CONTENT_KINDS = new Set([
   "user",
+  "user_attachment", // canonical user text plus bounded image previews, never viewer URLs
   "assistant",
   "assistant_sub", // a sub-agent's assistant reply (under a parent Task) — §17 sub-agents
   "assistant_thinking", // an extended-thinking block (the model's reasoning) — §17.3

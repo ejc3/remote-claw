@@ -74,6 +74,7 @@ export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {
   status: false,
   controls: { interrupt: true, setModel: false, setMode: false, end: false },
   attachments: true,
+  files: true,
 };
 
 /** The Codex app-server companion projects completed text/command activity and real thread status. Approval and
@@ -193,7 +194,12 @@ export interface UpstreamPayload {
   /** For "assistant" / "user": the message envelope holding the content. Usually `ContentBlock[]`, but a
    *  STRING is also valid — a non-MITM driver sends a plain string for a local prompt, and real claude's
    *  user content is sometimes a bare string too. The relay's userPromptText (relay.ts) accepts both. */
-  message?: { role?: "assistant" | "user" | string; content: ContentBlock[] | string };
+  message?: {
+    role?: "assistant" | "user" | string;
+    content: ContentBlock[] | string;
+    /** Host-validated bounded inline images for a canonical user message, never URLs or paths. */
+    images?: readonly { name: string; mime: string; data: string }[];
+  };
 
   /** For "result": the turn's result (string preferred; non-string is JSON-stringified by relay). */
   result?: string | Record<string, unknown>;

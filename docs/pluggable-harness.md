@@ -8,7 +8,7 @@ Five drivers exist:
 
 - `mitm` — the default Claude Code Remote Control adapter;
 - `claude-native` — the Linux/exact-2.1.237 structured companion for ordinary Anthropic Remote
-  Control, with ordinary text, host-owned image uploads, one-shot session-scoped Interrupt,
+  Control, with ordinary text, host-owned image/file uploads, bounded image previews, one-shot session-scoped Interrupt,
   supported fresh single-choice responses, bounded one-time Bash decisions, and read-only worker tool activity;
 - `tmux` — the maintained lower-fidelity plain-Claude compatibility adapter;
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
@@ -42,7 +42,7 @@ restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated hist
 Codex results remain exact 0.151.0 evidence. The same sentinel separately passed on 2026-09-08 for
 exact 0.153.4/Linux arm64 through managed Unix with native-reported paginated history. Separate
 [0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app recovery
+adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
 and automatic stable-ID reconnect remain unqualified. Current-version, command-activity, and
 interrupt/image, command-approval, and question acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
 remain disabled.
@@ -135,9 +135,13 @@ controls.setModel
 controls.setMode
 controls.end
 attachments
+files? = true | false
 textInput? = plain | terminal
 ```
 
+General files require both `attachments:true` and `files:true`; missing `files` preserves older
+image-only hosts. Claude-native advertises it; Codex does so only for exact 0.154.0 after version
+qualification, never for 0.151.0/0.153.4.
 The viewer disables unsupported controls, and `HostRcRelay` enforces the same vector again on inbound
 frames. A driver cannot gain a mutation surface merely because an older viewer sends it. When
 structured browser permissions are false, the optional permission posture distinguishes known
@@ -244,12 +248,19 @@ replay but are not durable exactly-once claims.
 The Claude-native companion sends non-empty, non-slash text through one serialized provider writer with
 a stable UUID. It waits for the canonical provider history/SSE event before publishing the ordered user
 row. Any rejected or outcome-unknown POST permanently fences the projection and is not retried.
-Image groups are prepared as private, exclusive upload files and submitted as references in that same
+Image/file groups are prepared as private, exclusive upload files and submitted as references in that same
 native text. Correlation keeps the full text; display alone strips the generated reference-group form,
-leaving names/caption on live/history replay. Raw Session image slots are released after preparation;
-attempted files remain for later native ingestion. The decoded-image budget is 256 MiB per companion
-run, not a global or cross-restart quota. See [image boundaries](protocol.md#10-attachments) and
-[current acceptance](release-finish-line.md#claude-native-images--complete).
+leaving names/caption and bounded available image previews on live/history replay. Raw Session
+attachment slots release after preparation; attempted files remain for later native ingestion.
+The decoded-upload budget is 256 MiB per companion run, not a global or cross-restart quota; no GC is
+added. Generated references intentionally supply uploaded bytes to native Claude without changing
+persistent permissions or sandbox settings; a separate Read prompt is not guaranteed. Browser-origin
+text/captions reject pinned native `@` file-reference syntax before generated references are added;
+ordinary emails/path prose and native/provider history are unaffected. Canonical previews have a
+32 MiB decoded budget per reconciler across history/live; excluded previews retain labels.
+See [attachment boundaries](protocol.md#10-attachments), historical
+[image acceptance](release-finish-line.md#claude-native-images--complete), and the separate
+[files/previews slice](release-finish-line.md#native-files-and-image-previews).
 The same serial writer supports one-shot session-scoped Interrupt. It registers one pending slot
 before POST and waits for the exact canonical worker success before later browser text. HTTP admission
 or a generic result is not idle. Interrupt has no turn ID, so delayed Stop may affect newer native/peer
@@ -272,9 +283,11 @@ The Codex companion waits for native idle, rechecks that its projection is still
 with the broker event ID as
 `clientUserMessageId`, and acknowledges only after the matching completed native user item appears.
 Image groups reuse the encrypted composer message and pending admission; the host constructs inline
-data URLs and native text containing sanitized names/caption, with no upload files or URL fetch.
-Full ordered input digests correlate images as well as text. Raw pending images are bounded and released
-after native submission settles or session closure; only text/image-count placeholders are projected.
+data URLs and native text containing sanitized names/caption. Exact 0.154.0 also prepares general
+files as private host-owned references in that text; older versions remain image-only. Full ordered
+input digests correlate images as well as text. Raw pending attachment buffers are bounded and released
+after native submission settles or session closure. Canonical user rows include bounded available
+image previews, otherwise text/image-count placeholders; arbitrary native paths/URLs are not fetched.
 See [attachment bounds](protocol.md#10-attachments).
 A bounded process-local text FIFO leaves interrupt reachable while text waits. Interrupt binds one
 observed active native turn; stale-target rejection is a no-op, never a retry against a newer turn.
@@ -359,19 +372,20 @@ attached for the projection lifetime.
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
 | Permission behavior | stable surface disabled | supported Bash decisions and single-choice forms with native resolution; unsupported permissions/forms remain native/local | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4/0.154.0: one-shot ordinary local-command decisions and bounded native choice forms with native resolution; 0.151.0 and unsupported permissions/questions remain native-owned |
 | Status advertised | yes | no | no | yes | yes |
-| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Legacy/mobile-app recovery and automatic stable-ID reconnect remain unqualified |
+| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Legacy-history and mobile network-loss/deep-sleep recovery and automatic stable-ID reconnect remain unqualified |
 
 The exact advertised viewer capabilities are:
 
 | Driver | Permissions | Status | Interrupt | Model | Mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable `mitm` | no | yes | no | no | no | no | no |
-| `claude-native` | supported Bash decisions and single-choice forms; native resolution | no | yes; session-scoped | no | no | no | yes; images only |
+| `claude-native` | supported Bash decisions and single-choice forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
 | `tmux` | no; posture says native/local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
 | `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | `codex` 0.151.0 | no | yes | yes | no | no | no | yes; images only |
-| `codex` 0.153.4/0.154.0 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
+| `codex` 0.153.4 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
+| `codex` 0.154.0 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
 
 See [tmux-driver.md](tmux-driver.md) and [opencode-driver.md](opencode-driver.md) for adapter-specific
 limitations.

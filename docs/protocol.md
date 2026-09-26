@@ -27,7 +27,7 @@ its bounded failure result is provider-transport isolation, not per-device unsub
 restart/backfill and broker-loss isolation on Linux arm64 with 0.151.0/explicit WS and
 0.153.4/managed Unix, both with paginated history. Separate
 [0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app recovery
+adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
 and automatic stable-ID reconnect remain unqualified.
 M4's exact Claude 2.1.237/Linux arm64/Bedrock Sonnet 4.6 tmux acceptance is also complete for its
 lower-fidelity local-pane/two-browser boundary. A browser turn stayed queued while an active model turn
@@ -227,10 +227,11 @@ browser prompt UUID still fences the projection. Browser text uses one UUID and 
 broker admission and provider POST. A seq-less
 `{native_pending:true}` acceptance means only that the host admitted the command. Provider history/SSE
 then publishes the canonical accepted coordinate and user row in provider order. One serialized writer
-also prepares authenticated image groups as private native upload files and submits their references
+also prepares authenticated image/file groups as private native upload files and submits their references
 through the same ordinary `postEvent`. Correlation uses the complete native text before display strips
-only the exact generated reference-group form. Names/caption therefore survive live projection and
-fresh-history backfill without changing provider order or receipt semantics. See [Attachments](#10-attachments).
+only the exact generated reference-group form. Names/caption and bounded available image previews
+survive viewer reload without changing provider order or receipt semantics. Fresh native-history
+backfill rebuilds previews only from still-available owned upload files. See [Attachments](#10-attachments).
 The writer
 fences the projection after a rejected or outcome-unknown POST, before any successor. It also accepts
 the allowlisted session-scoped Interrupt described in [control verbs](#11-compatibility-control-verbs),
@@ -302,7 +303,9 @@ Completed native `userMessage` items (text and supported image input) and non-em
 coordinate deduplicates, while changed projected bytes at the same coordinate fence the projection.
 User-input identity hashes every ordered text/image/local-image block, including image URLs or paths,
 without retaining raw image bytes in the mutation/dedup maps. Observed native image URLs and local
-paths are never fetched or opened. Only caption text or an image-count placeholder reaches the viewer.
+paths are never fetched or opened. Valid bounded inline native images may be previewed; generated
+private upload references are normalized separately. Missing/oversized previews retain caption text
+or an image-count placeholder. See [Attachments](#10-attachments).
 Completed `commandExecution` items use the same coordinate/fingerprint fence and publish a read-only
 `Shell` call followed by its result. The call carries native command/cwd; result output uses the shared
 4,000-character cap plus a truncation marker when needed. Failed or declined status and nonzero exit
@@ -353,7 +356,7 @@ once and completed a fresh turn; broker loss stopped only the companion while a 
 completed. On 2026-09-08, the same retained sentinel passed on exact 0.153.4/Linux arm64 through managed
 Unix with native-reported paginated history; no production recovery change was needed. The separate
 [0.154.0 official desktop result](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened-viewer restoration without changing this protocol. Legacy/mobile-app
+adds the actual Mac app and reopened-viewer restoration without changing this protocol. Legacy-history and mobile network-loss/deep-sleep
 recovery and automatic stable-ID reconnect remain unclaimed.
 Current-version and read-only command-activity acceptance is tracked separately in the
 [release roadmap](release-finish-line.md); it does not broaden these historical 0.151.0 results.
@@ -488,16 +491,18 @@ cannot bypass a disabled button:
 | Driver | Structured permissions | Status | Interrupt | Set model | Set mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
-| Claude native companion | supported Bash decisions and single-choice forms; native resolution | no | yes; session-scoped | no | no | no | yes; images only |
+| Claude native companion | supported Bash decisions and single-choice forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | Codex 0.151.0 | no | yes | yes | no | no | no | yes; images only |
-| Codex 0.153.4/0.154.0 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
+| Codex 0.153.4 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
+| Codex 0.154.0 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
 
 Text input on the stable Claude, pinned Codex, and maintained tmux surfaces must be non-empty and non-slash.
-Tmux also accepts attachments as ordinary relay-owned user turns; Codex accepts image groups with an
-optional non-slash caption through native-ordered admission. Internal compatibility plumbing may
+Tmux also accepts attachments as ordinary relay-owned user turns; Codex accepts image groups and,
+on exact 0.154.0 only, general files with an optional non-slash caption through native-ordered admission.
+General files additionally require advertised `files:true`; omission never enables them. Internal compatibility plumbing may
 understand more features, but those mutations are not advertised or accepted on the supported
 boundary. Tmux protects an already active model turn and its native permission/question modal; it does
 not isolate the idle local editor or idle slash/config UI from concurrent browser injection.
@@ -689,47 +694,66 @@ answer a gate.
 
 ## 10. Attachments
 
-The attachment path carries image bytes inside an E2E `attachment` message, split into bounded chunks.
-The existing composer prepares grouped JPEG images plus one optional caption. The broker never receives
-plaintext bytes, and drivers whose attachment capability is false reject the path.
+The attachment path carries bytes inside an E2E `attachment` message, split into bounded chunks.
+The composer prepares grouped JPEG images and, when `files:true` is advertised, general files plus
+one optional caption. The encrypted body is `{images:[{name,mime,data}], files?:[{name,mime,data}],
+caption?}`; `data` is base64, never a URL or host path. The broker receives no plaintext bytes.
+`attachments:false` rejects the path; missing/false `files` rejects nonempty general-file groups.
 
-Claude-native accepts the same whole-group encrypted image input: 1–24 PNG/JPEG/WebP/GIF images,
-at most 16 MiB of base64 per image and a 48 MiB encoded payload/pending URL bound, with an optional
-non-slash caption. It writes each prepared group into a fresh
-`~/.remote-claw-uploads/remote-claw-native-<UUID>/` directory (mode `0700`), using exclusive numbered image
-files (mode `0600`). Browser-provided URLs or host paths are never used as upload targets. Ordinary
-`postEvent` text contains these generated references followed by sanitized `📎` names/caption; the
-native client, permission policy, canonical ordering, and receipts are unchanged.
+Claude-native and exact Codex 0.154.0/Linux arm64 advertise general files. Codex 0.151.0/0.153.4 remain
+image-only. Whole-group host admission requires 1–24 combined items, at most 16 MiB base64 per item
+(about 12 MiB decoded), and at most 48 MiB encoded plaintext payload. The optional caption must not
+start with `/` after leading whitespace; names cannot hide a slash-leading caption. Images require
+PNG/JPEG/WebP/GIF MIME types and nonempty bytes. General files require a bounded valid MIME type;
+opaque empty files are allowed, empty image files are not. Display names are sanitized. Uploading
+intentionally supplies those bytes to the native harness; it does not change persistent permission
+rules or sandbox settings, and a separate Read approval must not be assumed.
 
-The store reserves decoded-image bytes before filesystem work, with a 256 MiB budget per companion
-instance/run. This is not a global disk quota and resets for a new companion. Partial preparation and
-prepared-but-never-submitted files are discarded and their reservation released. After any POST
-attempt, files are retained even on rejection, ambiguous outcome, shutdown, or broker loss because
-native Claude may ingest them later. Operators should remove them only when the native session no
-longer needs them; the companion runs no upload garbage collector. Raw Session image slots are released
-after preparation or on failure/closure.
+On pinned Claude 2.1.237, native `@` file-reference syntax can ingest host files before a model Read
+tool or its approval. Browser-origin Claude text and captions therefore reject that pinned reference
+grammar before the driver adds its own upload references. Generated references are reserved for
+host-owned uploaded bytes; the attachment body never selects a host path. Ordinary email addresses
+and path prose remain text subject to normal native behavior and tool policy. Native/provider-origin
+messages and history are neither filtered nor rewritten by this browser-input guard.
 
-Display stripping is pure and limited to the exact generated reference-group syntax under the configured
-private uploads root: one shared UUID directory, sequential numbered image paths, and matching sanitized label
-count. It reads no files and applies equally to live/history projection. Full native text remains the
-correlation input; ordinary provider references are preserved. This adds neither general files, image
-previews, provider `file_attachments` projection, nor remote permissions/status. The
-[current image acceptance](release-finish-line.md#claude-native-images--complete) is separate from M1.
+The shared `NativeUploadStore` writes Claude-native images/files and Codex general files into fresh
+`~/.remote-claw-uploads/remote-claw-upload-<UUID>/` directories (mode `0700`), with exclusive numbered
+files (mode `0600`). It validates owned private directories/files and anchors Linux filesystem work
+through directory descriptors. Only the host constructs references. Claude submits them via ordinary
+`postEvent` text; Codex includes them in ordinary `turn/start` text while images retain inline native
+data URLs. References precede sanitized `📎` names/caption and intentionally let the native harness
+ingest those uploads. No persistent permission or sandbox setting is changed; canonical order and
+receipts are unchanged. `native_pending` means admission, not native ingestion or file access.
 
-Codex accepts images only, not general files. Before native admission the host validates the whole
-group: 1–24 PNG/JPEG/WebP/GIF images, at most 16 MiB of base64 per image, a 48 MiB plaintext payload,
-and an optional non-slash caption. It sanitizes names and constructs inline `data:image/...;base64,`
-URLs itself; browser-provided URLs and filesystem paths are not inputs. The native text is `📎` names
-plus the caption, preserving a useful transcript on reload without a separate attachment-name store.
-A seq-less `native_pending` receipt means admission only; canonical native input correlation determines
-the final user row and receipt. Native versions remain exactly 0.151.0/0.153.4/0.154.0 on Linux arm64.
+The store reserves decoded bytes before filesystem work under a 256 MiB per-companion/run budget,
+not a global disk or cross-restart quota. Partial preparation and prepared-but-never-submitted groups
+are discarded and their reservation released. After any native submission attempt, files remain even
+on rejection, ambiguous outcome, shutdown, or broker loss because the native harness may read them
+later. No upload garbage collector is added. Operators remove retained files only after the native
+session no longer needs them. Session pending image URLs plus general-file base64 share a 48 MiB
+bound across queued turns; raw slots release after preparation/submission or failure/closure. Mutation
+correlation retains full native text and ordered input digests, not raw attachment buffers.
 
-The host keeps transient image URLs outside the Session wire payload, with a combined 48 MiB pending
-URL bound across queued turns. The native client revalidates inline image inputs and their combined
-48 MiB URL bound. Raw Session slots are released after `turn/start` settles or on session closure;
-only ordered input digests remain in mutation/dedup maps. No upload files are created and no native
-image URL/path is fetched. This bounds remote-claw retention; native Codex may retain image bytes in
-its own history. Current image acceptance is tracked in the [release roadmap](release-finish-line.md).
+Display normalizes only exact generated reference groups under the configured uploads root, including
+the prior `remote-claw-native-<UUID>` image format. Ordinary provider references remain unchanged.
+Only owned, validated generated image files can be read for previews; no arbitrary native local-image
+path or HTTP(S) URL is fetched. Codex's inline native PNG/JPEG/WebP/GIF data URLs can also supply
+previews. Each canonical user row carries at most eight previews, each at most 1 MiB decoded and
+8 MiB total. Each native reconciler also limits retained canonical previews to 32 MiB decoded across
+its combined history/live projection; already-seen native events do not spend that budget again.
+Unsafe, missing, malformed, oversized, or budget-excluded previews fall back to names/caption; they do
+not block transcript capture. If mixed Codex reference and label counts do not match, no file-to-name
+preview mapping is guessed.
+
+The relay seals `{text,images:[{name,mime,data}]}` as `user_attachment` using existing encryption,
+ordering, and chunking. The viewer validates the MIME/base64/count/size bounds again and renders a
+normal user row with local image previews, retaining logical receipt identity. Canonical previews
+survive viewer reload; a fresh projection may rebuild only previews whose native bytes are still
+available. Neither broker plaintext storage, remote URL fetches, a manifest, nor a new upload service
+is introduced. Native provider `file_attachments` projection remains unsupported. The historical
+[Claude image acceptance](release-finish-line.md#claude-native-images--complete) is unchanged; current
+files/previews implementation and bounded live acceptance are tracked in the
+[release roadmap](release-finish-line.md#native-files-and-image-previews).
 
 The relay-ordered compatibility/tmux path instead validates and writes unique files under the Claude
 uploads directory, publishes one transcript echo, then injects a normal prompt referencing those files.
@@ -851,7 +875,7 @@ These are product limits, not invitations to rebuild a second protocol stack. M1
 the bounded exact-tuple M3b coexistence/provider-transport-isolation gate, the Codex recovery follow-on
 on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated, and the exact M5
 accountless Bedrock tuple are complete. Separate [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-also passed. Legacy/mobile-app recovery and automatic stable-ID reconnect remain unqualified. Add
+also passed. Legacy-history and mobile network-loss/deep-sleep recovery and automatic stable-ID reconnect remain unqualified. Add
 protocol machinery only for a concrete later capability failure.
 
 ## 13. Code and test map
