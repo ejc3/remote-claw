@@ -9,7 +9,7 @@ hydration. The separate 2026-09-07
 restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated history. The same sentinel
 separately passed on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
 paginated history. The separate [0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app recovery
+adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
 and automatic stable-ID reconnect remain unqualified.
 The earlier `0.146.0` observations below remain historical seam evidence.
 
@@ -22,11 +22,17 @@ forms; their dedicated response APIs use exact connection-owned callbacks and na
 resolution. Version 0.151.0 approvals/questions and unsupported request shapes stay native-owned.
 Images reuse the encrypted composer payload and host-constructed
 inline data URLs, with full ordered input digests and bounded transient retention. Native image URLs
-and paths are never fetched; the viewer shows names/caption or an image-count placeholder.
+and paths are never fetched; bounded valid inline images may be previewed, otherwise the viewer shows
+names/caption or an image-count placeholder. Exact 0.154.0 additionally supports general files through
+private host-owned references in ordinary native text, deliberately supplying uploaded bytes without
+changing persistent permission rules or sandbox settings. Canonical previews share a 32 MiB decoded
+budget per reconciler across history/live; budget-excluded images retain labels or image counts.
+Versions 0.151.0/0.153.4 remain image-only. The [files/previews slice](release-finish-line.md#native-files-and-image-previews)
+tracks its bounded native acceptance separately from the historical results below.
 Interrupt
 targets one observed active native turn without retargeting or retrying, and remains reachable while
 text waits for native idle. Background commands may outlive the interrupted model turn. Other controls,
-general files, streaming partials, file changes, other tool families, and task lifecycle are unsupported.
+streaming partials, file changes, other tool families, and task lifecycle are unsupported.
 Current-version/activity/interrupt/image/approval/question acceptance lives in the [release roadmap](release-finish-line.md),
 separately from the historical results below. The separate
 [0.154.0 result](release-finish-line.md#codex-current-version-acceptance) records that tuple's tested

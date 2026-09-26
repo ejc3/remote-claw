@@ -34,7 +34,7 @@ What exists today:
 | Claude native collaboration plus multiple remote-claw browsers | M1 complete on Linux/exact-2.1.237: structured provider-ordered text, local TUI, literal official web UI on the user's phone, two browsers, Graduate restart/isolation, and exact-SHA deployed-broker acceptance |
 | OpenCode server adapter | M2 complete for exact 1.17.5/Linux arm64, the pinned Bedrock Sonnet model, one explicit session, non-empty non-slash text, interrupt, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete |
 | tmux fallback | M4 complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: maintained lower-fidelity local-pane/two-browser fallback; browser input is held behind an active model turn and its permission/question modal, reload/departure/broker-loss passed, and the shared idle editor/slash/config UI must not be used concurrently; no independent peer ordering or provider-native/official-client claim |
-| Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation. Recovery passed on 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Current code also accepts exact 0.153.4 and 0.154.0, with images, read-only command activity, interrupt, one-shot ordinary local-command approvals, and bounded native choice forms; each slice's acceptance is tracked separately. Legacy/mobile-app recovery, automatic stable-ID reconnect, per-device unsubscribe, and other controls remain unclaimed |
+| Codex | M3a/M3b complete for exact 0.151.0/Linux arm64: native text/status, TUI-owned approvals/questions, two browsers, bounded same-thread official Remote coexistence through the managed Unix socket, and provider-transport isolation. Recovery passed on 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Current code also accepts exact 0.153.4 and 0.154.0, with images, read-only command activity, interrupt, one-shot ordinary local-command approvals, and bounded native choice forms; each slice's acceptance is tracked separately. Legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect, per-device unsubscribe, and other controls remain unclaimed |
 | Bedrock and no-Anthropic-account launch | M5 complete for one tools-disabled text round-trip on exact Linux arm64 / Claude 2.1.237 / `us-east-1` / `anthropic.claude-opus-4-8` / temporary IMDSv2 SigV4; separate from adapter fidelity |
 
 The current private relay is useful product infrastructure, but no single adapter is the whole
@@ -403,19 +403,27 @@ success releases later browser text; HTTP admission and generic results do not i
 has no exact-turn target, so a delayed Stop may affect newer native/peer work. It is never retried,
 including after a 401; response timeout or unknown/rejected outcome fences only the companion.
 See [control semantics](protocol.md#11-compatibility-control-verbs).
-Image groups reuse the encrypted composer boundary. The host prepares private, exclusive upload files
+Image/file groups reuse the encrypted composer boundary. The host prepares private, exclusive upload files
 and ordinary native text references; provider ordering and full-text correlation stay unchanged.
 Only the generated reference-group form is stripped for display, retaining sanitized names/caption
-on live/history projection. Raw image slots are released after preparation, but attempted files remain
-for native ingestion even after companion loss. The 256 MiB decoded-image budget is per companion run,
-not a global or cross-restart quota. See [upload bounds and retention](protocol.md#10-attachments).
-The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text, images, Interrupt,
+on live/history projection, plus bounded previews of available owned images. Raw attachment slots release
+after preparation, but attempted files remain for native ingestion even after companion loss. The
+256 MiB decoded-upload budget is per companion run, not a global or cross-restart quota; no GC is
+added. Generated references intentionally supply uploaded bytes to native Claude without changing
+persistent permission rules or sandbox settings. Browser-origin text/captions reject pinned native
+`@` file-reference syntax before adding those references; ordinary emails/path prose and
+native/provider history are unaffected. Canonical previews share a 32 MiB decoded budget per
+reconciler across history/live; exhausted previews retain labels. See
+[upload bounds and retention](protocol.md#10-attachments).
+The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text, images/files, Interrupt,
 [fresh single-choice responses](protocol.md#claude-native-single-choice-questions), and
 [bounded one-time Bash decisions](protocol.md#claude-native-bash-approvals). Unsupported permissions
-and forms, status, other controls, general files, and image previews remain disabled. This surface is Linux-only and
+and forms, status, and other controls remain disabled. This surface is Linux-only and
 pins exact Claude 2.1.237. The [release roadmap](release-finish-line.md) owns current Interrupt acceptance,
 separately from historical M1. [Image acceptance](release-finish-line.md#claude-native-images--complete)
-also remains a separate follow-on, not a rewrite of M1.
+also remains a separate follow-on, not a rewrite of M1. The
+[files/previews implementation](release-finish-line.md#native-files-and-image-previews) has separate
+bounded native acceptance.
 The separate [question result](release-finish-line.md#claude-native-single-choice-questions) records its
 native-app/two-viewer acceptance; [Bash acceptance](release-finish-line.md#claude-native-bash-approvals)
 is separate. Both use one `ClaudeNativeControls` lifecycle. History grants no response authority;
@@ -479,19 +487,23 @@ the host client ID and text. A 15-second correlation deadline and bounded histor
 or contradictory outcomes. Native active/idle status is advertised. Browser mutations are non-empty
 non-slash text, image groups with an optional non-slash caption, and interrupt. Exact 0.153.4 and 0.154.0
 implement one-shot ordinary local-command approvals and bounded native choice forms; 0.151.0
-approvals/questions, unsupported request shapes, other controls, and general files remain native-owned
-or disabled. A bounded local text FIFO keeps interrupt and approval/question responses reachable while
+approvals/questions, unsupported request shapes, and other controls remain native-owned or disabled.
+General files are enabled only for exact 0.154.0, never 0.151.0/0.153.4. A bounded local text FIFO keeps interrupt and approval/question responses reachable while
 text waits for native idle.
 Interrupt targets one validated active turn on the exact thread and never retargets or retries a stale
 request. Its RPC acceptance does not release queued text; native status does. Background commands may
 outlive the model turn. See [control semantics](protocol.md#11-compatibility-control-verbs).
 
 Images reuse the encrypted composer group, with host validation and internally constructed inline
-data URLs; no upload files, browser-provided URLs/paths, or native image fetches are used. Canonical
-native text contains sanitized image names/caption, and full ordered-input digests correlate the native
-receipt without retaining raw image bytes in mutation/dedup maps. Session pending URLs are bounded
-across queued turns and released after submission settles or closure. Native image-bearing user
-items project text or an image-count placeholder, not previews. See [image limits and lifetime](protocol.md#10-attachments).
+data URLs; browser-provided URLs/paths and arbitrary native image fetches are not used. Exact 0.154.0
+general files become private host-owned references in native text, intentionally sharing uploaded
+bytes without changing persistent permission rules or sandbox settings.
+Canonical native text retains sanitized names/caption, and full ordered-input digests correlate the
+native receipt without retaining raw input buffers in mutation/dedup maps. Session pending attachment
+bytes are bounded across queued turns and released after submission settles or closure. Canonical user
+rows may contain bounded inline image previews within a 32 MiB decoded budget per reconciler across
+history/live; missing/oversized/budget-excluded images retain labels or image counts.
+See [attachment limits and lifetime](protocol.md#10-attachments).
 
 Native approval/question requests are first-response-wins. The exact-0.153.4/0.154.0 helper admits only local
 `kind:"command"` requests with complete bounded command/absolute cwd/optional reason, no network or
@@ -514,7 +526,7 @@ A new explicit exact-thread invocation creates a fresh projection and observes n
 restoring pending mutations or consuming the retired projection's command stream. The recovery
 acceptance below covers exact 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated on Linux
 arm64. Separate [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app recovery
+adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
 and automatic stable-ID reconnect remain unqualified.
 The historical M3a/M3b runs remain exact 0.151.0 evidence; the
 [release roadmap](release-finish-line.md) owns current-version, command-activity, interrupt/image,
@@ -529,10 +541,10 @@ have narrower, truthfully labeled guarantees.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
-| Claude native companion | Structured text projection, host-owned image uploads, read-only tool activity, one-shot session-scoped Interrupt, [fresh single-choice responses](protocol.md#claude-native-single-choice-questions), and [bounded Bash decisions](protocol.md#claude-native-bash-approvals) over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; unsupported permissions/forms, other controls, general files, image previews, and status remain native/disabled |
+| Claude native companion | Structured text projection, host-owned image/file uploads and bounded previews, read-only tool activity, one-shot session-scoped Interrupt, [fresh single-choice responses](protocol.md#claude-native-single-choice-questions), and [bounded Bash decisions](protocol.md#claude-native-bash-approvals) over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; unsupported permissions/forms, other controls, and status remain native/disabled; files/previews native acceptance is separate |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
-| Codex | Current code accepts exact 0.151.0, 0.153.4, and 0.154.0/Linux arm64 with text/images/interrupt/status and read-only completed command activity; exact 0.153.4 and 0.154.0 implement one-shot ordinary local-command approvals and bounded native choice forms. Historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0; separate 0.153.4 managed recovery and [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) also passed | One explicit thread and attached local-TUI precondition; current-version/activity/interrupt/image/approval/question/recovery acceptance is tracked in the release roadmap; unsupported permissions/questions, general files, legacy/mobile-app recovery, automatic stable-ID reconnect, per-device unsubscribe, and other browser controls remain unclaimed |
+| Codex | Current code accepts exact 0.151.0, 0.153.4, and 0.154.0/Linux arm64 with text/images/interrupt/status, bounded image previews, and read-only completed command activity; exact 0.153.4 and 0.154.0 implement one-shot ordinary local-command approvals and bounded native choice forms; general files require exact 0.154.0. Historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0; separate 0.153.4 managed recovery and [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) also passed | One explicit thread and attached local-TUI precondition; files/previews and other current acceptance are tracked in the release roadmap; unsupported permissions/questions, legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect, per-device unsubscribe, and other browser controls remain unclaimed |
 | Bedrock inference | Maintained exact-tuple MITM connector | Replaces Anthropic inference while preserving the private local RC facade; other tuples remain unqualified |
 | Accountless mode | Maintained for the exact M5 Bedrock tuple | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
 
@@ -822,7 +834,7 @@ completed. Cutting all broker-proxy connections then stopped only the companion;
 turn completed. On 2026-09-08 the same sentinel passed on exact 0.153.4/Linux arm64 through managed Unix
 with native-reported paginated history, without a production change. Separate
 [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app recovery
+adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
 and automatic stable-ID reconnect remain unclaimed. The [historical release record](release-finish-line.md#codex-recovery--complete) owns the earlier details;
 the post-closure idle race and applied-but-unobserved restart case have focused driver regressions.
 

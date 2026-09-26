@@ -1,6 +1,16 @@
 // Browser-safe harness metadata. No native client, Node import, discovery, or dynamic plugin loading.
 // Adding a harness means declaring its semantics here and implementing its native adapter separately.
 
+/** Exact 2.1.237 native mention boundaries. These references can ingest host files/resources before
+ * a Read approval. Browser text/captions must not introduce them; uploaded bytes get host-owned
+ * references only after validation. Ordinary email addresses are not mention tokens. */
+export function hasClaudeNativeReferences(text: string): boolean {
+  return (
+    /(^|[\s\u3002\u3001\uFF1F\uFF01])@"[^"]+"/.test(text) ||
+    /(^|[\s\u3002\u3001\uFF1F\uFF01])@[^\s]+\b/.test(text)
+  );
+}
+
 export interface ControlCapabilities {
   interrupt: boolean;
   setModel: boolean;
@@ -18,6 +28,8 @@ export interface DriverCapabilities {
   status: boolean;
   controls: ControlCapabilities;
   attachments: boolean;
+  /** General host-owned file inputs; omission preserves older image-only hosts. */
+  files?: boolean;
   /** Independent of optional controls/attachments; omission is only for older hosts. */
   textInput?: "plain" | "terminal";
 }

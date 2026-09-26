@@ -7,6 +7,230 @@ import { expect, test } from "./fixtures";
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 
+test("Claude native references stay in the draft and do not become text or caption sends", async ({
+  page,
+  seedHost,
+}, testInfo) => {
+  const { pass } = await seedHost({ profile: "smoke", caps: "native-rc", harness: "native-rc" });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  const composer = page.getByRole("textbox", { name: "Message", exact: true });
+  const send = page.getByRole("button", { name: "Send", exact: true });
+  await composer.fill('@"/private/host-file"');
+  await expect(send).toBeDisabled();
+  await expect(
+    page.getByText("Native @ references can read host files without approval.", { exact: false }),
+  ).toBeVisible();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "my-upload.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("uploaded bytes only"),
+  });
+  await expect(send).toBeDisabled();
+  await composer.press("Control+Enter");
+  await expect(page.locator(".row-user")).toHaveCount(0);
+  await expect(page.locator(".staged-item")).toHaveCount(1);
+  for (const width of [390, 1280])
+    for (const colorScheme of ["light", "dark"] as const) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.emulateMedia({ colorScheme });
+      await page.screenshot({
+        path: testInfo.outputPath(`native-reference-${width}-${colorScheme}.png`),
+        animations: "disabled",
+      });
+    }
+  await composer.fill("Contact ej@example.com about /private/host-file");
+  await expect(send).toBeEnabled();
+});
+
+// One real-browser lifecycle sentinel for the new file and canonical preview surfaces. Only the
+// provider leg is scripted; the browser, encryption, broker, Session, ordering, and receipts are real.
+test("native file groups keep drafts and canonical image previews accessible", async ({
+  page,
+  seedHost,
+}) => {
+  await page.addInitScript(() => {
+    const state = { held: [] as Array<() => void>, hold: true, revoked: [] as string[] };
+    Object.assign(window, { attachmentTest: state });
+    const read = FileReader.prototype.readAsDataURL;
+    FileReader.prototype.readAsDataURL = function (blob) {
+      if (state.hold && blob.type === "text/plain") state.held.push(() => read.call(this, blob));
+      else read.call(this, blob);
+    };
+    const revoke = URL.revokeObjectURL;
+    URL.revokeObjectURL = (url) => {
+      state.revoked.push(url);
+      revoke.call(URL, url);
+    };
+  });
+  const first = await seedHost({
+    profile: "smoke",
+    title: "files session A",
+    caps: "codex-files",
+    harness: "codex",
+    attachmentEcho: true,
+  });
+  await seedHost({
+    pass: first.pass,
+    profile: "smoke",
+    title: "files session B",
+    caps: "native-rc",
+    harness: "native-rc",
+  });
+  await page.goto(`/${qp}#${encodeURIComponent(first.pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  const rowA = page.locator("button.row", { hasText: "files session A" });
+  const rowB = page.locator("button.row", { hasText: "files session B" });
+  await rowA.click();
+  await expect(page.getByRole("button", { name: "Attach files or photos" })).toBeEnabled();
+  const image = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 900;
+    canvas.height = 540;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#eef2ff";
+    ctx.fillRect(0, 0, 900, 540);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(80, 70, 740, 400);
+    ctx.fillStyle = "#5748d6";
+    ctx.fillRect(120, 115, 70, 12);
+    ctx.fillStyle = "#202434";
+    ctx.font = "bold 42px sans-serif";
+    ctx.fillText("Release review", 120, 190);
+    ctx.font = "25px sans-serif";
+    ctx.fillStyle = "#586174";
+    ctx.fillText("Phone and desktop, in one workspace.", 120, 240);
+    ctx.fillStyle = "#e7e5fd";
+    ctx.fillRect(120, 290, 300, 115);
+    ctx.fillStyle = "#e0f3eb";
+    ctx.fillRect(450, 290, 300, 115);
+    ctx.fillStyle = "#39334f";
+    ctx.fillText("Image previews", 145, 355);
+    ctx.fillText("Files attached", 475, 355);
+    return canvas.toDataURL("image/png").split(",")[1]!;
+  });
+  await page.locator('input[type="file"]').setInputFiles([
+    { name: "release-review.png", mimeType: "image/png", buffer: Buffer.from(image, "base64") },
+    {
+      name: "review-notes.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("Review both layouts."),
+    },
+  ]);
+  await expect(page.locator(".staged-item")).toHaveCount(2);
+  await expect(page.locator(".staged-file")).toContainText("review-notes.txt");
+  const composer = page.getByRole("textbox", { name: "Message" });
+  await composer.fill("Review this image and the notes together.");
+  await page.screenshot({ path: test.info().outputPath("files-staged-phone-light.png") });
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.waitForFunction(() => {
+    const state = (window as unknown as { attachmentTest: { held: unknown[] } }).attachmentTest;
+    return state.held.length === 1;
+  });
+  // A captured file cannot appear removed while its bytes are still about to be transmitted.
+  await expect(page.getByRole("button", { name: "Remove review-notes.txt" })).toBeDisabled();
+  await expect(page.locator(".row-user")).toHaveCount(0);
+  await composer.fill("This is my next draft.");
+  await page.evaluate(() => {
+    const state = (
+      window as unknown as {
+        attachmentTest: { hold: boolean; held: Array<() => void> };
+      }
+    ).attachmentTest;
+    state.hold = false;
+    for (const release of state.held.splice(0)) release();
+  });
+  const sent = page.locator(".row-user", { hasText: "Review this image and the notes together." });
+  await expect(sent).toHaveCount(1);
+  await expect(sent.locator('.delivery-status[data-state="received"]')).toBeVisible();
+  await expect(sent).toContainText("review-notes.txt");
+  await expect(sent).toContainText("release-review.png");
+  await expect(composer).toHaveValue("This is my next draft.");
+  await expect(page.locator(".staged-item")).toHaveCount(0);
+  const thumbnail = sent.getByRole("button", { name: "View image 1: release-review.png" });
+  await expect(thumbnail).toBeVisible();
+  await expect
+    .poll(() => thumbnail.locator("img").evaluate((img) => (img as HTMLImageElement).naturalWidth))
+    .toBe(900);
+  const firstUrl = await thumbnail.locator("img").getAttribute("src");
+  expect(firstUrl).toMatch(/^blob:/);
+
+  for (const [width, colorScheme] of [
+    [390, "light"],
+    [390, "dark"],
+    [1280, "light"],
+    [1280, "dark"],
+  ] as const) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.emulateMedia({ colorScheme });
+    await thumbnail.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: test.info().outputPath(`files-${width}-${colorScheme}.png`) });
+    await thumbnail.click();
+    const dialog = page.getByRole("dialog", { name: "release-review.png" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole("img", { name: "release-review.png" })).toBeVisible();
+    await page.waitForFunction(() =>
+      Array.from(document.querySelectorAll(".sheet, .sheet-scrim")).every((element) =>
+        element.getAnimations().every((animation) => animation.playState !== "running"),
+      ),
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true,
+    );
+    const bounds = await dialog.boundingBox();
+    expect(bounds!.width).toBeLessThanOrEqual(width);
+    if (width > 760) expect(bounds!.width).toBeGreaterThanOrEqual(800);
+    await page.screenshot({ path: test.info().outputPath(`preview-${width}-${colorScheme}.png`) });
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(thumbnail).toBeFocused();
+  }
+
+  await rowB.click();
+  await expect(page.getByRole("button", { name: "Attach files or photos" })).toBeEnabled();
+  await expect(page.locator(".message-image")).toHaveCount(0);
+  expect(
+    await page.evaluate(
+      (url) =>
+        (
+          window as unknown as { attachmentTest: { revoked: string[] } }
+        ).attachmentTest.revoked.includes(url!),
+      firstUrl,
+    ),
+  ).toBe(true);
+  await rowA.click();
+  await expect(sent).toHaveCount(1);
+  await expect(thumbnail).toBeVisible();
+  await expect(composer).toHaveValue("This is my next draft.");
+  // Cached authenticated images remain inspectable when the host goes away; no mutation is enabled.
+  await page.context().setOffline(true);
+  await page.clock.setFixedTime(Date.now() + 60_000);
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+  await thumbnail.click();
+  await expect(page.getByRole("dialog", { name: "release-review.png" })).toBeVisible();
+  await page
+    .getByRole("dialog", { name: "release-review.png" })
+    .getByRole("button", { name: "Close release-review.png", exact: true })
+    .click();
+  await expect(thumbnail).toBeVisible();
+  await page.context().setOffline(false);
+  await page.clock.setSystemTime(Date.now());
+  const retainedUrl = await thumbnail.locator("img").getAttribute("src");
+  await page.getByRole("button", { name: "Disconnect", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm disconnect", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+  expect(
+    await page.evaluate(
+      (url) =>
+        (
+          window as unknown as { attachmentTest: { revoked: string[] } }
+        ).attachmentTest.revoked.includes(url!),
+      retainedUrl,
+    ),
+  ).toBe(true);
+});
+
 // Result margins add to the flex gap and neighboring message margins; they do not collapse.
 test("completed turns keep compact spacing on phone and desktop", async ({ page, seedHost }) => {
   const { pass } = await seedHost({ profile: "smoke" });
@@ -924,7 +1148,7 @@ test.describe("capability gating (#149)", () => {
       "Answer the Claude prompts shown here; other permissions stay in Claude",
     );
     await expect(page.getByTestId("composer-mode")).toBeDisabled();
-    await expect(page.getByRole("button", { name: "Attach photos" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Attach files or photos" })).toBeEnabled();
 
     const composer = page.getByRole("textbox", { name: "Message" });
     await composer.fill("   ");

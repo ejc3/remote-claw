@@ -66,6 +66,7 @@ describe("stable viewer surface", () => {
       structuredPermissions: true,
       interrupt: true,
       attachments: true,
+      files: false,
       setModel: false,
       setMode: false,
     });
