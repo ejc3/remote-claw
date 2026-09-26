@@ -32,11 +32,13 @@ Linux/exact-2.1.237 `claude-native` companion now projects provider-ordered text
 tool calls/textual results to remote-claw while
 ordinary Anthropic Remote Control remains active. Current browser mutations are ordinary non-empty
 non-slash text, image/file groups with an optional non-slash caption, one-shot session-scoped Interrupt,
-fresh live single offered-choice question responses, and
+fresh live bounded question-form responses (1–4 distinct questions, single/multiple choices, Other,
+and per-question Skip), and
 [bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals). The
-[question boundary](docs/protocol.md#claude-native-single-choice-questions) and Bash boundary preserve
+[question boundary](docs/protocol.md#claude-native-questions) and Bash boundary preserve
 native ownership of unsupported permissions/forms; history never grants response authority. The separate
-[live acceptance](docs/release-finish-line.md#claude-native-single-choice-questions) does not rewrite M1.
+[wider-form acceptance](docs/release-finish-line.md#claude-native-wider-question-forms) does not rewrite
+the historical single-choice result or M1.
 Images/files become private host-owned uploads referenced by ordinary native text; only the exact
 generated reference-group form is stripped for display, leaving sanitized names/caption and bounded
 available image previews. Prepared attachment bytes are released; attempted uploads remain available
@@ -145,7 +147,8 @@ Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-
   (`runClaudeNativeDriverPath`, `run.ts`) — transparently forwards ordinary Anthropic Remote Control,
   binds only the spawned child's successful bridge request, and projects provider-ordered text plus
   read-only worker tool activity through our encrypted broker. Browser mutations are ordinary text,
-  host-owned image/file uploads with bounded image previews, one-shot session-scoped Interrupt, supported single-choice responses,
+  host-owned image/file uploads with bounded image previews, one-shot session-scoped Interrupt,
+  bounded native question responses,
   and bounded one-time Bash decisions;
   a delayed Stop can affect newer native/peer work. The local TUI and provider RC API remain live;
   other permissions, unsupported question forms, other controls,

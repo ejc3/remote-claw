@@ -444,17 +444,25 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
       uuid: "question-event-uuid",
       requestId: "question-request-id",
       toolUseId: "question-tool-id",
-      question: {
-        header: "Color",
-        question: "Which color?",
-        multiSelect: false,
-        options: [
-          { label: "Blue", description: "Use blue" },
-          { label: "Green", description: "Use green" },
-        ],
-      },
-      answer: "Blue",
+      questions: [
+        {
+          header: "Color",
+          question: "Which color?",
+          multiSelect: false,
+          options: [
+            { label: "Blue", description: "Use blue" },
+            { label: "Green", description: "Use green" },
+          ],
+        },
+      ],
+      answers: ["Blue"],
     };
+  }
+
+  function firstQuestion(input: RcQuestionResponseInput) {
+    const question = input.questions[0];
+    if (question === undefined) throw new Error("missing test question");
+    return question;
   }
 
   it("posts only the captured single-choice response and returns the canonical acknowledgement", async () => {
@@ -489,7 +497,7 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
                 toolUseID: "question-tool-id",
                 tool_name: "AskUserQuestion",
                 updatedInput: {
-                  questions: [questionInput().question],
+                  questions: questionInput().questions,
                   answers: { "Which color?": "Blue" },
                 },
               },
@@ -506,12 +514,106 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
       json({ results: [{ event_id: "evt_answer", sequence_num: "43", duplicate: false }] }),
     );
     const input = questionInput();
-    input.question.question = "__proto__";
+    firstQuestion(input).question = "__proto__";
     await new AnthropicRcClient({ transport }).postQuestionResponse("cse_input", input);
     const body = JSON.parse(transport.requests[0]?.body ?? "{}");
     const answers = body.events[0].payload.response.response.updatedInput.answers;
     expect(Object.keys(answers)).toEqual(["__proto__"]);
     expect(answers.__proto__).toBe("Blue");
+  });
+
+  it("preserves native mixed single/Other strings and multi arrays without joining punctuation", async () => {
+    const transport = new FakeTransport(
+      json({ results: [{ event_id: "evt_answer", sequence_num: "43", duplicate: false }] }),
+    );
+    const input = questionInput();
+    const single = firstQuestion(input);
+    input.questions = [
+      { ...single, question: "__proto__" },
+      {
+        ...single,
+        question: "constructor",
+        multiSelect: true,
+        options: [
+          { label: "Alpha, beta", description: "First option" },
+          { label: "Gamma / delta", description: "Second option" },
+        ],
+      },
+      { ...single, question: "One multi choice", multiSelect: true },
+      { ...single, question: "Skip", multiSelect: true },
+    ];
+    input.answers = [
+      'Other, "quoted cyan"',
+      ["Alpha, beta", "Gamma / delta", "Custom: cyan, magenta"],
+      ["Blue"],
+      ["[No preference]"],
+    ];
+    await new AnthropicRcClient({ transport }).postQuestionResponse("cse_input", input);
+    const body = JSON.parse(transport.requests[0]?.body ?? "{}");
+    const updated = body.events[0].payload.response.response.updatedInput;
+    expect(updated.questions).toEqual(input.questions);
+    expect(updated.answers).toEqual(
+      Object.fromEntries([
+        ["__proto__", 'Other, "quoted cyan"'],
+        ["constructor", ["Alpha, beta", "Gamma / delta", "Custom: cyan, magenta"]],
+        ["One multi choice", ["Blue"]],
+        ["Skip", ["[No preference]"]],
+      ]),
+    );
+    expect(Object.hasOwn(updated.answers, "__proto__")).toBe(true);
+    expect(updated.questions[0].multiSelect).toBe(false);
+  });
+
+  it("accepts four distinct questions and bounded Other text without reserving its wording", async () => {
+    const transport = new FakeTransport(
+      json({ results: [{ event_id: "evt_answer", sequence_num: "43", duplicate: false }] }),
+    );
+    const input = questionInput();
+    input.questions = Array.from({ length: 4 }, (_, index) => ({
+      ...firstQuestion(input),
+      question: `Question ${index}`,
+      multiSelect: index > 0,
+    }));
+    input.answers = ["[No preference]", ["Blue", "x".repeat(16_384)], ["Green"], ["Other"]];
+    await expect(
+      new AnthropicRcClient({ transport }).postQuestionResponse("cse_input", input),
+    ).resolves.toMatchObject({ eventId: "evt_answer" });
+  });
+
+  it("rejects ambiguous question collections and malformed answer vectors before transport", async () => {
+    const valid = questionInput();
+    const question = firstQuestion(valid);
+    const invalid = [
+      { ...valid, questions: [] },
+      { ...valid, questions: [question, question], answers: ["Blue", "Green"] },
+      {
+        ...valid,
+        questions: Array.from({ length: 5 }, (_, index) => ({ ...question, question: `${index}` })),
+        answers: Array(5).fill("Blue"),
+      },
+      ...[undefined, null, "Blue", [], ["Blue", "Green"]].map((answers) => ({ ...valid, answers })),
+      ...[
+        "Blue",
+        [],
+        ["Blue", "Blue"],
+        ["first other", "second other"],
+        ["x".repeat(16_385)],
+        [""],
+        [null],
+      ].map((answer) => ({
+        ...valid,
+        questions: [{ ...question, multiSelect: true }],
+        answers: [answer],
+      })),
+    ];
+    const transport = new FakeTransport();
+    const client = new AnthropicRcClient({ transport });
+    for (const input of invalid) {
+      await expect(
+        client.postQuestionResponse("cse_input", input as RcQuestionResponseInput),
+      ).rejects.toMatchObject({ kind: "protocol", outcomeUnknown: false });
+    }
+    expect(transport.requests).toHaveLength(0);
   });
 
   it("accepts the exact size limits and twenty distinct offered choices", async () => {
@@ -522,20 +624,20 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
     input.uuid = "u".repeat(256);
     input.requestId = "r".repeat(256);
     input.toolUseId = "t".repeat(256);
-    input.question.header = "h".repeat(256);
-    input.question.question = "q".repeat(16_384);
-    input.question.options = Array.from({ length: 20 }, (_, index) => ({
+    firstQuestion(input).header = "h".repeat(256);
+    firstQuestion(input).question = "q".repeat(16_384);
+    firstQuestion(input).options = Array.from({ length: 20 }, (_, index) => ({
       label: String(index).padEnd(1024, "x"),
       description: "d".repeat(4096),
     }));
-    input.answer = "0".padEnd(1024, "x");
+    input.answers = ["0".padEnd(1024, "x")];
     await expect(
       new AnthropicRcClient({ transport }).postQuestionResponse("cse_input", input),
     ).resolves.toMatchObject({ eventId: "evt_answer" });
     expect(transport.requests).toHaveLength(1);
   });
 
-  it("rejects malformed, non-offered, and additional-policy input before transport", async () => {
+  it("rejects malformed, wrong-shaped, and additional-policy input before transport", async () => {
     const valid = questionInput();
     const invalid: unknown[] = [null, undefined, [], "question"];
     for (const field of ["uuid", "requestId", "toolUseId"]) {
@@ -549,7 +651,7 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
       { question: "q".repeat(16_385) },
       { header: "h".repeat(257) },
       { header: null },
-      { multiSelect: true },
+      { multiSelect: "true" },
       { multiSelect: undefined },
       { options: [] },
       { options: Array.from({ length: 21 }, (_, i) => ({ label: `${i}`, description: "" })) },
@@ -568,21 +670,23 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
       { options: [null] },
       { options: null },
     ]) {
-      invalid.push({ ...valid, question: { ...valid.question, ...override } });
+      invalid.push({ ...valid, questions: [{ ...valid.questions[0], ...override }] });
     }
-    for (const answer of ["", "blue", " Blue", "Other", "Blue, Green", null, ["Blue"]]) {
-      invalid.push({ ...valid, answer });
+    for (const answer of ["", " \n", "x".repeat(16_385), null, ["Blue"]]) {
+      invalid.push({ ...valid, answers: [answer] });
     }
     for (const field of ["freeform", "secret", "skip", "permissionMode", "updatedPermissions"]) {
       invalid.push(
         { ...valid, [field]: true },
-        { ...valid, question: { ...valid.question, [field]: true } },
+        { ...valid, questions: [{ ...valid.questions[0], [field]: true }] },
         {
           ...valid,
-          question: {
-            ...valid.question,
-            options: [{ label: "Blue", description: "", [field]: true }],
-          },
+          questions: [
+            {
+              ...valid.questions[0],
+              options: [{ label: "Blue", description: "", [field]: true }],
+            },
+          ],
         },
       );
     }
@@ -617,11 +721,12 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
     const original = structuredClone(input);
     let questionReads = 0;
     let labelReads = 0;
-    const question = input.question;
-    Object.defineProperty(input, "question", {
+    const questions = input.questions;
+    const question = firstQuestion(input);
+    Object.defineProperty(input, "questions", {
       get() {
         questionReads += 1;
-        return questionReads === 1 ? question : null;
+        return questionReads === 1 ? questions : null;
       },
     });
     Object.defineProperty(question.options[0], "label", {
@@ -631,7 +736,7 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
       },
     });
     const pending = new AnthropicRcClient({ transport }).postQuestionResponse("cse_input", input);
-    input.answer = "Green";
+    input.answers = ["Green"];
     question.question = "Changed after dispatch";
     question.options = [];
     await pending;
@@ -639,7 +744,7 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
     expect(labelReads).toBe(1);
     const body = JSON.parse(transport.requests[0]?.body ?? "{}");
     expect(body.events[0].payload.response.response.updatedInput).toEqual({
-      questions: [original.question],
+      questions: original.questions,
       answers: { "Which color?": "Blue" },
     });
   });
@@ -647,7 +752,7 @@ describe("AnthropicRcClient.postQuestionResponse", () => {
   it("sanitizes throwing input accessors without dispatching", async () => {
     const transport = new FakeTransport();
     const input = questionInput();
-    Object.defineProperty(input.question, "options", {
+    Object.defineProperty(input.questions[0], "options", {
       get() {
         throw new Error("private-question-getter-canary");
       },

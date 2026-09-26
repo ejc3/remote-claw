@@ -235,7 +235,7 @@ describe("native question parsing", () => {
     { header: "x".repeat(257) },
     { question: "" },
     { question: "x".repeat(16_385) },
-    { multiSelect: true },
+    { multiSelect: "true" },
     { allowFreeText: "true" },
     { options: null },
     { options: [] },
@@ -256,7 +256,7 @@ describe("native question parsing", () => {
   it("rejects duplicate IDs, out-of-bounds group/option counts, and malformed native markers", () => {
     expect(parse([question, question])).toEqual([]);
     expect(parse([])).toEqual([]);
-    expect(parse(Array.from({ length: 4 }, (_, id) => ({ ...question, id: String(id) })))).toEqual(
+    expect(parse(Array.from({ length: 5 }, (_, id) => ({ ...question, id: String(id) })))).toEqual(
       [],
     );
     expect(
@@ -280,9 +280,11 @@ describe("native question parsing", () => {
         description: "d".repeat(4096),
       })),
     };
-    const source = Array.from({ length: 3 }, (_, id) => ({
+    const source = Array.from({ length: 4 }, (_, id) => ({
       ...bounded,
       id: `${id}`.padEnd(256, "i"),
+      multiSelect: id % 2 === 0,
+      allowFreeText: true,
     }));
     expect(parse(source)).toEqual(source);
   });

@@ -235,7 +235,7 @@ backfill rebuilds previews only from still-available owned upload files. See [At
 The writer
 fences the projection after a rejected or outcome-unknown POST, before any successor. It also accepts
 the allowlisted session-scoped Interrupt described in [control verbs](#11-compatibility-control-verbs),
-and [fresh single-choice responses](#claude-native-single-choice-questions) plus
+and [bounded native question responses](#claude-native-questions) plus
 [bounded Bash decisions](#claude-native-bash-approvals), without enabling status or
 other control families. Accepted provider events and browser mutations share
 a fixed lifetime ceiling; exhausting it
@@ -491,7 +491,7 @@ cannot bypass a disabled button:
 | Driver | Structured permissions | Status | Interrupt | Set model | Set mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
-| Claude native companion | supported Bash decisions and single-choice forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
+| Claude native companion | supported Bash decisions and bounded question forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
@@ -520,29 +520,53 @@ OpenCode and its local UI remain authoritative. Its separate positive mirroring 
 append-only, and carries documented child-first-tool and competing-local-answer races. “Structured
 permissions false” means native/local handling, not that permissions are disabled.
 
-### Claude-native single-choice questions
+<a id="claude-native-single-choice-questions"></a>
+
+### Claude-native questions
 
 On Linux with exact Claude Code 2.1.237, only a worker `control_request` first observed on the live
 stream after history reconciliation for `can_use_tool` / `AskUserQuestion` on the bound native session
 can grant browser answer authority.
 The request must have matching `tool_name` and `display_name`, `requires_user_interaction:true`, and
-exactly one question with `multiSelect:false` and 1–20 uniquely labelled offered options. Native
-request/tool IDs and UUID are non-empty and bounded to 256 characters; the header is bounded to 256,
+1–4 questions with distinct exact question text, explicit `multiSelect:boolean`, and 1–20 uniquely
+labelled offered options per question. Native request/tool IDs and UUID are non-empty and bounded to
+256 characters; the header is bounded to 256,
 nonblank question text to 16,384, nonblank labels to 1,024, and descriptions to 4,096. Unexpected fields
 and malformed or unsupported shapes stay native. This is a structural allowlist, not semantic
 secret detection or a planning-only guarantee; the viewer warns that answers may authorize tool actions.
-Free text, multiple questions, multiselect, and skip/Dismiss remain native-only. The separate
+Single-select answers are one nonblank string: an offered label or Other text, bounded to 16,384
+characters. Multiselect answers are a non-empty array of unique offered labels plus at most one
+bounded Other string. Commas and quotes remain within their original values; arrays are never joined
+or split for native submission. Unknown preview, annotation, secret, or other extension fields remain
+native-owned; Dismiss/deny is not a question answer. The separate
 [Bash boundary](#claude-native-bash-approvals) supports one captured command-input shape; other tools
 and unsupported approvals remain native-only.
 
 `structuredPermissions:true`, `structuredQuestions:true`, and `permissionResolution:"native"` advertise
-this bounded question surface and the Bash boundary below, not general Claude approvals. Fresh opaque viewer request/question
-IDs bind the recorded native request/tool IDs and copied form. A browser may choose one exact offered
-label; its supplied tool IDs and question text are ignored. `postQuestionResponse` sends one
+this bounded question surface and the Bash boundary below, not general Claude approvals. Fresh opaque
+viewer request/question IDs bind the recorded native request/tool IDs and copied form. Every question
+must have one correctly typed answer. The native adapter rejects missing/extra answer keys,
+malformed values, and duplicate multiselect entries before attempting a native response.
+The relay separately consumes its one browser submission and publishes pending **before** adapter
+validation. Therefore a malformed authenticated peer submission can leave all remote-claw viewers
+pending even though no native response was attempted; a later browser answer is not retried, and the
+form must be answered in a native client. This existing conservative relay boundary does not grant
+an invalid approval. Native-adapter validation tests do not prove browser correction after rejection.
+Viewer-supplied tool IDs and question text are ignored. `postQuestionResponse` sends one
 `control_response` through `POST /v1/code/sessions/{cse_*}/events`, with `behavior:"allow"`,
-`tool_name:"AskUserQuestion"`, the recorded `toolUseID` and questions, and answers keyed by the single
-recorded native question text. Local authority is consumed before that POST; no retry occurs, including
-after a 401. Rejection or unknown delivery retires only the companion, without altering native policy.
+`tool_name:"AskUserQuestion"`, the recorded `toolUseID` and original questions (including explicit
+`multiSelect:false`), and answers keyed by each exact recorded native question text using own data
+properties. Single values remain strings; multi values remain arrays, even for one selection.
+Local authority is consumed before that POST; no retry occurs, including after a 401. Rejection or
+unknown delivery retires only the companion, without altering native policy.
+
+The projection advertises `nativeQuestions:true`, `allowSkip:true`, and `allowFreeText:true` per
+question. Skip is per question: it supplies the captured string `"[No preference]"` for single-select
+or array `["[No preference]"]` for multiselect. In a multi-question form, Skip marks only that question;
+the browser submits all answers together after each question is answered or skipped. A single-question
+Skip submits immediately. An ordinary choice or Other replaces the local skipped state. Skip never
+substitutes cancellation, an omitted answer, or an empty array. The sentinel text is not globally
+reserved: ordinary Other may contain it while other questions have different answers.
 
 Broker/HTTP admission means pending, not a winning answer. A matching peer `control_response`
 conservatively consumes our remaining authority, but does not resolve the card. Only the bound
@@ -556,8 +580,10 @@ native-owned, even when a buffered SSE copy is also received. An SSE duplicate i
 the request is still pending: history may already contain a peer answer or completion. Recovering
 those overlapping requests requires a separately validated provider freshness boundary; the current
 adapter does not infer one or reopen them.
-The [release result](release-finish-line.md#claude-native-single-choice-questions) owns the bounded live
-acceptance, separately from historical M1 and other control families.
+The [wider-form release result](release-finish-line.md#claude-native-wider-question-forms) tracks current
+native acceptance separately from the [historical single-choice result](release-finish-line.md#claude-native-single-choice-questions),
+M1, and other control families. The native Android captures qualify answer serialization; they do not
+alone qualify the complete encrypted browser path.
 
 ### Claude-native Bash approvals
 

@@ -44,6 +44,7 @@ export type SeedHost = (opts?: {
   caps?:
     | "compat-mitm"
     | "native-rc"
+    | "claude-questions"
     | "tmux"
     | "tmux-bypassed"
     | "tmux-unknown"

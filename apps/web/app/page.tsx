@@ -3263,14 +3263,15 @@ interface ParsedPermission {
   toolUseId: string;
   questions: Question[];
   nativeQuestions: boolean;
+  allowSkip: boolean;
 }
 
 /**
  * AskUserQuestion (#42): render each multiple-choice question + options; on submit, send the chosen
  * labels back as `updatedInput.answers` keyed by question text, with the request's `tool_use_id` — the
  * exact shape real claude expects (verified live via --rc-trace). Native forms use stable question IDs
- * and only single selection; they remain pending until neutral native resolution. Legacy multiSelect
- * toggles an array. Resolution survives reload through the replayed map (#56).
+ * and explicitly advertised selection/free-text/Skip behavior; they remain pending until neutral
+ * native resolution. MultiSelect preserves an array. Resolution survives reload through the replayed map (#56).
  */
 function QuestionCard({
   req,
@@ -3293,6 +3294,7 @@ function QuestionCard({
   // Legacy Claude always offers freeform; native forms expose it only when explicitly advertised.
   // Map keys preserve native IDs such as __proto__ and constructor without inherited object values.
   const [freeform, setFreeform] = useState(() => new Map<string, string>());
+  const [skipped, setSkipped] = useState(() => new Set<string>());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   // Which way this card was resolved locally (null = unanswered). Tracks deny too, so a Dismiss doesn't
@@ -3321,6 +3323,7 @@ function QuestionCard({
 
   const pick = (q: Question, label: string) => {
     const key = questionAnswerKey(q);
+    setSkipped((s) => new Set([...s].filter((id) => id !== key)));
     // Single-select: picking an option clears this question's freeform box (options ⟂ freeform).
     if (!q.multiSelect) setFreeform((f) => new Map(f).set(key, ""));
     setAnswers((a) => {
@@ -3335,6 +3338,7 @@ function QuestionCard({
   };
   const onFreeform = (q: Question, val: string) => {
     const key = questionAnswerKey(q);
+    setSkipped((s) => new Set([...s].filter((id) => id !== key)));
     setFreeform((f) => new Map(f).set(key, val));
     // Single-select: typing clears any picked option so the two never both count.
     if (!q.multiSelect && val.trim() !== "")
@@ -3354,6 +3358,8 @@ function QuestionCard({
   const finalAnswer = useCallback(
     (q: Question): string | string[] | undefined => {
       const key = questionAnswerKey(q);
+      if (req.allowSkip && skipped.has(key))
+        return q.multiSelect ? ["[No preference]"] : "[No preference]";
       const ft = (freeform.get(key) ?? "").trim();
       if (req.nativeQuestions && (ft.length > 16_384 || (ft !== "" && !q.allowFreeText)))
         return undefined;
@@ -3364,59 +3370,84 @@ function QuestionCard({
       }
       const value = answers.get(key);
       const picked = Array.isArray(value) ? value : [];
-      const merged = ft !== "" ? [...picked, ft] : picked;
+      const merged = ft !== "" ? [...new Set([...picked, ft])] : picked;
       return merged.length > 0 ? merged : undefined;
     },
-    [answers, freeform, req.nativeQuestions],
+    [answers, freeform, skipped, req.nativeQuestions, req.allowSkip],
   );
   const answered = (q: Question) => finalAnswer(q) !== undefined;
   const allAnswered = req.questions.every(answered);
 
-  const submit = useCallback(async () => {
-    if (
-      !canGrant ||
-      req.requestId === "" ||
-      deciding.current ||
-      !allAnswered ||
-      nativeState !== null
-    )
+  const submit = useCallback(
+    async (skipQuestion?: Question) => {
+      if (
+        !canGrant ||
+        req.requestId === "" ||
+        deciding.current ||
+        (skipQuestion === undefined && !allAnswered) ||
+        (skipQuestion !== undefined &&
+          (!req.allowSkip || req.questions.length !== 1 || req.questions[0] !== skipQuestion)) ||
+        nativeState !== null
+      )
+        return;
+      deciding.current = true;
+      setBusy(true);
+      setErr(null);
+      try {
+        // Build the outgoing map from finalAnswer so a freeform-only answer is sent (the raw `answers`
+        // state holds only option picks). Native IDs are distinct even when prompts repeat. fromEntries
+        // creates own data properties for IDs such as __proto__, rather than invoking object setters.
+        const out: Record<string, string | string[]> = Object.fromEntries(
+          req.questions.flatMap((q) => {
+            const answer =
+              q === skipQuestion
+                ? q.multiSelect
+                  ? ["[No preference]"]
+                  : "[No preference]"
+                : finalAnswer(q);
+            return answer === undefined ? [] : [[questionAnswerKey(q), answer]];
+          }),
+        );
+        await onGrant(req.requestId, "allow", { answers: out, toolUseId: req.toolUseId });
+        if (!req.nativeQuestions) setSentAnswers(out);
+        setSentBehavior("allow");
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+        deciding.current = false; // failed — let the user retry
+      } finally {
+        setBusy(false);
+      }
+    },
+    [
+      req.requestId,
+      req.toolUseId,
+      req.questions,
+      req.nativeQuestions,
+      req.allowSkip,
+      finalAnswer,
+      allAnswered,
+      onGrant,
+      canGrant,
+      nativeState,
+    ],
+  );
+
+  const skipQuestion = (q: Question) => {
+    if (!req.allowSkip || !canGrant || busy || deciding.current) return;
+    if (req.questions.length === 1) {
+      void submit(q);
       return;
-    deciding.current = true;
-    setBusy(true);
-    setErr(null);
-    try {
-      // Build the outgoing map from finalAnswer so a freeform-only answer is sent (the raw `answers`
-      // state holds only option picks). Native IDs are distinct even when prompts repeat. fromEntries
-      // creates own data properties for IDs such as __proto__, rather than invoking object setters.
-      const out: Record<string, string | string[]> = Object.fromEntries(
-        req.questions.flatMap((q) => {
-          const answer = finalAnswer(q);
-          return answer === undefined ? [] : [[questionAnswerKey(q), answer]];
-        }),
-      );
-      await onGrant(req.requestId, "allow", {
-        answers: out,
-        toolUseId: req.toolUseId,
-      });
-      if (!req.nativeQuestions) setSentAnswers(out);
-      setSentBehavior("allow");
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-      deciding.current = false; // failed — let the user retry
-    } finally {
-      setBusy(false);
     }
-  }, [
-    req.requestId,
-    req.toolUseId,
-    req.questions,
-    req.nativeQuestions,
-    finalAnswer,
-    allAnswered,
-    onGrant,
-    canGrant,
-    nativeState,
-  ]);
+    const key = questionAnswerKey(q);
+    setAnswers((a) => new Map([...a].filter(([id]) => id !== key)));
+    setFreeform((f) => new Map(f).set(key, ""));
+    setSkipped((s) => {
+      const next = new Set(s);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   // Decline a question you don't want to answer — rides the same path as a permission Deny (#42 review).
   const dismiss = useCallback(async () => {
@@ -3490,6 +3521,7 @@ function QuestionCard({
         <div className="q-block" key={q.id ?? `${q.header}:${q.question}`}>
           {q.header !== "" && <div className="q-header">{q.header}</div>}
           <div className="q-text">{q.question}</div>
+          {q.multiSelect && <div className="q-hint">Choose any that apply.</div>}
           <div className="q-options">
             {q.options.map((o) => (
               <button
@@ -3521,6 +3553,19 @@ function QuestionCard({
               }}
               aria-label={`Type your own answer for: ${q.question}`}
             />
+          )}
+          {req.allowSkip && (
+            <button
+              type="button"
+              className="q-option q-skip"
+              aria-label={`Skip: ${q.question}`}
+              aria-pressed={skipped.has(questionAnswerKey(q))}
+              data-selected={skipped.has(questionAnswerKey(q))}
+              disabled={!canGrant || busy || req.requestId === ""}
+              onClick={() => skipQuestion(q)}
+            >
+              {skipped.has(questionAnswerKey(q)) ? "No preference" : "Skip this question"}
+            </button>
           )}
         </div>
       ))}
@@ -3577,6 +3622,7 @@ function parsePermission(text: string): ParsedPermission {
       toolUseId: typeof p.tool_use_id === "string" ? p.tool_use_id : "",
       questions: parseQuestions(p.tool_input),
       nativeQuestions: Object.hasOwn(input, "nativeQuestions"),
+      allowSkip: input.nativeQuestions === true && input.allowSkip === true,
     };
   } catch {
     return {
@@ -3588,6 +3634,7 @@ function parsePermission(text: string): ParsedPermission {
       toolUseId: "",
       questions: [],
       nativeQuestions: false,
+      allowSkip: false,
     };
   }
 }

@@ -197,13 +197,14 @@ home-folder UI artifacts, outside Git.
 | Codex official-Remote recovery | [Complete for exact 0.154.0/Linux arm64/managed Unix/paginated](#codex-official-remote-recovery--complete) | Existing TUI and actual Mac desktop app keep the same native thread across companion restart/broker loss; reopened viewers select a fresh projection, recover history once, and complete later browser work |
 | Screenshot/file input | Historical Codex and Claude-native images live-accepted; [files and bounded previews implemented, bounded native acceptance passed](#native-files-and-image-previews) for Claude-native and exact Codex 0.154.0 | Phone/desktop send encrypted mixed groups with native-confirmed delivery and bounded canonical previews; uploads deliberately share bytes without changing persistent permission/sandbox settings |
 | Native-phone foreground recovery | [Short Android background/resume passed](#native-phone-backgroundresume--2026-09-26) for both agents | Foreground catches up once and later phone input works; true network-loss/deep-sleep recovery remains unverified |
-| Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance). Claude [single-choice acceptance](#claude-native-single-choice-questions) and [bounded Bash acceptance](#claude-native-bash-approvals) passed | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
+| Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance). Claude [single-choice acceptance](#claude-native-single-choice-questions), [bounded Bash acceptance](#claude-native-bash-approvals), and [wider-form acceptance](#claude-native-wider-question-forms) passed | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted; 0.154.0 native-app text and browser/TUI mutation [acceptance passed](#codex-current-version-acceptance) | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
 Claude is active again as of 2026-09-24; the bounded
 [single-choice question slice](#claude-native-single-choice-questions) is implemented and live-accepted,
 and the separate [Bash slice](#claude-native-bash-approvals) is implemented and live-accepted;
-unsupported Claude approvals and forms remain native. Codex 0.153.4 native questions and
+the [wider-form slice](#claude-native-wider-question-forms) passed bounded native/browser acceptance
+on 2026-09-26. Unsupported Claude approvals and forms remain native. Codex 0.153.4 native questions and
 managed Unix/paginated recovery are complete; the shared viewer's bounded daily-use slice is below.
 The separate [0.154.0 recovery result](#codex-official-remote-recovery--complete) used the actual Mac
 desktop app on the same native thread, not merely a logged-in cloud-Codex page. Its reopened-viewer
@@ -268,7 +269,7 @@ artifact directory's `recovery/` subdirectory. Physical-phone retest is separate
 **Implemented; bounded live acceptance passed 2026-09-25.** Exact Claude 2.1.237/Linux supports single
 offered-choice forms first observed live after history reconciliation through the existing encrypted
 question card. The
-[protocol section](protocol.md#claude-native-single-choice-questions) owns admission, one-shot response,
+[protocol section](protocol.md#claude-native-questions) owns current admission, one-shot response,
 native completion, and pending-stream-loss boundaries; this is not general Claude approval support.
 
 On one existing native session, a prompt entered in the actual Mac Claude app produced a question
@@ -289,6 +290,49 @@ identified this overlap; current code intentionally does not promote a duplicate
 Native clients remain usable and post-reconciliation questions are supported. Broader overlap recovery
 needs a demonstrated provider freshness boundary and causal regression before changing this rule,
 not an unchecked replay of history or a new generic coordinator.
+
+### Claude-native wider question forms
+
+**Current: implemented; bounded native/browser acceptance passed 2026-09-26.** Exact Claude Code
+2.1.237/Linux supports fresh forms of 1–4 distinct questions with single/multiple choices, bounded
+Other text, and per-question Skip through the existing encrypted question card. The
+[protocol boundary](protocol.md#claude-native-questions) owns complete-form validation, original-input
+retention, opaque IDs, and the unchanged one-attempt/native-resolution lifecycle. Unknown extensions
+and other approval families remain native-owned; Codex question policy is unchanged.
+
+Four actual Claude Android 1.260923.20/Moto G 2025/Android 15 journeys on the retained native session
+captured multiselect plus Other, Skip, mixed single/multi questions with quoted Other, and Skip across
+two questions. Single answers, including Other and Skip, are strings. Multi answers remain arrays,
+even with one choice; commas inside a label or Other are not separators. Native Skip advances the
+current question without sending an intermediate response, then the completed form sends one answer
+map. The viewer follows that per-question meaning with a final Submit for multiple questions and
+immediate Skip submission for one question. These captures qualify native serialization, not the
+complete remote-claw path. Evidence remains outside Git under
+`~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/claude-forms/`.
+
+The separate encrypted browser run used the same retained Claude 2.1.237/Linux arm64/Sonnet 4.6
+session without changing its Manual mode or policy. A phone-layout viewer submitted quoted Other for
+a single-select question and Alpha, Beta, plus `Custom: cyan, magenta` for a multiselect question in
+one form. A desktop viewer then skipped each question of a second single/multi form and clicked
+Submit once. Both independent viewers showed one assistant reply and zero actionable cards for each
+turn; reload preserved those counts and neutral resolution. Exact answer types are checked against
+native `toolUseResult.answers`, not the model's prose, which flattened the first multiselect answer
+for display. Native wire and tool results retained the first three-element array exactly; the second
+form retained single `"[No preference]"` and multi `["[No preference]"]`. Actual Claude Android and
+the native TUI corroborated both completed replies, with no permission update. Private evidence remains under
+`~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/native-forms.L2sIW6/`.
+
+Focused client/control tests own form bounds, exact string/array values, rejection before native POST,
+original-input ownership, and existing history/peer/stream-loss fences. The existing relay consumes
+the first browser submission before adapter validation: a malformed authenticated peer answer can
+leave browser cards pending until a native client answers. Browser correction after that rejection
+is not supported or claimed; it is a separate liveness limitation, not an approval bypass.
+The browser sentinel
+owns multi-question interaction and honest pending/resolved state. This two-form live outcome does
+not repeat every stale-peer race, startup/reconnect case, or four-question maximum on native clients;
+the corresponding boundary tests and historical narrower acceptance remain separate. It does not
+qualify physical-phone browser/WebKit transport, general approvals or settings, or streaming
+task/status behavior.
 
 ### Claude-native Bash approvals
 
@@ -416,8 +460,8 @@ The complete encrypted browser path then passed: a physical Android Chrome promp
 transcript as human input, and Allow in the independent desktop viewer ran its harmless `printf`
 exactly once. Its following single-choice question appeared in the official Android app and the
 viewer; Skip in the native app resolved the viewer neutrally, and reload did not reopen either
-decision. This adds an actual Android-app observation, not new browser Skip support or a claim about
-all permission/form kinds.
+decision. That acceptance added an actual Android-app observation; it did not itself add browser
+Skip support or qualify all permission/form kinds.
 
 **Mac-app follow-up — 2026-09-26.** The actual Mac app opened the same retained Claude fixture after
 account alignment. One Mac-origin no-tools turn and one remote-claw-browser-origin no-tools turn

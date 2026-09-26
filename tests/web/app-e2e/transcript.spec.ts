@@ -259,6 +259,64 @@ test("native questions submit independently and stay neutral after provider reso
   await expect(card).not.toContainText("Answered");
 });
 
+for (const skip of [false, true])
+  test(`Claude native wider form ${skip ? "per-question Skip" : "Other and multiple choices"} stays pending until native resolution`, async ({
+    page,
+    seedHost,
+  }, testInfo) => {
+    const { pass, resolvePermission } = await seedHost({
+      askq: true,
+      caps: "claude-questions",
+      harness: "native-rc",
+    });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+    const card = page.locator(".perm.perm-q");
+    await expect(card).toContainText("Claude is asking");
+    const submit = card.getByRole("button", { name: "Submit", exact: true });
+    await expect(submit).toBeDisabled();
+    if (!skip) {
+      await card.locator(".q-block").nth(0).locator(".q-freeform").fill('Other, "quoted cyan"');
+      await expect(submit).toBeDisabled();
+      const multi = card.locator(".q-block").nth(1);
+      await multi.getByRole("button", { name: "Blue Blue path", exact: true }).click();
+      await multi.getByRole("button", { name: "Green Green path", exact: true }).click();
+      await multi.locator(".q-freeform").fill("Custom: cyan, magenta");
+      await expect(multi.locator('.q-option[aria-pressed="true"]')).toHaveCount(2);
+      for (const width of [390, 1280])
+        for (const colorScheme of ["light", "dark"] as const) {
+          await page.setViewportSize({ width, height: 900 });
+          await page.emulateMedia({ colorScheme });
+          await card.screenshot({
+            path: testInfo.outputPath(`claude-questions-${width}-${colorScheme}.png`),
+          });
+        }
+      await submit.click();
+    } else {
+      const first = card.locator(".q-block").nth(0);
+      const second = card.locator(".q-block").nth(1);
+      await first.getByRole("button", { name: /^Skip:/ }).click();
+      await expect(first.locator('.q-skip[aria-pressed="true"]')).toHaveText("No preference");
+      await expect(submit).toBeDisabled();
+      await expect(card).not.toContainText("Submitted");
+      // A normal answer clears skipped state; Skip can replace it again without a native POST.
+      await first.locator(".q-freeform").fill("Actually, cyan");
+      await expect(first.locator('.q-skip[aria-pressed="false"]')).toBeVisible();
+      await first.getByRole("button", { name: /^Skip:/ }).click();
+      await second.getByRole("button", { name: /^Skip:/ }).click();
+      await expect(submit).toBeEnabled();
+      await submit.click();
+    }
+    await expect(card).toContainText("Submitted — waiting for Claude confirmation");
+    await expect(card.locator(".perm-actions, .q-options")).toHaveCount(0);
+    await resolvePermission();
+    await expect(card).toContainText("Resolved by Claude");
+    await page.reload();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+    await expect(card).toContainText("Resolved by Claude");
+  });
+
 test("an AskUserQuestion renders a question UI and submits answers (#42)", async ({
   page,
   seedHost,
@@ -352,6 +410,21 @@ test("a multiSelect AskUserQuestion sends BOTH picked options and an appended fr
   const afterReload = page.locator(".perm.perm-q .q-answer");
   await expect(afterReload).toContainText("Unit");
   await expect(afterReload).toContainText("Fuzz");
+});
+
+test("a multi-select option repeated in Other is sent only once", async ({ page, seedHost }) => {
+  const { pass } = await seedHost({ askq: "multi", caps: "compat-mitm" });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  const card = page.locator(".perm.perm-q");
+  await card.getByRole("button", { name: "Unit" }).click();
+  await card.locator(".q-freeform").fill("Unit");
+  await card.getByRole("button", { name: "Submit", exact: true }).click();
+  await expect(card.locator(".q-answer")).toHaveText("Unit");
+  await page.reload();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(card.locator(".q-answer")).toHaveText("Unit");
 });
 
 test("a photo STAGES, then is sent on submit and echoes in the transcript (#44/#112)", async ({

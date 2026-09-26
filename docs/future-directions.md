@@ -57,9 +57,10 @@ emails/path prose and native/provider history are unaffected. Attempted upload f
 turn coordinate and can affect newer peer work if delayed; the companion waits for matching canonical
 worker success before later browser text without advertising idle status. Current acceptance belongs
 to the [release roadmap](release-finish-line.md), not a rewrite of M1. The structured critical path
-remains outside Claude. The current [single-choice boundary](protocol.md#claude-native-single-choice-questions)
-and its [acceptance](release-finish-line.md#claude-native-single-choice-questions) add only fresh offered-choice
-responses. The separate [Bash boundary](protocol.md#claude-native-bash-approvals) adds one-time
+remains outside Claude. The current [question boundary](protocol.md#claude-native-questions) supports
+fresh forms of 1–4 distinct questions with single/multiple choices, bounded Other, and per-question
+Skip; [wider-form acceptance](release-finish-line.md#claude-native-wider-question-forms) is separate from
+the historical single-choice result. The separate [Bash boundary](protocol.md#claude-native-bash-approvals) adds one-time
 Allow/Deny for the captured command/description shape, with no inferred cwd or policy changes;
 its [acceptance](release-finish-line.md#claude-native-bash-approvals) is tracked separately.
 The [files/previews slice](release-finish-line.md#native-files-and-image-previews) tracks its own bounded

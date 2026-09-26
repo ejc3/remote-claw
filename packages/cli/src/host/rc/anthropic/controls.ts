@@ -3,12 +3,13 @@ import type { Session } from "../session.js";
 import {
   type AnthropicRcEvent,
   parseBashInput,
-  parseSingleChoiceQuestion,
+  parseNativeAnswers,
+  parseNativeQuestions,
   type RcBashInput,
   type RcCommandResponseInput,
   type RcPostAck,
+  type RcQuestion,
   type RcQuestionResponseInput,
-  type RcSingleChoiceQuestion,
 } from "./client.js";
 
 interface ControlClient {
@@ -33,7 +34,7 @@ interface NativeControlIdentity {
 
 type NativeControl = NativeControlIdentity &
   (
-    | { kind: "question"; questionId: string; question: RcSingleChoiceQuestion }
+    | { kind: "question"; questionIds: string[]; questions: RcQuestion[] }
     | { kind: "bash"; input: RcBashInput }
   );
 
@@ -51,7 +52,7 @@ function text(value: unknown, max: number, empty = false): value is string {
   return typeof value === "string" && value.length <= max && (empty || value.trim() !== "");
 }
 
-/** One offered choice or one captured Bash decision. Other forms and policy stay native-owned.
+/** Captured native question forms or one captured Bash decision. Other forms and policy stay native-owned.
  * History never grants authority; losing the live stream with an open request retires the companion. */
 export class ClaudeNativeControls {
   readonly #seenRequests = new Set<string>();
@@ -74,7 +75,7 @@ export class ClaudeNativeControls {
     const p = event.payload;
     if (event.eventType === "control_response" && event.source === "client") {
       // A peer submission is not a winning decision, but it conservatively consumes our authority.
-      // This also leaves native-only free-text/skip paths with that peer until worker completion.
+      // Leave the request with that peer until worker completion, without guessing which peer won.
       if (
         p.type !== "control_response" ||
         (p.session_id !== undefined &&
@@ -163,17 +164,22 @@ export class ClaudeNativeControls {
         !text(request.description, 4096, true) ||
         request.requires_user_interaction !== true ||
         input === null ||
-        !keys(input, ["questions"]) ||
-        !Array.isArray(input.questions) ||
-        input.questions.length !== 1
+        !keys(input, ["questions"])
       )
         return;
-      const question = parseSingleChoiceQuestion(input.questions[0]);
-      if (question === null) return;
-      form = { ...identity, kind: "question", questionId: randomUUID(), question };
+      const questions = parseNativeQuestions(input.questions);
+      if (questions === null) return;
+      const questionIds = questions.map(() => randomUUID());
+      form = { ...identity, kind: "question", questionIds, questions };
       projectedInput = {
         nativeQuestions: true,
-        questions: [{ ...question, id: form.questionId, allowFreeText: false }],
+        // Native Skip is per question, with the same single-string / multi-array answer shape.
+        allowSkip: true,
+        questions: questions.map((question, index) => ({
+          ...question,
+          id: questionIds[index],
+          allowFreeText: true,
+        })),
       };
     }
     this.#native.set(form.requestId, form);
@@ -216,13 +222,16 @@ export class ClaudeNativeControls {
     const input = record(result?.updatedInput);
     const answers = record(input?.answers);
     if (result?.behavior !== "allow" || answers === null) return;
-    if (Object.keys(answers).length !== 1 || !Object.hasOwn(answers, form.questionId)) return;
-    const answer = answers[form.questionId];
     if (
-      typeof answer !== "string" ||
-      !form.question.options.some((option) => option.label === answer)
+      Object.keys(answers).length !== form.questionIds.length ||
+      !form.questionIds.every((id) => Object.hasOwn(answers, id))
     )
       return;
+    const selected = parseNativeAnswers(
+      form.questions,
+      form.questionIds.map((id) => answers[id]),
+    );
+    if (selected === null) return;
     // Ignore viewer-provided tool IDs/questions: only the recorded native snapshot crosses the POST.
     form.submitted = true;
     await this.client.postQuestionResponse(
@@ -231,8 +240,8 @@ export class ClaudeNativeControls {
         uuid: randomUUID(),
         requestId: form.requestId,
         toolUseId: form.toolUseId,
-        question: form.question,
-        answer,
+        questions: form.questions,
+        answers: selected,
       },
       { signal },
     );

@@ -110,9 +110,12 @@ function setup() {
 }
 
 function answer(session: Session, value: unknown = "Blue"): Record<string, unknown> {
+  return answerForm(session, [value]);
+}
+
+function answerForm(session: Session, values: readonly unknown[]): Record<string, unknown> {
   const p = session.snapshotUpstream()[0]?.payload;
   const input = (p?.request as { input: { questions: Array<{ id: string }> } }).input;
-  const id = input.questions[0]?.id ?? "missing";
   return {
     type: "control_response",
     response: {
@@ -121,7 +124,12 @@ function answer(session: Session, value: unknown = "Blue"): Record<string, unkno
       response: {
         behavior: "allow",
         toolUseID: "forged-viewer-tool",
-        updatedInput: { questions: [{ question: "forged rewrite" }], answers: { [id]: value } },
+        updatedInput: {
+          questions: [{ question: "forged rewrite" }],
+          answers: Object.fromEntries(
+            input.questions.map((question, index) => [question.id, values[index]]),
+          ),
+        },
       },
     },
   };
@@ -144,6 +152,101 @@ function commandAnswer(session: Session, behavior: unknown = "allow"): Record<st
 }
 
 describe("Claude native controls", () => {
+  it("binds four opaque question IDs to the retained native input and exact answer shapes", async () => {
+    const h = setup();
+    const native = request();
+    const questions = [
+      { ...structuredClone(QUESTION), question: "__proto__" },
+      { ...structuredClone(QUESTION), question: "constructor" },
+      {
+        ...structuredClone(QUESTION),
+        question: "Colors",
+        multiSelect: true,
+        options: [
+          { label: "Alpha, beta", description: "First" },
+          { label: "Gamma / delta", description: "Second" },
+        ],
+      },
+      { ...structuredClone(QUESTION), question: "More colors", multiSelect: true },
+    ];
+    const expected = structuredClone(questions);
+    (native.payload.request as Record<string, unknown>).input = { questions };
+    h.controls.observe(native, true);
+    const projected = (
+      h.session.snapshotUpstream()[0]?.payload.request as {
+        input: {
+          allowSkip: boolean;
+          questions: Array<{ id: string; allowFreeText: boolean }>;
+        };
+      }
+    ).input;
+    expect(projected.allowSkip).toBe(true);
+    expect(new Set(projected.questions.map((question) => question.id)).size).toBe(4);
+    expect(projected.questions.every((question) => question.allowFreeText)).toBe(true);
+    const values = [
+      'Other, "quoted cyan"',
+      "[No preference]",
+      ["Alpha, beta", "Custom: cyan, magenta"],
+      ["Green"],
+    ];
+    const response = answerForm(h.session, values);
+    const option = questions[2]?.options[0];
+    if (option === undefined) throw new Error("missing test option");
+    option.label = "changed after observation";
+    await h.controls.respond(response, new AbortController().signal);
+    await h.controls.respond(response, new AbortController().signal);
+    expect(h.post).toHaveBeenCalledTimes(1);
+    expect(h.post.mock.calls[0]?.[1]).toMatchObject({
+      requestId: "native-request",
+      toolUseId: "native-tool",
+      questions: expected,
+      answers: values,
+    });
+    expect(h.controls.pending).toBe(true);
+    h.controls.observe(completion(), true);
+    expect(h.controls.pending).toBe(false);
+  });
+
+  it("advertises captured per-question Skip and preserves single-string / multi-array values", async () => {
+    const h = setup();
+    const native = request();
+    const questions = [QUESTION, { ...QUESTION, question: "Second question", multiSelect: true }];
+    (native.payload.request as Record<string, unknown>).input = { questions };
+    h.controls.observe(native, true);
+    expect(h.session.snapshotUpstream()[0]?.payload.request).toMatchObject({
+      input: { allowSkip: true },
+    });
+    await h.controls.respond(
+      answerForm(h.session, ["[No preference]", ["[No preference]"]]),
+      new AbortController().signal,
+    );
+    expect(h.post.mock.calls[0]?.[1]).toMatchObject({
+      questions,
+      answers: ["[No preference]", ["[No preference]"]],
+    });
+  });
+
+  it.each([
+    "missing",
+    "extra",
+    "native-wording",
+  ] as const)("rejects %s answer keys without consuming authority", async (shape) => {
+    const h = setup();
+    h.controls.observe(request(), true);
+    const bad = answer(h.session);
+    const response = bad.response as {
+      response: { updatedInput: { answers: Record<string, unknown> } };
+    };
+    const answers = response.response.updatedInput.answers;
+    if (shape !== "extra") for (const key of Object.keys(answers)) delete answers[key];
+    if (shape === "extra") answers.extra = "Blue";
+    if (shape === "native-wording") answers[QUESTION.question] = "Blue";
+    await h.controls.respond(bad, new AbortController().signal);
+    expect(h.post).not.toHaveBeenCalled();
+    await h.controls.respond(answer(h.session), new AbortController().signal);
+    expect(h.post).toHaveBeenCalledTimes(1);
+  });
+
   it("projects the captured shape, posts one native snapshot, and waits for worker completion", async () => {
     const h = setup();
     const native = request();
@@ -152,7 +255,11 @@ describe("Claude native controls", () => {
     expect(frame?.request_id).not.toBe("native-request");
     expect(frame?.request).toMatchObject({
       tool_name: "AskUserQuestion",
-      input: { nativeQuestions: true, questions: [{ ...QUESTION, allowFreeText: false }] },
+      input: {
+        nativeQuestions: true,
+        allowSkip: true,
+        questions: [{ ...QUESTION, allowFreeText: true }],
+      },
     });
     const input = answer(h.session);
     (native.payload.request as { input: unknown }).input = { questions: [] };
@@ -163,8 +270,8 @@ describe("Claude native controls", () => {
       uuid: expect.any(String),
       requestId: "native-request",
       toolUseId: "native-tool",
-      question: QUESTION,
-      answer: "Blue",
+      questions: [QUESTION],
+      answers: ["Blue"],
     });
     expect(h.controls.pending).toBe(true);
     h.controls.observe(completion(), true);
@@ -235,7 +342,7 @@ describe("Claude native controls", () => {
   });
 
   it.each(
-    ["free text", ["Blue"], "", null].map((value) => ({ value })),
+    [["Blue"], "", " \n", "x".repeat(16_385), null].map((value) => ({ value })),
   )("does not submit unsupported answer $value", async ({ value }) => {
     const h = setup();
     h.controls.observe(request(), true);
@@ -266,16 +373,20 @@ describe("Claude native controls", () => {
     expect(h.post).not.toHaveBeenCalled();
   });
 
-  it("consumes before an ambiguous write and never retries", async () => {
+  it.each([
+    "question",
+    "bash",
+  ] as const)("consumes %s before an ambiguous write and never retries", async (kind) => {
     const h = setup();
-    h.commandPost.mockRejectedValueOnce(new Error("ambiguous"));
-    h.controls.observe(request("bash"), true);
-    const input = commandAnswer(h.session);
+    const post = kind === "question" ? h.post : h.commandPost;
+    post.mockRejectedValueOnce(new Error("ambiguous"));
+    h.controls.observe(request(kind), true);
+    const input = kind === "question" ? answer(h.session) : commandAnswer(h.session);
     await expect(h.controls.respond(input, new AbortController().signal)).rejects.toThrow(
       "ambiguous",
     );
     await h.controls.respond(input, new AbortController().signal);
-    expect(h.commandPost).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledTimes(1);
   });
 
   it("does not write after session closure or cancellation", async () => {
@@ -324,9 +435,12 @@ describe("Claude native controls", () => {
   it.each([
     { questions: [] },
     { questions: [QUESTION, QUESTION] },
-    { questions: [{ ...QUESTION, multiSelect: true }] },
+    { questions: Array.from({ length: 5 }, (_, index) => ({ ...QUESTION, question: `${index}` })) },
+    { questions: [{ ...QUESTION, multiSelect: "true" }] },
     { questions: [{ ...QUESTION, isSecret: true }] },
     { questions: [{ ...QUESTION, allowFreeText: true }] },
+    { questions: [{ ...QUESTION, preview: "unknown preview" }] },
+    { questions: [{ ...QUESTION, annotations: {} }] },
     { questions: [{ ...QUESTION, question: "x".repeat(16_385) }] },
     { questions: [{ ...QUESTION, options: [QUESTION.options[0], QUESTION.options[0]] }] },
     {

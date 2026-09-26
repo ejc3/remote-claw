@@ -317,7 +317,7 @@ export function parseQuestions(toolInput: unknown): Question[] {
 
 /** The native form is all-or-nothing: silently dropping a question would change the submitted answer. */
 function parseNativeQuestions(raw: unknown[]): Question[] {
-  if (raw.length < 1 || raw.length > 3) return [];
+  if (raw.length < 1 || raw.length > 4) return [];
   const questions: Question[] = [];
   const ids = new Set<string>();
   const bounded = (value: unknown, max: number, nonblank = false): value is string =>
@@ -330,7 +330,7 @@ function parseNativeQuestions(raw: unknown[]): Question[] {
       ids.has(q.id) ||
       !bounded(q.header, 256) ||
       !bounded(q.question, 16_384, true) ||
-      q.multiSelect !== false ||
+      typeof q.multiSelect !== "boolean" ||
       typeof q.allowFreeText !== "boolean" ||
       !Array.isArray(q.options) ||
       q.options.length < 1 ||
@@ -353,7 +353,7 @@ function parseNativeQuestions(raw: unknown[]): Question[] {
       header: q.header,
       question: q.question,
       options,
-      multiSelect: false,
+      multiSelect: q.multiSelect,
       allowFreeText: q.allowFreeText,
     });
   }

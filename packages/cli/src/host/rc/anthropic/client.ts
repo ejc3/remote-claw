@@ -64,10 +64,10 @@ export interface RcInterruptEventInput {
   requestId: string;
 }
 
-export interface RcSingleChoiceQuestion {
+export interface RcQuestion {
   header: string;
   question: string;
-  multiSelect: false;
+  multiSelect: boolean;
   options: readonly { label: string; description: string }[];
 }
 
@@ -75,9 +75,12 @@ export interface RcQuestionResponseInput {
   uuid: string;
   requestId: string;
   toolUseId: string;
-  question: RcSingleChoiceQuestion;
-  answer: string;
+  questions: readonly RcQuestion[];
+  /** Aligned to retained questions; native single answers are strings, multi answers are arrays. */
+  answers: readonly RcQuestionAnswer[];
 }
+
+export type RcQuestionAnswer = string | readonly string[];
 
 export interface RcBashInput {
   command: string;
@@ -427,7 +430,7 @@ export class AnthropicRcClient {
     return parsePostAck(raw, operation);
   }
 
-  /** Answer one exact offered choice once; policy, free text, and skip are not this surface. */
+  /** Answer one retained native form once, preserving single-string and multi-array wire values. */
   async postQuestionResponse(
     sessionId: string,
     event: RcQuestionResponseInput,
@@ -449,8 +452,13 @@ export class AnthropicRcClient {
                 toolUseID: validated.toolUseId,
                 tool_name: "AskUserQuestion",
                 updatedInput: {
-                  questions: [validated.question],
-                  answers: { [validated.question.question]: validated.answer },
+                  questions: validated.questions,
+                  answers: Object.fromEntries(
+                    validated.questions.map((question, index) => [
+                      question.question,
+                      validated.answers[index],
+                    ]),
+                  ),
                 },
               },
             },
@@ -986,8 +994,8 @@ function validateInterruptEvent(
 }
 
 /** Shared admission parser; accepted JSON is copied before it can authorize a response. */
-export function parseSingleChoiceQuestion(value: unknown): RcSingleChoiceQuestion | null {
-  const operation = "parseSingleChoiceQuestion";
+function parseNativeQuestion(value: unknown): RcQuestion | null {
+  const operation = "parseNativeQuestion";
   try {
     const question = controlInputSnapshot(
       value,
@@ -995,12 +1003,12 @@ export function parseSingleChoiceQuestion(value: unknown): RcSingleChoiceQuestio
       operation,
     );
     if (
-      question.multiSelect !== false ||
+      typeof question.multiSelect !== "boolean" ||
       typeof question.header !== "string" ||
       question.header.length > 256 ||
       !Array.isArray(question.options)
     ) {
-      throw AnthropicRcError.protocol(operation, "invalid single-choice question");
+      throw AnthropicRcError.protocol(operation, "invalid question");
     }
     const optionCount = question.options.length;
     if (!Number.isInteger(optionCount) || optionCount < 1 || optionCount > 20) {
@@ -1028,9 +1036,65 @@ export function parseSingleChoiceQuestion(value: unknown): RcSingleChoiceQuestio
     return {
       header: question.header,
       question: nonblankControlString(question.question, operation, "question", 16_384),
-      multiSelect: false,
+      multiSelect: question.multiSelect,
       options,
     };
+  } catch {
+    return null;
+  }
+}
+
+/** A native answer object is keyed by exact question text, so duplicates are ambiguous. */
+export function parseNativeQuestions(value: unknown): RcQuestion[] | null {
+  try {
+    if (!Array.isArray(value) || value.length < 1 || value.length > 4) return null;
+    const questions: RcQuestion[] = [];
+    const texts = new Set<string>();
+    for (const raw of value) {
+      const question = parseNativeQuestion(raw);
+      if (question === null || texts.has(question.question)) return null;
+      texts.add(question.question);
+      questions.push(question);
+    }
+    return questions;
+  } catch {
+    return null;
+  }
+}
+
+/** Preserve punctuation, whitespace, and native value types; never split or join selected labels.
+ * Other is one arbitrary bounded string, including the native Skip text `[No preference]`. */
+export function parseNativeAnswers(
+  questions: readonly RcQuestion[],
+  value: unknown,
+): RcQuestionAnswer[] | null {
+  try {
+    if (!Array.isArray(value) || value.length !== questions.length) return null;
+    const answers: RcQuestionAnswer[] = [];
+    for (let index = 0; index < questions.length; index += 1) {
+      const question = questions[index];
+      if (question === undefined) return null;
+      const raw = value[index];
+      const validText = (answer: unknown): answer is string =>
+        typeof answer === "string" && answer.trim() !== "" && answer.length <= 16_384;
+      if (!question.multiSelect) {
+        if (!validText(raw)) return null;
+        answers.push(raw);
+        continue;
+      }
+      if (!Array.isArray(raw) || raw.length < 1 || raw.length > question.options.length + 1)
+        return null;
+      const offered = new Set(question.options.map((option) => option.label));
+      const selected = new Set<string>();
+      let other = 0;
+      for (const answer of raw) {
+        if (!validText(answer) || selected.has(answer)) return null;
+        if (!offered.has(answer) && ++other > 1) return null;
+        selected.add(answer);
+      }
+      answers.push([...selected]);
+    }
+    return answers;
   } catch {
     return null;
   }
@@ -1082,23 +1146,19 @@ function validateQuestionResponse(
   try {
     const input = controlInputSnapshot(
       event,
-      ["uuid", "requestId", "toolUseId", "question", "answer"],
+      ["uuid", "requestId", "toolUseId", "questions", "answers"],
       operation,
     );
-    const question = parseSingleChoiceQuestion(input.question);
-    if (
-      question === null ||
-      typeof input.answer !== "string" ||
-      !question.options.some((option) => option.label === input.answer)
-    ) {
-      throw AnthropicRcError.protocol(operation, "answer is not an offered choice");
-    }
+    const questions = parseNativeQuestions(input.questions);
+    const answers = questions === null ? null : parseNativeAnswers(questions, input.answers);
+    if (questions === null || answers === null)
+      throw AnthropicRcError.protocol(operation, "invalid question answers");
     return {
       uuid: nonblankControlString(input.uuid, operation, "uuid", 256),
       requestId: nonblankControlString(input.requestId, operation, "requestId", 256),
       toolUseId: nonblankControlString(input.toolUseId, operation, "toolUseId", 256),
-      question,
-      answer: input.answer,
+      questions,
+      answers,
     };
   } catch {
     // Reject unreadable/getter-backed input without exposing arbitrary caller errors or dispatching.
