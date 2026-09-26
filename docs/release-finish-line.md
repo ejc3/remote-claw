@@ -332,7 +332,17 @@ transcript as human input, and Allow in the independent desktop viewer ran its h
 exactly once. Its following single-choice question appeared in the official Android app and the
 viewer; Skip in the native app resolved the viewer neutrally, and reload did not reopen either
 decision. This adds an actual Android-app observation, not new browser Skip support or a claim about
-all permission/form kinds. The actual Mac app's same-fixture pass remains pending while macOS is locked.
+all permission/form kinds.
+
+**Mac-app follow-up — 2026-09-26.** The actual Mac app opened the same retained Claude fixture after
+account alignment. One Mac-origin no-tools turn and one remote-claw-browser-origin no-tools turn
+appeared once in the Mac app, native TUI, and two independent phone-layout/desktop viewers. Native
+transcript counts were one user and one exact assistant reply per marker; both viewers retained those
+counts after reload. Existing Manual-mode settings were unchanged. The native TUI and temporary test
+services were restarted after a roughly fourteen-hour pause; this is bounded text coexistence, not
+uninterrupted survival or native-process recovery qualification. It does not repeat the prior
+approval/question/image/interrupt checks in the Mac UI. Private evidence:
+`/home/ubuntu/remote-claw-ui-artifacts/native-final-2026-09-26.rDZlFW/README.md`.
 
 The focused transport regression catches the missing header without a provider run and verifies
 that history, streams, controls and message content cannot select it. A small real-native sentinel
@@ -375,6 +385,18 @@ image/interrupt/approval/question UI, or process cancellation. Historical 0.151.
 their original scope. Evidence is outside Git under
 `/home/ubuntu/remote-claw-ui-artifacts/codex-native-0.154-2026-09-24.DXrrEN/` and
 `/home/ubuntu/remote-claw-ui-artifacts/codex-native-154-image-interrupt-2026-09-25.QEwazh/`.
+
+**Native Android Remote follow-up — 2026-09-26.** Exact Codex 0.154.0/Linux arm64 through the managed
+Unix socket passed a bounded text check with the actual ChatGPT Android app on a physical Moto G
+2025/Android 15. Normal native pairing connected the phone directly to the EC2 host. One morning
+phone-origin no-tools turn backfilled once into two fresh phone-layout/desktop remote-claw viewers;
+one evening browser-origin no-tools turn then appeared once in both viewers, the physical app, native
+TUI, and canonical history. Reloading both viewers retained one user and one exact assistant reply
+per marker. The native TUI and temporary test services were restarted across a roughly fourteen-hour
+pause, so this does not qualify uninterrupted survival or mobile-app/native-process recovery. The
+seed's preexisting full-access policy was unchanged; no tool, approval, or question acceptance is
+claimed by this text-only follow-up. Private evidence:
+`/home/ubuntu/remote-claw-ui-artifacts/native-final-2026-09-26.rDZlFW/README.md`.
 
 ### Daily-use recovery warning
 
