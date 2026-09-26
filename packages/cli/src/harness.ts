@@ -11,6 +11,103 @@ export function hasClaudeNativeReferences(text: string): boolean {
   );
 }
 
+/** Captured Claude file decisions only. Large or unfamiliar edits remain native-owned. */
+export type NativeFileInput =
+  | { tool: "Read"; input: { file_path: string } }
+  | { tool: "Write"; input: { file_path: string; content: string } }
+  | {
+      tool: "Edit";
+      input: { file_path: string; old_string: string; new_string: string; replace_all: false };
+    };
+
+export function parseNativeFileInput(tool: unknown, raw: unknown): NativeFileInput | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const input = raw as Record<string, unknown>;
+  if (
+    typeof input.file_path !== "string" ||
+    input.file_path.trim() === "" ||
+    input.file_path.length > 4096 ||
+    /[\p{Cc}\p{Cf}]/u.test(input.file_path)
+  )
+    return null;
+  const keys = Object.keys(input);
+  const exact = (allowed: readonly string[]) =>
+    keys.length === allowed.length && keys.every((key) => allowed.includes(key));
+  let result: NativeFileInput;
+  if (tool === "Read" && exact(["file_path"])) {
+    result = { tool, input: { file_path: input.file_path } };
+  } else if (
+    tool === "Write" &&
+    exact(["file_path", "content"]) &&
+    typeof input.content === "string"
+  ) {
+    result = { tool, input: { file_path: input.file_path, content: input.content } };
+  } else if (
+    tool === "Edit" &&
+    exact(["file_path", "old_string", "new_string", "replace_all"]) &&
+    typeof input.old_string === "string" &&
+    input.old_string !== "" &&
+    typeof input.new_string === "string" &&
+    input.replace_all === false
+  ) {
+    result = {
+      tool,
+      input: {
+        file_path: input.file_path,
+        old_string: input.old_string,
+        new_string: input.new_string,
+        replace_all: false,
+      },
+    };
+  } else return null;
+  return new TextEncoder().encode(JSON.stringify(result.input)).byteLength <= 32 * 1024
+    ? result
+    : null;
+}
+
+export interface NativePatchInput {
+  changes: { path: string; operation: "add" | "delete" | "update"; diff: string }[];
+}
+
+/** Complete, bounded native patch previews only; never turn an omitted diff into an approval. */
+export function parseNativePatchInput(raw: unknown): NativePatchInput | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const input = raw as Record<string, unknown>;
+  if (
+    Object.keys(input).length !== 1 ||
+    !Array.isArray(input.changes) ||
+    input.changes.length < 1 ||
+    input.changes.length > 20
+  )
+    return null;
+  const changes: NativePatchInput["changes"] = [];
+  const paths = new Set<string>();
+  for (const rawChange of input.changes) {
+    if (typeof rawChange !== "object" || rawChange === null || Array.isArray(rawChange))
+      return null;
+    const change = rawChange as Record<string, unknown>;
+    if (
+      Object.keys(change).length !== 3 ||
+      !Object.keys(change).every((key) => ["path", "operation", "diff"].includes(key)) ||
+      typeof change.path !== "string" ||
+      change.path.length > 4096 ||
+      /[\p{Cc}\p{Cf}]/u.test(change.path) ||
+      !/^(?:\/|[a-zA-Z]:[\\/]|\\\\)/.test(change.path) ||
+      paths.has(change.path) ||
+      (change.operation !== "add" &&
+        change.operation !== "delete" &&
+        change.operation !== "update") ||
+      typeof change.diff !== "string" ||
+      (change.operation === "update" && change.diff === "")
+    )
+      return null;
+    paths.add(change.path);
+    changes.push({ path: change.path, operation: change.operation, diff: change.diff });
+  }
+  const result = { changes };
+  return new TextEncoder().encode(JSON.stringify(result)).byteLength <= 32 * 1024 ? result : null;
+}
+
 export interface ControlCapabilities {
   interrupt: boolean;
   setModel: boolean;

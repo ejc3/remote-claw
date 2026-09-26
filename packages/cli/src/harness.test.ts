@@ -5,11 +5,77 @@ import {
   harnessPolicy,
   hasClaudeNativeReferences,
   parseHarnessDescriptor,
+  parseNativeFileInput,
+  parseNativePatchInput,
   UNKNOWN_HARNESS,
 } from "./harness.js";
 import { MITM_CAPABILITIES, STABLE_MITM_CAPABILITIES } from "./host/rc/driver.js";
 
 describe("shared harness contract", () => {
+  it("copies bounded native patches without losing paths or diff tails", () => {
+    const input = { changes: [{ path: "/tmp/a", operation: "update", diff: "-before\n+after" }] };
+    const parsed = parseNativePatchInput(input);
+    const first = input.changes[0];
+    if (first) first.diff = "changed";
+    expect(parsed?.changes[0]?.diff).toBe("-before\n+after");
+    expect(
+      parseNativePatchInput({ changes: [{ path: "C:\\work\\empty", operation: "add", diff: "" }] }),
+    ).not.toBeNull();
+  });
+
+  it("rejects ambiguous, oversized, or incomplete patch projections", () => {
+    const change = { path: "/tmp/a", operation: "update", diff: "-a\n+b" };
+    for (const input of [
+      { changes: [] },
+      { changes: [change], grantRoot: "/" },
+      { changes: [change, change] },
+      { changes: [{ ...change, path: "relative" }] },
+      { changes: [{ ...change, path: "/tmp/hidden\u202Etxt" }] },
+      { changes: [{ ...change, operation: "move" }] },
+      { changes: [{ ...change, move_path: "/tmp/b" }] },
+      { changes: [{ ...change, diff: "" }] },
+      { changes: [{ ...change, diff: "🔥".repeat(8192) }] },
+      { changes: Array.from({ length: 21 }, (_, i) => ({ ...change, path: `/tmp/${i}` })) },
+    ])
+      expect(parseNativePatchInput(input)).toBeNull();
+  });
+
+  it("copies only exact captured native file inputs", () => {
+    const input = { file_path: "/tmp/scratch.txt", content: "" };
+    const parsed = parseNativeFileInput("Write", input);
+    input.content = "later rewrite";
+    expect(parsed).toEqual({
+      tool: "Write",
+      input: { file_path: "/tmp/scratch.txt", content: "" },
+    });
+    expect(parseNativeFileInput("Read", { file_path: "/tmp/scratch.txt" })?.tool).toBe("Read");
+    expect(
+      parseNativeFileInput("Edit", {
+        file_path: "/tmp/scratch.txt",
+        old_string: " ",
+        new_string: "",
+        replace_all: false,
+      })?.tool,
+    ).toBe("Edit");
+  });
+
+  it("keeps unsupported file shapes and oversized UTF-8 details native-owned", () => {
+    for (const [tool, input] of [
+      ["Read", { file_path: "/tmp/file", offset: 1 }],
+      ["Write", { file_path: "/tmp/file", content: "ok", updatedPermissions: [] }],
+      ["Write", { file_path: "/tmp/file", content: "🔥".repeat(8192) }],
+      ["Write", { file_path: " ", content: "ok" }],
+      ["Read", { file_path: "/tmp/hidden\nfile" }],
+      ["Read", { file_path: "/tmp/hidden\u202Etxt" }],
+      ["Edit", { file_path: "/tmp/file", old_string: "a", new_string: "b", replace_all: true }],
+      ["Edit", { file_path: "/tmp/file", old_string: "", new_string: "b", replace_all: false }],
+      ["Other", { file_path: "/tmp/file" }],
+    ])
+      expect(parseNativeFileInput(tool, input)).toBeNull();
+    expect(
+      parseNativeFileInput("Write", { file_path: "/tmp/file", content: "a".repeat(32000) })?.tool,
+    ).toBe("Write");
+  });
   it("reserves pinned Claude native reference grammar without blocking ordinary emails", () => {
     for (const text of [
       '@"/outside/file with spaces.txt"',

@@ -66,6 +66,43 @@ function request(kind: "question" | "bash" = "question"): AnthropicRcEvent {
   });
 }
 
+function fileRequest(tool: "Read" | "Write" | "Edit"): AnthropicRcEvent {
+  const native = request("bash");
+  const input = {
+    Read: { file_path: "/tmp/owned/file.txt" },
+    Write: { file_path: "/tmp/owned/file.txt", content: "color=blue\n" },
+    Edit: {
+      file_path: "/tmp/owned/file.txt",
+      old_string: "color=blue",
+      new_string: "color=green",
+      replace_all: false,
+    },
+  }[tool];
+  (native.payload as Record<string, unknown>).request = {
+    subtype: "can_use_tool",
+    tool_name: tool,
+    display_name: tool,
+    description: "/tmp/owned/file.txt",
+    tool_use_id: "native-tool",
+    input,
+    permission_suggestions:
+      tool === "Read"
+        ? [
+            {
+              type: "addRules",
+              destination: "session",
+              behavior: "allow",
+              rules: [{ toolName: "Read", ruleContent: "/tmp/owned/**" }],
+            },
+          ]
+        : [
+            { type: "setMode", mode: "acceptEdits", destination: "session" },
+            { type: "addDirectories", directories: ["/tmp/owned"], destination: "session" },
+          ],
+  };
+  return native;
+}
+
 function completion(
   toolUseId = "native-tool",
   sessionId = NATIVE,
@@ -152,6 +189,140 @@ function commandAnswer(session: Session, behavior: unknown = "allow"): Record<st
 }
 
 describe("Claude native controls", () => {
+  it.each([
+    "Read",
+    "Write",
+    "Edit",
+  ] as const)("projects complete $tool file input and preserves one-time authority", async (tool) => {
+    for (const behavior of ["allow", "deny"] as const) {
+      const h = setup();
+      const native = fileRequest(tool);
+      const nativeRequest = native.payload.request as { input: Record<string, unknown> };
+      const original = structuredClone(nativeRequest.input);
+      h.controls.observe(native, true);
+      const frame = h.session.snapshotUpstream()[0]?.payload;
+      expect(frame?.request_id).not.toBe("native-request");
+      expect(frame?.request).toEqual({
+        subtype: "can_use_tool",
+        tool_name: tool,
+        input: { nativeFile: true, ...original },
+      });
+      nativeRequest.input.file_path = "/forged-native-mutation";
+      const answer = commandAnswer(h.session, behavior);
+      await h.controls.respond(answer, new AbortController().signal);
+      await h.controls.respond(answer, new AbortController().signal);
+      expect(h.commandPost).toHaveBeenCalledExactlyOnceWith(
+        NATIVE,
+        {
+          uuid: expect.any(String),
+          requestId: "native-request",
+          toolUseId: "native-tool",
+          toolName: tool,
+          behavior,
+          ...(behavior === "allow" ? { input: original } : {}),
+        },
+        { signal: expect.any(AbortSignal) },
+      );
+      expect(h.post).not.toHaveBeenCalled();
+      expect(h.controls.pending).toBe(true);
+      h.controls.observe(completion(), true);
+      expect(h.controls.pending).toBe(false);
+      expect(h.session.snapshotUpstream()[1]?.payload).toEqual({
+        type: "control_cancel_request",
+        request_id: frame?.request_id,
+      });
+      h.controls.observe(fileRequest(tool), true);
+      await h.controls.respond(answer, new AbortController().signal);
+      expect(h.commandPost).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("keeps historical file decisions native-owned and consumes peer decisions without guessing a winner", async () => {
+    const history = setup();
+    history.controls.observe(fileRequest("Read"), false);
+    history.controls.observe(fileRequest("Read"), true);
+    expect(history.session.snapshotUpstream()).toEqual([]);
+    const peer = setup();
+    peer.controls.observe(fileRequest("Write"), true);
+    peer.controls.observe(
+      event(
+        "control_response",
+        {
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: "native-request",
+            response: {
+              behavior: "allow",
+              updatedPermissions: [{ type: "setMode", mode: "acceptEdits" }],
+            },
+          },
+        },
+        "client",
+      ),
+      true,
+    );
+    await peer.controls.respond(commandAnswer(peer.session), new AbortController().signal);
+    expect(peer.commandPost).not.toHaveBeenCalled();
+    expect(peer.controls.pending).toBe(true);
+    peer.controls.observe(completion(), true);
+    expect(peer.controls.pending).toBe(false);
+  });
+
+  it("consumes a file decision before an ambiguous write and never retries", async () => {
+    const h = setup();
+    h.commandPost.mockRejectedValueOnce(new Error("ambiguous"));
+    h.controls.observe(fileRequest("Edit"), true);
+    const input = commandAnswer(h.session);
+    await expect(h.controls.respond(input, new AbortController().signal)).rejects.toThrow(
+      "ambiguous",
+    );
+    await h.controls.respond(input, new AbortController().signal);
+    expect(h.commandPost).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { input: { content: "é".repeat(16_384) } },
+    { input: { unknown: "unreviewed" } },
+    { request: { display_name: "Different action" } },
+    { request: { description: "" } },
+    { request: { blocked_path: "/unqualified" } },
+    { request: { permission_suggestions: null } },
+    {
+      request: {
+        permission_suggestions: [
+          { type: "setMode", mode: "bypassPermissions", destination: "session" },
+        ],
+      },
+    },
+    {
+      request: {
+        permission_suggestions: [
+          { type: "setMode", mode: "acceptEdits", destination: "localSettings" },
+        ],
+      },
+    },
+    {
+      request: {
+        permission_suggestions: [
+          { type: "addDirectories", directories: ["x".repeat(8193)], destination: "session" },
+        ],
+      },
+    },
+  ])("keeps incomplete, unqualified, or oversized file approvals native-owned %#", (extra) => {
+    const h = setup();
+    const native = fileRequest("Write");
+    const original = native.payload.request as { input: Record<string, unknown> };
+    (native.payload as Record<string, unknown>).request = {
+      ...original,
+      ...extra.request,
+      input: { ...original.input, ...extra.input },
+    };
+    h.controls.observe(native, true);
+    expect(h.session.snapshotUpstream()).toEqual([]);
+    expect(h.controls.pending).toBe(false);
+  });
+
   it("binds four opaque question IDs to the retained native input and exact answer shapes", async () => {
     const h = setup();
     const native = request();

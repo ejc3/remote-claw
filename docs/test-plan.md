@@ -109,6 +109,16 @@ terminal-before-items metadata, no partial final identity, one-shot repair, immu
 approval responsiveness, and abort cleanup. The separate [0.154.0 active-attach run](release-finish-line.md#codex-active-turn-attachment--2026-09-26)
 checks the real metadata/filter APIs and two-viewer reload without adding a timing-heavy CI matrix.
 
+The [native file-approval slice](release-finish-line.md#native-file-approvals) adds shared parser tests
+in `harness.test.ts`, Claude client/control tests, and Codex client/`file-approvals.test.ts`/driver tests.
+These own copied-input bounds, complete-path/content/diff display contracts, unsupported-shape
+rejection, immutable native callbacks, one attempt, native-peer resolution, and history/stream-loss
+non-authority. `apps/web/test/native-file-permissions.test.ts` owns malformed-card fallback and complete
+previews; the existing transcript browser sentinel owns phone/desktop interaction and pending/resolved
+rendering. Actual native acceptance checks provider wire/PTY wiring and the resulting scratch file,
+not a duplicate exhaustive input matrix. Add/delete/multiple-file variants are not live-qualified
+merely because their parser tests pass.
+
 ## 4. Pull-request CI
 
 CI is path-scoped. A change should run the jobs that own its changed surface:

@@ -36,6 +36,7 @@ export type SeedHost = (opts?: {
   /** Script only the provider leg for file/photo sends, through the production Session/relay. */
   attachmentEcho?: boolean;
   perm?: boolean;
+  fileApproval?: "claude" | "codex";
   /** Inject an AskUserQuestion gate (#42): true = a single-select question; "multi" = a multiSelect
    *  question (exercises the picked-labels + appended-freeform array branch). */
   askq?: boolean | "multi";
@@ -68,6 +69,7 @@ function spawnHost(opts: {
   pass?: string;
   title?: string;
   perm?: boolean;
+  fileApproval?: "claude" | "codex";
   askq?: boolean | "multi";
   caps?: string;
   harness?: string;
@@ -83,6 +85,7 @@ function spawnHost(opts: {
     RC_E2E_PASS: opts.pass ?? "",
     RC_E2E_TITLE: opts.title ?? "rc box",
     RC_E2E_PERM: opts.perm ? "1" : "",
+    RC_E2E_FILE_APPROVAL: opts.fileApproval ?? "",
     RC_E2E_ASKQ: opts.askq === "multi" ? "multi" : opts.askq ? "1" : "",
     RC_E2E_CAPS: opts.caps ?? "",
     RC_E2E_HARNESS: opts.harness ?? "",
