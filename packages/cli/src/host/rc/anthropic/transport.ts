@@ -124,6 +124,12 @@ export class OAuthAnthropicRcTransport implements AnthropicRcTransport {
       authorization: `Bearer ${accessToken}`,
     };
     if (request.body !== undefined) headers["content-type"] = "application/json";
+    // postEvent carries authenticated viewer input, not native peer observations. CCR derives
+    // client_platform from this header; retain web-user ingress without rewriting its server-owned
+    // inbound_origin or changing native tool permissions. The viewer cannot choose this value.
+    if (request.operation === "postEvent" && request.method === "POST") {
+      headers["anthropic-client-platform"] = "web_claude_ai";
+    }
 
     try {
       return await this.#fetch(url, {

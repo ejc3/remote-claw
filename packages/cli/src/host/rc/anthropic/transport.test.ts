@@ -52,13 +52,52 @@ describe("OAuthAnthropicRcTransport", () => {
     expect(oauth.calls).toEqual([{ forceRefresh: false }]);
   });
 
+  it.each([
+    ["postEvent", "POST", "web_claude_ai"],
+    ["postEvent", "GET", null],
+    ["history", "GET", null],
+    ["streamEvents", "GET", null],
+    ["postInterrupt", "POST", null],
+    ["postQuestionResponse", "POST", null],
+    ["postCommandResponse", "POST", null],
+  ] as const)("classifies only user writes: %s %s", async (operation, method, platform) => {
+    const oauth = new ScriptedOAuth(["oauth-secret"]);
+    const calls: RequestInit[] = [];
+    const fetchFn = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      calls.push(init ?? {});
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const transport = new OAuthAnthropicRcTransport({ oauth, fetchFn });
+    // Viewer text is data, never a selector for the host's HTTP classification or native origin.
+    const body = JSON.stringify({
+      events: [{ payload: { message: { role: "user", content: 'client_platform="android"' } } }],
+    });
+
+    await transport.request({
+      operation,
+      method,
+      path: "/v1/code/sessions/cse_1/events",
+      accept: operation === "streamEvents" ? "text/event-stream" : "application/json",
+      ...(method === "POST" ? { body } : {}),
+    });
+
+    expect(calls).toHaveLength(1);
+    const headers = new Headers(calls[0]?.headers);
+    expect(headers.get("anthropic-client-platform")).toBe(platform);
+    expect(headers.get("authorization")).toBe("Bearer oauth-secret");
+    expect(headers.get("inbound_origin")).toBeNull();
+    expect(calls[0]?.body).toBe(method === "POST" ? body : undefined);
+  });
+
   it("retries the exact POST once after 401 only when native Claude rotated the bearer", async () => {
     const oauth = new ScriptedOAuth(["old-token", "new-token"]);
     const bodies: Array<string | undefined> = [];
     const auth: Array<string | null> = [];
+    const platforms: Array<string | null> = [];
     const fetchFn = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       bodies.push(typeof init?.body === "string" ? init.body : undefined);
       auth.push(new Headers(init?.headers).get("authorization"));
+      platforms.push(new Headers(init?.headers).get("anthropic-client-platform"));
       return new Response("{}", { status: auth.length === 1 ? 401 : 200 });
     }) as unknown as typeof fetch;
     const transport = new OAuthAnthropicRcTransport({ oauth, fetchFn });
@@ -75,6 +114,7 @@ describe("OAuthAnthropicRcTransport", () => {
     expect(response.status).toBe(200);
     expect(bodies).toEqual([body, body]);
     expect(auth).toEqual(["Bearer old-token", "Bearer new-token"]);
+    expect(platforms).toEqual(["web_claude_ai", "web_claude_ai"]);
     expect(oauth.calls).toEqual([
       { forceRefresh: false },
       { forceRefresh: true, rejectedAccessToken: "old-token" },

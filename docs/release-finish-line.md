@@ -313,6 +313,34 @@ claim other Bash input shapes, other tools, startup/reconnect authority, physica
 transport or general approval parity. Evidence remains outside Git under
 `/home/ubuntu/remote-claw-ui-artifacts/claude-native-approval-capture-2026-09-25.pM3qoc/companion-acceptance.x8wLEP/LIVE-ACCEPTANCE.md`.
 
+### Claude-native human input — 2026-09-26
+
+**Implemented; bounded native/browser acceptance passed 2026-09-26.** Physical Android testing found a
+real ingress defect: a browser message reached native Claude as a peer-agent request, and a harmless
+command was refused before any permission prompt existed. That was not a failure of the approval
+card, nor did native-origin approval success establish browser-input parity.
+
+The correction adds one host-owned client-class header on user-event POSTs only, under the
+[protocol boundary](protocol.md#5-session-and-the-relay). A header-only experiment on exact Claude
+2.1.237/Linux arm64/Sonnet 4.6 produced ordinary `origin.kind: human` input and one exact reply.
+A subsequent harmless command waited at the existing native permission gate; Deny on the physical
+Android app produced native rejection without execution or retry. No native settings, OAuth
+ownership, session targeting, peer envelopes, or ambiguous-write retry rules changed.
+
+The complete encrypted browser path then passed: a physical Android Chrome prompt reached the native
+transcript as human input, and Allow in the independent desktop viewer ran its harmless `printf`
+exactly once. Its following single-choice question appeared in the official Android app and the
+viewer; Skip in the native app resolved the viewer neutrally, and reload did not reopen either
+decision. This adds an actual Android-app observation, not new browser Skip support or a claim about
+all permission/form kinds. The actual Mac app's same-fixture pass remains pending while macOS is locked.
+
+The focused transport regression catches the missing header without a provider run and verifies
+that history, streams, controls and message content cannot select it. A small real-native sentinel
+is still needed to qualify the provider's classification; a mock cannot establish that behavior.
+Private evidence: `/home/ubuntu/remote-claw-ui-artifacts/claude-finish-2026-09-26.nM0JIC/README.md`.
+This correction does not claim broader permissions/forms, general files/previews,
+streaming/status/tasks, model/mode controls, or complete final feature parity.
+
 ### Codex current-version acceptance
 
 **Implemented; bounded acceptance passed 2026-09-25.** The implementation admits exact 0.154.0/Linux arm64
