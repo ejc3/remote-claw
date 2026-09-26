@@ -7,6 +7,45 @@ import { expect, test } from "./fixtures";
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 
+// Result margins add to the flex gap and neighboring message margins; they do not collapse.
+test("completed turns keep compact spacing on phone and desktop", async ({ page, seedHost }) => {
+  const { pass } = await seedHost({ profile: "smoke" });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect" }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  const answer = page.locator(".prose.assistant", { hasText: "Deployed broker smoke is ready." });
+  const separator = page.locator(".turn-sep");
+  await expect(answer).toBeVisible();
+  await expect(separator).toHaveCount(1);
+  await page.getByRole("textbox", { name: "Message" }).fill("Continue please");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  const nextTurn = page.locator(".row-user", { hasText: "Continue please" });
+  await expect(nextTurn.locator('.delivery-status[data-state="received"]')).toBeVisible();
+
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    const answerBox = await answer.boundingBox();
+    const separatorBox = await separator.boundingBox();
+    const nextBox = await nextTurn.boundingBox();
+    expect(answerBox).not.toBeNull();
+    expect(separatorBox).not.toBeNull();
+    expect(nextBox).not.toBeNull();
+    const answerBottom = answerBox!.y + answerBox!.height;
+    // A finished short answer must not acquire a large empty tail from its result marker.
+    expect(separatorBox!.y + separatorBox!.height - answerBottom).toBeLessThanOrEqual(26);
+    const turnGap = nextBox!.y - answerBottom;
+    expect(turnGap, `completed-to-next-turn gap at ${width}px`).toBeLessThanOrEqual(52);
+    expect(turnGap).toBeGreaterThan(0);
+    await test.info().attach(`turn-spacing-${width}.json`, {
+      body: JSON.stringify({ width, turnGap, answerToSeparator: separatorBox!.y - answerBottom }),
+      contentType: "application/json",
+    });
+    await page.locator("section.chat").screenshot({
+      path: test.info().outputPath(`turn-spacing-${width}.png`),
+    });
+  }
+});
+
 // Session navigation used to unmount the only owner of unsent text and images. Keep this one browser
 // sentinel: the real keyed component lifecycle and object-URL preview cannot be proved by SSR helpers.
 test("unsent drafts stay isolated through mobile Back and desktop session switching", async ({

@@ -653,7 +653,7 @@ summary:focus-visible,
 .turn-sep {
   height: 1px;
   background: linear-gradient(90deg, transparent, var(--line-soft) 18%, var(--line-soft) 82%, transparent);
-  margin: 20px 6%;
+  margin: 8px 6%;
   border: 0;
 }
 
