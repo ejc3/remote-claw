@@ -17,6 +17,7 @@ import {
   type CodexResumeResult,
   type CodexServerRequest,
   type CodexThreadItem,
+  type CodexTurnMetadataPage,
 } from "./client.js";
 import { CodexDriver } from "./driver.js";
 import type { CodexSettingsUpdate } from "./settings.js";
@@ -181,6 +182,13 @@ class FakeCodexClient implements CodexClient {
   };
   pages: CodexItemsPage[] = [{ data: [], nextCursor: null }];
   turnPages: CodexItemsPage[] = [{ data: [], nextCursor: null }];
+  metadataPages: CodexTurnMetadataPage[] | null = null;
+  readonly metadataCalls: Array<{ threadId: string; cursor: string | undefined }> = [];
+  readonly repairCalls: Array<{ threadId: string; cursor: string | undefined; turnId: string }> =
+    [];
+  readonly repairPages = new Map<string, CodexItemsPage[]>();
+  repairBarrier: Promise<void> | null = null;
+  repairError: Error | null = null;
   historyBarrier: Promise<void> | null = null;
   readonly buffered: CodexInbound[] = [];
   readonly #live: CodexInbound[] = [];
@@ -224,7 +232,41 @@ class FakeCodexClient implements CodexClient {
     if (this.settingsError !== null) throw this.settingsError;
   }
 
-  async listItems(threadId: string, cursor: string | undefined): Promise<CodexItemsPage> {
+  async listTurnMetadata(
+    threadId: string,
+    cursor: string | undefined,
+  ): Promise<CodexTurnMetadataPage> {
+    this.metadataCalls.push({ threadId, cursor });
+    if (this.metadataPages !== null) {
+      const page =
+        this.metadataPages[Math.min(this.metadataCalls.length - 1, this.metadataPages.length - 1)];
+      if (!page) throw new Error("missing fake metadata page");
+      return structuredClone(page);
+    }
+    const ids = [...new Set(this.pages.flatMap((page) => page.data.map((entry) => entry.turnId)))];
+    const offset = Number(cursor ?? 0);
+    return {
+      data: ids.slice(offset, offset + 100).map((id) => ({ id, status: "completed" })),
+      nextCursor: offset + 100 < ids.length ? String(offset + 100) : null,
+    };
+  }
+
+  async listItems(
+    threadId: string,
+    cursor: string | undefined,
+    _signal?: AbortSignal,
+    turnId?: string,
+  ): Promise<CodexItemsPage> {
+    if (turnId !== undefined) {
+      this.repairCalls.push({ threadId, cursor, turnId });
+      if (this.repairBarrier !== null) await this.repairBarrier;
+      if (this.repairError !== null) throw this.repairError;
+      const pages = this.repairPages.get(turnId) ?? [{ data: [], nextCursor: null }];
+      const index = this.repairCalls.filter((call) => call.turnId === turnId).length - 1;
+      const page = pages[Math.min(index, pages.length - 1)];
+      if (!page) throw new Error("missing fake repair page");
+      return structuredClone(page);
+    }
     this.listCalls.push({ threadId, cursor });
     if (this.historyBarrier !== null) await this.historyBarrier;
     const page = this.pages[Math.min(this.listCalls.length - 1, this.pages.length - 1)];
@@ -237,7 +279,10 @@ class FakeCodexClient implements CodexClient {
     if (this.historyBarrier !== null) await this.historyBarrier;
     const page = this.turnPages[Math.min(this.turnListCalls.length - 1, this.turnPages.length - 1)];
     if (page === undefined) throw new Error("missing fake turn page");
-    return structuredClone(page);
+    return structuredClone({
+      ...page,
+      data: page.data.map((entry) => ({ turnStatus: "completed" as const, ...entry })),
+    });
   }
 
   async startTurn(
@@ -857,6 +902,362 @@ describe("Codex native-confirmed settings", () => {
     } finally {
       pending.resolve();
       await stop(launched.ac, launched.run);
+    }
+  });
+});
+
+describe("Codex active-history finality", () => {
+  function activeHistory(legacy = false): FakeCodexClient {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    client.resumeResult.thread.status = { type: "active" };
+    client.resumeResult.thread.historyMode = legacy ? "legacy" : "paginated";
+    client.metadataPages = [{ data: [{ id: "turn-1", status: "inProgress" }], nextCursor: null }];
+    const data = [
+      {
+        turnId: "turn-1",
+        item: userItem("user-1", "original input"),
+        turnStatus: "inProgress" as const,
+      },
+      {
+        turnId: "turn-1",
+        item: assistantItem("answer", "part"),
+        turnStatus: "inProgress" as const,
+      },
+    ];
+    client.pages = [{ data, nextCursor: null }];
+    client.turnPages = [{ data, nextCursor: null }];
+    return client;
+  }
+
+  function terminal(
+    status: unknown = "completed",
+    turnId = "turn-1",
+    threadId = THREAD_ID,
+  ): CodexInbound {
+    return {
+      kind: "notification",
+      value: {
+        method: "turn/completed",
+        params: { threadId, turn: { id: turnId, status, items: [] } },
+      },
+    };
+  }
+
+  it.each([
+    "metadata-cycle",
+    "metadata-count",
+    "deferred-count",
+  ])("bounds startup %s before publishing presence", async (failure) => {
+    const client = activeHistory();
+    if (failure === "metadata-cycle")
+      client.metadataPages = [
+        { data: [{ id: "turn-1", status: "inProgress" }], nextCursor: "same-cursor" },
+        { data: [], nextCursor: "same-cursor" },
+      ];
+    else if (failure === "metadata-count")
+      client.metadataPages = [
+        {
+          data: Array.from({ length: 100_001 }, (_, i) => ({
+            id: `turn-${i}`,
+            status: "completed",
+          })),
+          nextCursor: null,
+        },
+      ];
+    else {
+      client.metadataPages = [{ data: [], nextCursor: null }];
+      client.pages = [
+        {
+          data: Array.from({ length: 100_001 }, (_, i) => ({
+            turnId: `turn-${i}`,
+            item: assistantItem("partial", "partial"),
+          })),
+          nextCursor: null,
+        },
+      ];
+    }
+    const broker = new FakeDurableBroker();
+    const ctx = await context(broker, () => {});
+    const controller = new AbortController();
+    try {
+      const driver = new CodexDriver(ctx, {
+        url: "ws://127.0.0.1:4500",
+        threadId: THREAD_ID,
+        client,
+        runtime: { platform: "linux", arch: "arm64" },
+      });
+      await expect(driver.run(controller.signal)).resolves.toBe(1);
+      expect(broker.posts.some((post) => post.recordKind === "session_announce")).toBe(false);
+      expect(client.startCalls).toEqual([]);
+      expect(client.closeCalls).toBe(1);
+    } finally {
+      controller.abort();
+    }
+  });
+
+  it.each([
+    false,
+    true,
+  ])("defers partial history but retains the changed-FINAL fence (legacy=%s)", async (legacy) => {
+    const client = activeHistory(legacy);
+    const launched = await start(client);
+    try {
+      expect(upstream(launched.session, "user")).toHaveLength(1);
+      expect(upstream(launched.session, "assistant")).toEqual([]);
+      client.emit(completed(assistantItem("answer", "partial finished")));
+      await waitFor(() => upstream(launched.session, "assistant").length === 1);
+      expect(upstream(launched.session, "assistant")[0]).toMatchObject({
+        message: { content: [{ text: "partial finished" }] },
+      });
+      client.emit(completed(assistantItem("answer", "partial finished")));
+      client.emit(completed(assistantItem("barrier", "next item")));
+      await waitFor(() => upstream(launched.session, "assistant").length === 2);
+      expect(launched.session.closed).toBe(false);
+      client.emit(completed(assistantItem("answer", "different final bytes")));
+      await expect(within(launched.run)).resolves.toBe(1);
+      expect(launched.session.closed).toBe(true);
+      expect(client.externalThreadRunning).toBe(true);
+      if (legacy) expect(client.metadataCalls).toEqual([]);
+    } finally {
+      launched.ac.abort();
+      await launched.run;
+    }
+  });
+
+  it("does not mistake a turn appearing after metadata for final just because resume was idle", async () => {
+    const client = activeHistory();
+    client.resumeResult.thread.status = { type: "idle" };
+    client.metadataPages = [{ data: [{ id: "old", status: "completed" }], nextCursor: null }];
+    client.pages = [
+      {
+        data: [
+          { turnId: "old", item: assistantItem("old-answer", "finished") },
+          { turnId: "new", item: assistantItem("new-answer", "still writing") },
+        ],
+        nextCursor: null,
+      },
+    ];
+    const launched = await start(client);
+    try {
+      expect(upstream(launched.session, "assistant").map((item) => item.uuid)).toEqual([
+        coordinate("old", "old-answer"),
+      ]);
+      client.emit(completed(assistantItem("new-answer", "now finished"), THREAD_ID, "new"));
+      await waitFor(() => upstream(launched.session, "assistant").length === 2);
+      expect(launched.session.closed).toBe(false);
+    } finally {
+      launched.ac.abort();
+      await launched.run;
+    }
+  });
+
+  it("repairs startup-deferred text once, even with terminal/final notifications buffered before capture starts", async () => {
+    const client = activeHistory();
+    client.buffered.push(terminal(), completed(assistantItem("answer", "final answer")));
+    client.repairPages.set("turn-1", [
+      {
+        data: [
+          { turnId: "turn-1", item: assistantItem("earlier", "completed before attachment") },
+          { turnId: "turn-1", item: assistantItem("answer", "final answer") },
+        ],
+        nextCursor: null,
+      },
+    ]);
+    const launched = await start(client);
+    try {
+      await waitFor(() => upstream(launched.session, "assistant").length === 2);
+      expect(JSON.stringify(upstream(launched.session, "assistant"))).not.toContain('"part"');
+      client.emit(terminal());
+      client.emit(terminal("completed", "unknown"));
+      client.emit(terminal("completed", "turn-1", OTHER_THREAD_ID));
+      client.emit(completed(assistantItem("barrier", "observed")));
+      await waitFor(() => upstream(launched.session, "assistant").length === 3);
+      expect(client.repairCalls).toEqual([
+        { threadId: THREAD_ID, cursor: undefined, turnId: "turn-1" },
+      ]);
+      expect(client.startCalls).toEqual([]);
+      expect(launched.session.workerStatus).toBe("running");
+    } finally {
+      launched.ac.abort();
+      await launched.run;
+    }
+  });
+
+  it("keeps native approvals and final-item capture responsive while repair reads wait; repair never opens IdleGate", async () => {
+    const client = activeHistory();
+    const barrier = deferred();
+    client.repairBarrier = barrier.promise;
+    client.repairPages.set("turn-1", [
+      {
+        data: [
+          { turnId: "turn-1", item: assistantItem("earlier", "completed before attachment") },
+          { turnId: "turn-1", item: assistantItem("answer", "final answer") },
+        ],
+        nextCursor: null,
+      },
+    ]);
+    const launched = await start(client);
+    try {
+      launched.session.pushUserInput("queued after repair");
+      client.emit(terminal());
+      await waitFor(() => client.repairCalls.length === 1);
+      const approval = commandApproval();
+      client.emit({ kind: "request", value: approval });
+      client.emit(completed(assistantItem("answer", "final answer")));
+      await waitFor(
+        () =>
+          upstream(launched.session, "control_request").length === 1 &&
+          upstream(launched.session, "assistant").length === 1,
+      );
+      launched.session.pushControlResponse(approvalViewerId(launched.session), "allow");
+      await waitFor(() => client.approvalCalls.length === 1);
+      expect(client.approvalCalls[0]).toEqual({ request: approval, decision: "accept" });
+      expect(client.startCalls).toEqual([]);
+      barrier.resolve();
+      await waitFor(() => upstream(launched.session, "assistant").length === 2);
+      expect(client.startCalls).toEqual([]);
+      expect(launched.session.workerStatus).toBe("running");
+      client.emit({
+        kind: "notification",
+        value: {
+          method: "thread/status/changed",
+          params: { threadId: THREAD_ID, status: { type: "idle" } },
+        },
+      });
+      await waitFor(() => client.startCalls.length === 1);
+      const call = client.startCalls[0];
+      if (!call) throw new Error("missing browser turn");
+      client.emit(
+        completed(userItem("queued-user", call.text, call.clientUserMessageId), THREAD_ID, "later"),
+      );
+      await waitFor(() => upstream(launched.session, "user").length === 2);
+    } finally {
+      barrier.resolve();
+      launched.ac.abort();
+      await launched.run;
+    }
+  });
+
+  it.each([
+    "completed",
+    "failed",
+    "interrupted",
+  ])("repairs legacy history on native %s without using the unsupported item pager", async (status) => {
+    const client = activeHistory(true);
+    const launched = await start(client);
+    try {
+      client.turnPages = [
+        {
+          data: [
+            {
+              turnId: "other",
+              item: assistantItem("other", "must not backfill a different turn"),
+              turnStatus: "completed",
+            },
+            {
+              turnId: "turn-1",
+              item: assistantItem("answer", "terminal text"),
+              turnStatus: status as "completed" | "failed" | "interrupted",
+            },
+          ],
+          nextCursor: null,
+        },
+      ];
+      client.emit(terminal(status));
+      await waitFor(() => upstream(launched.session, "assistant").length === 1);
+      expect(upstream(launched.session, "assistant")[0]?.uuid).toBe(coordinate("turn-1", "answer"));
+      expect(client.listCalls).toEqual([]);
+      expect(client.metadataCalls).toEqual([]);
+      expect(client.turnListCalls).toHaveLength(2);
+      expect(launched.session.workerStatus).toBe("running");
+    } finally {
+      launched.ac.abort();
+      await launched.run;
+    }
+  });
+
+  it.each([
+    "wrong-turn",
+    "read-failure",
+    "changed-final",
+    "in-progress-legacy",
+  ])("closes only the projection on %s repair failure without retry", async (failure) => {
+    const client = activeHistory(failure === "in-progress-legacy");
+    const launched = await start(client);
+    try {
+      if (failure === "read-failure")
+        client.repairError = new CodexAppServerError("repair read failed");
+      client.repairPages.set("turn-1", [
+        {
+          data: [
+            {
+              turnId: failure === "wrong-turn" ? "another" : "turn-1",
+              item: assistantItem("answer", "repair bytes"),
+            },
+          ],
+          nextCursor: null,
+        },
+      ]);
+      if (failure === "changed-final") {
+        client.emit(completed(assistantItem("answer", "already final bytes")));
+        await waitFor(() => upstream(launched.session, "assistant").length === 1);
+      }
+      client.emit(terminal());
+      await expect(within(launched.run)).resolves.toBe(1);
+      expect(launched.session.closed).toBe(true);
+      expect(client.startCalls).toEqual([]);
+      expect(client.externalThreadRunning).toBe(true);
+      expect(client.repairCalls).toHaveLength(failure === "in-progress-legacy" ? 0 : 1);
+    } finally {
+      launched.ac.abort();
+      await launched.run;
+    }
+  });
+
+  it.each([
+    undefined,
+    "inProgress",
+    "future-status",
+  ])("rejects malformed terminal status %s without treating it as final", async (status) => {
+    const client = activeHistory();
+    const launched = await start(client);
+    try {
+      const notification = terminal(status === undefined ? null : status);
+      client.emit(notification);
+      await expect(within(launched.run)).resolves.toBe(1);
+      expect(client.repairCalls).toEqual([]);
+      expect(upstream(launched.session, "assistant")).toEqual([]);
+    } finally {
+      launched.ac.abort();
+      await launched.run;
+    }
+  });
+
+  it("aborts a pending repair without admitting a late response or leaving a pump alive", async () => {
+    const client = activeHistory();
+    const barrier = deferred();
+    client.repairBarrier = barrier.promise;
+    client.repairPages.set("turn-1", [
+      {
+        data: [{ turnId: "turn-1", item: assistantItem("answer", "late response") }],
+        nextCursor: null,
+      },
+    ]);
+    const launched = await start(client);
+    try {
+      client.emit(terminal());
+      await waitFor(() => client.repairCalls.length === 1);
+      launched.ac.abort();
+      await expect(within(launched.run)).resolves.toBe(0);
+      barrier.resolve();
+      await Promise.resolve();
+      expect(upstream(launched.session, "assistant")).toEqual([]);
+      expect(client.closeCalls).toBe(1);
+    } finally {
+      barrier.resolve();
+      launched.ac.abort();
+      await launched.run;
     }
   });
 });

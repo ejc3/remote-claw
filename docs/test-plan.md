@@ -104,6 +104,11 @@ pnpm --filter @remote-claw/web run test:run
 | Deployed broker | <code>tests/web/app-e2e.preview.config.ts</code> | Exact deployed Preview, real network, default SQLite/Turso path |
 | Documentation | <code>tests/web/docs.spec.ts</code> plus Markdown render check | Navigation, mobile rendering, and no malformed lists |
 
+The Codex adapter tests additionally own [active-turn history](protocol.md#active-turn-history):
+terminal-before-items metadata, no partial final identity, one-shot repair, immutable final fencing,
+approval responsiveness, and abort cleanup. The separate [0.154.0 active-attach run](release-finish-line.md#codex-active-turn-attachment--2026-09-26)
+checks the real metadata/filter APIs and two-viewer reload without adding a timing-heavy CI matrix.
+
 ## 4. Pull-request CI
 
 CI is path-scoped. A change should run the jobs that own its changed surface:

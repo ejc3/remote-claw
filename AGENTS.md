@@ -135,7 +135,11 @@ reported `historyMode` selects bounded ascending `thread/items/list` for `pagina
 the raw scan is capped at 100,000 pages. The projection filters unsupported or unfinished shapes before the shared 10,000
 projected-native-item cap. Codex coordinates are `(turnId,itemId)`, and changed
 projected bytes at an already-seen coordinate fence the projection. The supported durable broker is
-SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Design lives in
+SQLite/libSQL (Turso in deployment); Vercel Workflows remains experimental. Historical assistant text
+requires native terminal-turn evidence; active/unknown turn text is deferred without consuming final
+identity, then recovered once after terminal observation without blocking approval capture or
+establishing idle. Recovered rows append rather than reorder. See
+[active-turn history](docs/protocol.md#active-turn-history). Design lives in
 `docs/v2-architecture.md`; the crypto core is `packages/clawsec`, the CLI is `packages/cli`.
 Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-architecture.md` §17.
 

@@ -501,6 +501,13 @@ retain user/assistant text and `commandExecution`; unsupported or unfinished sha
 the projection before the shared 10,000 native-item cap. The exact
 official-Remote M3b acceptance exercised the literal managed socket and this legacy full-turn reader.
 
+Assistant history additionally requires native terminal-turn evidence before admission. Active-turn
+text is deferred without consuming final identity, then a one-shot read repair recovers earlier
+completed text after native turn completion. Repair is independent of approval capture and never
+establishes idle; recovered rows append rather than reorder. See the precise
+[active-turn history boundary](protocol.md#active-turn-history) and separate
+[0.154.0 acceptance](release-finish-line.md#codex-active-turn-attachment--2026-09-26).
+
 ## 7. Safety rules for a driver change
 
 A driver change must preserve these current boundaries:

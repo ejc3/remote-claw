@@ -499,6 +499,31 @@ Private evidence: `/home/ubuntu/remote-claw-ui-artifacts/claude-finish-2026-09-2
 This correction does not claim broader permissions/forms, general files/previews,
 streaming/status/tasks, model/mode controls, or complete final feature parity.
 
+### Codex active-turn attachment — 2026-09-26
+
+**Implemented; bounded acceptance passed 2026-09-26.** Historical assistant text from an active or
+unknown turn cannot consume an immutable final-message identity. Paginated attachment reads terminal
+turn metadata before item history; legacy attachment retains each full turn's status. Live completed
+items remain authoritative. One terminal-triggered, read-only repair recovers earlier completed text
+from a turn deferred at startup, independently of approval capture and without releasing native idle.
+Changed final bytes still fence; earlier recovered rows append rather than reorder existing rows.
+
+The actual exact 0.154.0/Linux arm64/managed-Unix/paginated run attached a fresh companion and two
+independent phone/desktop viewers while the retained native TUI was executing a requested 15-second
+sleep. Native commentary completed before attachment was recovered once after terminal observation;
+the final answer appeared once. A later browser-origin turn completed, and all three assistant markers
+remained once in each viewer after reload. Only temporary companion/broker/browser helpers stopped;
+the original native thread, TUI, model, effort, and permissions were preserved.
+
+Focused adapter regressions own partial-history→final identity, changed-final fencing, a new turn
+appearing during paging, buffered terminal notifications, bounded/cycle-checked repair, wrong-turn
+data, duplicate terminal events, responsive approval capture during repair, and abort cleanup.
+The real run owns native metadata/filter API and multi-process wiring, not a duplicate timing matrix.
+Legacy filtering/repair is deterministic-test-covered, not a new live legacy recovery qualification.
+This does not claim token streaming, child-task lifecycle, or chronological insertion of repaired rows.
+Private evidence:
+`/home/ubuntu/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/native-history.SmGEM3/run-x5XAAV/`.
+
 ### Codex current-version acceptance
 
 **Implemented; bounded acceptance passed 2026-09-25.** The implementation admits exact 0.154.0/Linux arm64
