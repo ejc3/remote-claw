@@ -678,6 +678,10 @@ version. The built-in credential source is Linux-only, reads native Claude's own
 credential file afresh, never writes or refreshes it, and waits for native Claude to rotate a rejected
 token. A 401 is retried only when the bearer actually changed, except that session-scoped Interrupt
 and question/Bash responses disable rotation/retry entirely. Network-ambiguous writes are not automatically replayed.
+Only user-event POSTs add the host-owned <code>anthropic-client-platform: web_claude_ai</code>
+compatibility header: authenticated browser input remains human input, while native permissions,
+peer messages, and server-owned <code>inbound_origin</code> remain unchanged. See the
+[protocol ingress boundary](protocol.md#5-session-and-the-relay).
 
 The native companion implements this bounded orchestration:
 

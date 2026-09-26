@@ -387,6 +387,13 @@ The private facade maps its already-authenticated viewer input to Claude 2.1.237
 `client_platform:"web_claude_ai"` human ingress class. Without that discriminator Claude acknowledges
 the wire frame, demotes it to peer origin, and drops it at the cross-session kill switch; the label is a
 local protocol compatibility value, not evidence that Anthropic hosts the session.
+The native companion supplies the same host-owned web-user classification through
+`anthropic-client-platform: web_claude_ai` on `postEvent` POSTs only. Anthropic derives the native
+`client_platform` from that header. This corrects authenticated browser input being classified as a
+peer message; it does not set server-owned `inbound_origin`, rewrite peer envelopes, or bypass OAuth,
+session binding, or native tool permissions. Viewer content cannot choose the header. History, SSE,
+Interrupt, and permission/question response requests do not receive it. This is compatibility with
+the pinned native protocol, not a claim of a documented third-party API contract.
 Permission submission uses the same publication-before-mutation ordering: publish `permission_resolved`,
 then deliver the worker response. Under `permissionResolution:"native"`, that first record carries
 `behavior:"pending"`; only the later native resolution publishes `behavior:"resolved"`. Other adapters

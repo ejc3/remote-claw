@@ -76,6 +76,14 @@ acknowledgement. Broker-controlled HTTP rejection text/status, SSE error data, m
 details, and invalid-success parse details are collapsed to local status/disposition messages before
 normal relay logging.
 
+Authenticated browser user-event POSTs carry the host-owned
+`anthropic-client-platform: web_claude_ai` compatibility header so pinned Claude treats them as human
+input rather than peer-agent messages. It is not viewer-selected or sent on history, SSE, or controls;
+OAuth/session authorization and native permission policy are unchanged. The companion does not set
+server-owned `inbound_origin` or rewrite native peer messages. See the
+[ingress boundary](protocol.md#5-session-and-the-relay) and current
+[human-input acceptance](release-finish-line.md#claude-native-human-input--2026-09-26).
+
 ## 3. Safety boundary
 
 The experiment must keep these invariants:
