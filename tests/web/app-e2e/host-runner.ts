@@ -70,6 +70,7 @@ function presetCaps(p: string | undefined): DriverCapabilities {
       attachments: false,
     };
   if (p === "codex") return CODEX_CAPABILITIES;
+  if (p === "codex-files") return { ...CODEX_CAPABILITIES, files: true };
   if (p === "codex-approval") {
     const { structuredQuestions: _questions, ...approvalOnly } = CODEX_APPROVAL_CAPABILITIES;
     return approvalOnly;
@@ -135,6 +136,31 @@ const relay = new HostRcRelay({
 });
 
 const ac = new AbortController();
+// An explicitly opted-in scripted provider: admit the real encrypted browser payload, then publish
+// one canonical provider user event. This is not proof of either native adapter; those have their own
+// integration checks. It covers the real viewer→relay→canonical-preview/receipt browser lifecycle.
+if (process.env.RC_E2E_ATTACHMENT_ECHO === "1") {
+  const generation = session.claimWorkerStream();
+  void (async () => {
+    for await (const event of session.followDownstream(generation, () => ac.signal.aborted)) {
+      if (event?.eventType !== "user") continue;
+      const message = event.payload.message as { content: string };
+      const images = (event.images ?? []).flatMap((image) => {
+        const match = /^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/.exec(image.url);
+        return match ? [{ name: image.name, mime: match[1], data: match[2] }] : [];
+      });
+      session.pushUpstream({
+        type: "user",
+        local_prompt: true,
+        client_msg_id: event.payload.client_msg_id,
+        message: { content: message.content, images },
+      });
+      session.releaseImages(event);
+    }
+  })().catch(() => {
+    if (!ac.signal.aborted) process.exit(1);
+  });
+}
 const commands = createInterface({ input: process.stdin });
 commands.on("line", (line) => {
   if (line.trim() === "resolve-permission" && capsPreset === "codex-approval") {

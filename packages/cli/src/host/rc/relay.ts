@@ -34,7 +34,7 @@ import {
   BrokerStreamRotationError,
   type SeqCursor,
 } from "../../broker/client.js";
-import { harnessPolicy } from "../../harness.js";
+import { harnessPolicy, hasClaudeNativeReferences } from "../../harness.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import {
   type DriverCapabilities,
@@ -46,6 +46,7 @@ import {
 import type { GitInfo } from "./gitinfo.js";
 import {
   assistantText,
+  type HostFile,
   type HostImage,
   permissionModeFrom,
   type RcEvent,
@@ -84,6 +85,36 @@ export function extForMime(mime: string): string {
  *  rather than silently decoded to truncated/empty bytes by Buffer.from). (#44) */
 export function isLikelyBase64(s: string): boolean {
   return s.length > 0 && s.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$(?![\s\S])/.test(s);
+}
+
+/** Images only, with no fetchable URLs or paths. Display bounds do not limit native input. */
+export function boundedImagePreviews(raw: unknown): HostFile[] {
+  if (!Array.isArray(raw)) return [];
+  const result: HostFile[] = [];
+  let bytes = 0;
+  for (const value of raw.slice(0, MAX_ATTACHMENT_IMAGES)) {
+    if (result.length >= 8) break;
+    if (value === null || typeof value !== "object" || Array.isArray(value)) continue;
+    const image = value as Record<string, unknown>;
+    if (
+      typeof image.mime !== "string" ||
+      extForMime(image.mime) === "" ||
+      typeof image.data !== "string" ||
+      image.data.length > 4 * Math.ceil((1024 * 1024) / 3) ||
+      !isLikelyBase64(image.data)
+    )
+      continue;
+    const decoded = Buffer.from(image.data, "base64");
+    if (decoded.length > 1024 * 1024 || decoded.toString("base64") !== image.data) continue;
+    bytes += decoded.length;
+    if (bytes > 8 * 1024 * 1024) break;
+    result.push({
+      name: safeAttachmentName(typeof image.name === "string" ? image.name : "image"),
+      mime: image.mime,
+      data: image.data,
+    });
+  }
+  return result;
 }
 
 /** Defensive cap on ONE image's base64 length (~12 MB of bytes). The viewer downscales far below this;
@@ -344,7 +375,7 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
   if (ev.eventType === "user") {
     const sub =
       typeof ev.payload.parent_tool_use_id === "string" && ev.payload.parent_tool_use_id !== "";
-    const message = ev.payload.message as { content?: unknown } | undefined;
+    const message = ev.payload.message as { content?: unknown; images?: unknown } | undefined;
     const blocks = Array.isArray(message?.content) ? message.content : [];
     const items: OutItem[] = [];
     // A LOCAL-origin prompt (a non-MITM driver sets `local_prompt`; real claude NEVER does) is surfaced
@@ -356,9 +387,10 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
       const text = userPromptText(message);
       if (text !== "") {
         const clientMsgId = ev.payload.client_msg_id;
+        const images = boundedImagePreviews(message?.images);
         items.push({
-          kind: "user",
-          text,
+          kind: images.length > 0 ? "user_attachment" : "user",
+          text: images.length > 0 ? JSON.stringify({ text, images }) : text,
           ...(typeof clientMsgId === "string" ? { clientMsgId } : {}),
         });
       }
@@ -1384,7 +1416,10 @@ export class HostRcRelay {
         if (
           ((this.#policy.textInput === "plain" || tmuxTextSurface) &&
             (trimmed === "" || trimmed.startsWith("/"))) ||
-          (tmuxTextSurface && !isTmuxPaneSafeText(text))
+          (tmuxTextSurface && !isTmuxPaneSafeText(text)) ||
+          (this.#harness.agent === "claude-code" &&
+            this.#harness.mode === "native-rc" &&
+            hasClaudeNativeReferences(text))
         ) {
           this.#trace.warn("unsupported text mutation suppressed by capability boundary");
           admitted();
@@ -1584,20 +1619,40 @@ export class HostRcRelay {
     }
   }
 
-  /** Native adapters receive only host-prepared image bytes, never a viewer URL or filesystem path.
+  /** Native adapters receive only attachment bytes, never a viewer URL or filesystem path.
    * The existing pending receipt proves broker admission, not native ingestion or transcript order. */
   async #handleNativeImages(plaintext: Uint8Array, frame: Frame): Promise<void> {
     if (plaintext.byteLength > MAX_ATTACHMENT_TOTAL_BYTES) return;
     let images: HostImage[];
+    let files: HostFile[];
     let text: string;
     try {
       const body = JSON.parse(new TextDecoder().decode(plaintext));
       if (body === null || typeof body !== "object" || Array.isArray(body)) return;
       const caption = body.caption ?? "";
       if (typeof caption !== "string" || caption.trimStart().startsWith("/")) return;
-      const source: unknown[] = Array.isArray(body.images) ? body.images : [body];
-      if (source.length === 0 || source.length > MAX_ATTACHMENT_IMAGES) return;
+      if (
+        this.#harness.agent === "claude-code" &&
+        this.#harness.mode === "native-rc" &&
+        hasClaudeNativeReferences(caption)
+      )
+        return;
+      if (body.files !== undefined && !Array.isArray(body.files)) return;
+      if (body.images !== undefined && !Array.isArray(body.images)) return;
+      const fileSource: unknown[] = body.files ?? [];
+      if (fileSource.length > 0 && this.#capabilities.files !== true) return;
+      const source: unknown[] = Array.isArray(body.images)
+        ? body.images
+        : body.files !== undefined
+          ? []
+          : [body];
+      if (
+        source.length + fileSource.length === 0 ||
+        source.length + fileSource.length > MAX_ATTACHMENT_IMAGES
+      )
+        return;
       images = [];
+      files = [];
       for (const value of source) {
         if (value === null || typeof value !== "object" || Array.isArray(value)) return;
         const img = value as Record<string, unknown>;
@@ -1614,9 +1669,28 @@ export class HostRcRelay {
           url: `data:${img.mime};base64,${img.data}`,
         });
       }
+      for (const value of fileSource) {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) return;
+        const file = value as Record<string, unknown>;
+        const mime = typeof file.mime === "string" ? file.mime.toLowerCase() : "";
+        if (
+          typeof file.data !== "string" ||
+          file.data.length > MAX_ATTACHMENT_B64 ||
+          (file.data !== "" && !isLikelyBase64(file.data)) ||
+          !/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*$/.test(mime) ||
+          mime.length > 127 ||
+          (file.data === "" && extForMime(mime) !== "")
+        )
+          return;
+        files.push({
+          name: safeAttachmentName(typeof file.name === "string" ? file.name : ""),
+          mime,
+          data: file.data,
+        });
+      }
       // Keep display names in the canonical native text too, so restart/backfill does not need an
       // attachment-name store. Validate the caption BEFORE adding this non-slash prefix.
-      text = `${images.map((img) => `📎 ${img.name}`).join(", ")}${caption ? `\n${caption}` : ""}`;
+      text = `${[...images, ...files].map((file) => `📎 ${file.name}`).join(", ")}${caption ? `\n${caption}` : ""}`;
     } catch {
       return;
     }
@@ -1631,6 +1705,7 @@ export class HostRcRelay {
       this.#session.pushUserInput(text, {
         ...(frame.clientMsgId !== undefined ? { clientMsgId: frame.clientMsgId } : {}),
         images,
+        ...(files.length > 0 ? { files } : {}),
       });
     });
   }

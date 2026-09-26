@@ -24,7 +24,7 @@ CLI, local SQLite broker, attached TUI, and two browsers exercised fresh-project
 and broker-loss isolation. The same outcome separately passed on 2026-09-08 for exact
 0.153.4/Linux arm64 through managed Unix with paginated history. Separate
 [0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy/mobile-app recovery,
+adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery,
 per-device Remote unsubscribe and automatic stable-ID reconnect remain unclaimed; the release roadmap
 owns current capability and version qualifications. Only
 OpenCode's positive permission-mirroring opt-in retains experimental guarantees. The tmux adapter

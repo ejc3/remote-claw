@@ -3,12 +3,34 @@ import {
   HARNESSES,
   harnessMetadata,
   harnessPolicy,
+  hasClaudeNativeReferences,
   parseHarnessDescriptor,
   UNKNOWN_HARNESS,
 } from "./harness.js";
 import { MITM_CAPABILITIES, STABLE_MITM_CAPABILITIES } from "./host/rc/driver.js";
 
 describe("shared harness contract", () => {
+  it("reserves pinned Claude native reference grammar without blocking ordinary emails", () => {
+    for (const text of [
+      '@"/outside/file with spaces.txt"',
+      "inspect @/absolute/file",
+      "inspect @relative/file",
+      "\n@~/private.txt",
+      "。@private.txt",
+      "、@private.txt",
+      "？@private.txt",
+      "！@private.txt",
+      "@server:resource",
+    ])
+      expect(hasClaudeNativeReferences(text), text).toBe(true);
+    for (const text of [
+      "email ej@example.com",
+      "name@localhost",
+      "read /outside/file",
+      "an @ sign",
+    ])
+      expect(hasClaudeNativeReferences(text), text).toBe(false);
+  });
   it.each(
     Object.values(HARNESSES),
   )("recognizes $label / $detail without importing native code", (metadata) => {

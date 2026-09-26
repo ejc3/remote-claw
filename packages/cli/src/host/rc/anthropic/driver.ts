@@ -1,6 +1,7 @@
 /// <reference lib="es2024.promise" />
 
 import { isDeepStrictEqual } from "node:util";
+import { hasClaudeNativeReferences } from "../../../harness.js";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import { ensureCerts } from "../certs.js";
 import {
@@ -14,6 +15,7 @@ import {
 import { ReadyBridge } from "../drivers/ready-bridge.js";
 import type { SpawnClaudeEnv } from "../launch.js";
 import { type MitmOptions, MitmProxy } from "../mitm.js";
+import { NativePreviewBudget, NativeUploadStore } from "../native-uploads.js";
 import { type RcEvent, RelayCore, type Session } from "../session.js";
 import {
   AnthropicRcClient,
@@ -28,7 +30,6 @@ import {
 } from "./client.js";
 import { ClaudeNativeControls } from "./controls.js";
 import { AnthropicRcError } from "./errors.js";
-import { NativeImageStore } from "./images.js";
 
 const HISTORY_PAGE_LIMIT = 100;
 const HISTORY_PAGE_CAP = 1_000;
@@ -91,8 +92,10 @@ export interface ClaudeNativeDriverOptions {
   reconnectDelayMs?: number;
   /** Test seam for the shared retained provider-event/browser-mutation ceiling. */
   projectionCoordinateCap?: number;
+  /** Test seam for the projection-wide decoded preview allowance (32 MiB by default). */
+  projectionPreviewByteLimit?: number;
   /** Private image preparation seam; production uses remote-claw's owned uploads tree. */
-  imageStore?: NativeImageStore;
+  uploadStore?: NativeUploadStore;
 }
 
 interface NativeConnection {
@@ -183,8 +186,9 @@ class NativeReconciler {
   readonly #budget: ProjectionBudget;
   readonly #trace: Tracer;
   readonly #onControlResponse: (event: AnthropicRcEvent) => void;
-  readonly #images: NativeImageStore;
+  readonly #images: NativeUploadStore;
   readonly #controls: ClaudeNativeControls;
+  readonly #previews: NativePreviewBudget;
   readonly #seenEvents = new Map<string, AnthropicRcEvent>();
   readonly #usersByUuid = new Map<string, UserObservation>();
   #lastSequence: bigint | null = null;
@@ -196,8 +200,9 @@ class NativeReconciler {
     budget: ProjectionBudget,
     trace: Tracer,
     onControlResponse: (event: AnthropicRcEvent) => void,
-    images: NativeImageStore,
+    images: NativeUploadStore,
     controls: ClaudeNativeControls,
+    previewByteLimit?: number,
   ) {
     this.#session = session;
     this.#nativeId = nativeId;
@@ -207,6 +212,7 @@ class NativeReconciler {
     this.#onControlResponse = onControlResponse;
     this.#images = images;
     this.#controls = controls;
+    this.#previews = new NativePreviewBudget(previewByteLimit);
   }
 
   accept(event: AnthropicRcEvent, live = false): void {
@@ -320,11 +326,16 @@ class NativeReconciler {
         });
         return;
       }
+      const display = this.#images.display(user.text);
       this.#session.pushUpstream({
         type: "user",
         uuid: event.eventId,
         local_prompt: true,
-        message: { role: "user", content: this.#images.displayText(user.text) },
+        message: {
+          role: "user",
+          content: display.text,
+          images: this.#previews.accept(display.images),
+        },
         ...(mutation?.clientMsgId !== undefined ? { client_msg_id: mutation.clientMsgId } : {}),
       });
       return;
@@ -374,7 +385,7 @@ export class ClaudeNativeDriver implements Driver {
   readonly #mutations = new Map<string, BrowserMutation>();
   readonly #writeGate = new WriteGate();
   readonly #projectionCoordinateCap: number;
-  readonly #images: NativeImageStore;
+  readonly #images: NativeUploadStore;
   #pendingInterrupt: PendingInterrupt | null = null;
   #controls: ClaudeNativeControls | null = null;
 
@@ -384,7 +395,7 @@ export class ClaudeNativeDriver implements Driver {
     this.#client = options.client ?? new AnthropicRcClient();
     this.#trace = (ctx.tracer ?? NOOP_TRACER).child({ driver: "claude-native" });
     this.#projectionCoordinateCap = options.projectionCoordinateCap ?? PROJECTION_COORDINATE_CAP;
-    this.#images = options.imageStore ?? new NativeImageStore();
+    this.#images = options.uploadStore ?? new NativeUploadStore();
     if (
       !Number.isSafeInteger(this.#projectionCoordinateCap) ||
       this.#projectionCoordinateCap <= 0
@@ -523,6 +534,7 @@ export class ClaudeNativeDriver implements Driver {
       (event) => this.#observeInterruptResponse(event),
       this.#images,
       this.#controls,
+      this.#options.projectionPreviewByteLimit,
     );
 
     // Subscribe first, then read all bounded ascending history. This closes the snapshot gap: live
@@ -716,12 +728,23 @@ export class ClaudeNativeDriver implements Driver {
       // Session closure precedes asynchronous bridge teardown. Reconciliation may finish first, so
       // recheck the fence after its wait and immediately before the irreversible native write.
       if (session.closed) return;
-      let prepared: Awaited<ReturnType<NativeImageStore["prepare"]>> | undefined;
+      let prepared: Awaited<ReturnType<NativeUploadStore["prepare"]>> | undefined;
       let attempted = false;
       try {
         const input = downstreamInput(event);
-        if (event.images !== undefined) {
-          prepared = await this.#images.prepare(event.images, input.message.content, signal);
+        if (event.images !== undefined || event.files !== undefined) {
+          const images = (event.images ?? []).map(({ name, url }) => {
+            const match = /^data:(image\/(?:jpeg|png|webp|gif));base64,([\s\S]+)$/.exec(url);
+            if (match?.[1] === undefined || match[2] === undefined) {
+              throw new NativeProjectionError("invalid prepared native image");
+            }
+            return { name, mime: match[1], data: match[2] };
+          });
+          prepared = await this.#images.prepare(
+            [...images, ...(event.files ?? [])],
+            input.message.content,
+            signal,
+          );
           input.message.content = prepared.text;
           session.releaseImages(event);
           // Capture may have paused for reconciliation while files were being written.
@@ -1067,7 +1090,7 @@ function downstreamInput(event: RcEvent): RcUserEventInput {
     throw new NativeProjectionError("browser text is not a user message");
   }
   const text = record.content;
-  if (text.trim() === "" || text.trimStart().startsWith("/")) {
+  if (text.trim() === "" || text.trimStart().startsWith("/") || hasClaudeNativeReferences(text)) {
     throw new NativeProjectionError("unsupported browser text reached the native writer");
   }
   return {

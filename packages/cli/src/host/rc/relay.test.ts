@@ -25,6 +25,7 @@ import {
   TMUX_HARNESS,
 } from "./driver.js";
 import {
+  boundedImagePreviews,
   defaultAttachmentsDir,
   extForMime,
   HostRcRelay,
@@ -869,6 +870,145 @@ describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
 });
 
 describe("HostRcRelay provider-ordered text boundaries", () => {
+  it("admits mixed files once and adds previews only after canonical native observation", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const push = vi.spyOn(session, "pushUserInput");
+    const ac = new AbortController();
+    const served = nativeRelayOf(session, client).serve(ac.signal);
+    await waitFor(() => client.streamStarts.length === 1);
+    const image = { name: "screen.png", mime: "image/png", data: "YWJj" };
+    const file = { name: "../../notes.txt", mime: "TEXT/PLAIN", data: "ZmlsZQ==" };
+    for (const [index, body] of [
+      { images: [image], files: [{ ...file, data: "broken\n" }] },
+      { images: "not an array", files: [file] },
+      { files: [{ ...file, path: "/etc/passwd", data: undefined }] },
+      { files: [{ ...file, mime: "text/plain;evil" }] },
+      { images: [image], files: Array(24).fill(file) },
+      { files: [{ ...image, data: "" }] },
+    ].entries())
+      client.pushInbound(inFrame("attachment", `invalid-${index}`, JSON.stringify(body)));
+    const text = "📎 screen.png, 📎 notes.txt\nRead both";
+    client.pushInbound(
+      inFrame(
+        "attachment",
+        "mixed",
+        JSON.stringify({ images: [image], files: [file], caption: "Read both" }),
+        "mixed-client",
+      ),
+    );
+    await waitFor(() => push.mock.calls.length === 1);
+    expect(push).toHaveBeenCalledWith(text, {
+      clientMsgId: "mixed-client",
+      images: [{ name: "screen.png", url: "data:image/png;base64,YWJj" }],
+      files: [{ name: "notes.txt", mime: "text/plain", data: "ZmlsZQ==" }],
+    });
+    expect(client.content).toEqual([]);
+    session.pushUpstream({
+      type: "user",
+      local_prompt: true,
+      client_msg_id: "mixed-client",
+      message: { role: "user", content: text, images: [image] },
+    });
+    await waitFor(() => client.content.length === 1);
+    ac.abort();
+    await served;
+    expect(client.content[0]).toMatchObject({
+      recordKind: "user_attachment",
+      seq: 0,
+      text: JSON.stringify({ text, images: [image] }),
+    });
+    expect(
+      client.posts.filter((p) => p.recordKind === "accepted").map((p) => JSON.parse(p.text)),
+    ).toEqual([
+      { client_msg_id: "mixed-client", native_pending: true },
+      { client_msg_id: "mixed-client", seq: 0 },
+    ]);
+  });
+
+  it("rejects general files without explicit capability but retains image-only input", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const push = vi.spyOn(session, "pushUserInput");
+    const ac = new AbortController();
+    const served = codexRelayOf(session, client).serve(ac.signal);
+    await waitFor(() => client.streamStarts.length === 1);
+    client.pushInbound(
+      inFrame(
+        "attachment",
+        "no-files",
+        JSON.stringify({ files: [{ name: "a.txt", mime: "text/plain", data: "" }] }),
+      ),
+    );
+    client.pushInbound(
+      inFrame(
+        "attachment",
+        "image",
+        JSON.stringify({ images: [{ name: "a.png", mime: "image/png", data: "YWJj" }] }),
+      ),
+    );
+    await waitFor(() => push.mock.calls.length === 1);
+    expect(push.mock.calls[0]?.[0]).toBe("📎 a.png");
+    ac.abort();
+    await served;
+  });
+
+  it("bounds canonical previews and never dereferences URLs, paths, SVG or malformed base64", () => {
+    const image = { name: "../safe.png", mime: "image/png", data: "YWJj" };
+    expect(
+      boundedImagePreviews([
+        { ...image, data: undefined, url: "https://private.example/image" },
+        { ...image, data: undefined, path: "/etc/passwd" },
+        { ...image, mime: "image/svg+xml" },
+        { ...image, data: "YQ==\n" },
+        { ...image, data: "YR==" },
+        { ...image, data: Buffer.alloc(1024 * 1024 + 1).toString("base64") },
+        ...Array(10).fill(image),
+      ]),
+    ).toEqual(Array(8).fill({ ...image, name: "safe.png" }));
+  });
+
+  it.each([
+    false,
+    true,
+  ])("blocks Claude browser-native references before text/caption admission (chunked=%s)", async (chunked) => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const push = vi.spyOn(session, "pushUserInput");
+    const ac = new AbortController();
+    const served = nativeRelayOf(session, client).serve(ac.signal);
+    await waitFor(() => client.streamStarts.length === 1);
+    for (const [index, text] of [
+      '@"/private/file"',
+      "look @relative/file",
+      "。@~/private",
+    ].entries()) {
+      client.pushInbound(inFrame("user", `reference-${index}`, text, `ref-${index}`));
+      const payload = JSON.stringify({
+        images: [{ name: "ordinary.png", mime: "image/png", data: "YWJj" }],
+        caption: text,
+      });
+      if (chunked) {
+        const mid = Math.floor(payload.length / 2);
+        client.pushInbound(inChunk("attachment", `caption-${index}`, 0, 2, payload.slice(0, mid)));
+        client.pushInbound(inChunk("attachment", `caption-${index}`, 1, 2, payload.slice(mid)));
+      } else client.pushInbound(inFrame("attachment", `caption-${index}`, payload));
+    }
+    client.pushInbound(
+      inFrame("user", "ordinary", "email ej@example.com; read /private/file", "ok"),
+    );
+    await waitFor(() => push.mock.calls.length === 1);
+    ac.abort();
+    await served;
+    expect(push).toHaveBeenCalledWith("email ej@example.com; read /private/file", {
+      clientMsgId: "ok",
+    });
+    expect(client.posts.filter(({ recordKind }) => recordKind === "accepted")).toHaveLength(1);
+  });
+
   it.each([
     { surface: "Codex", relayFor: codexRelayOf, chunked: false },
     { surface: "Codex", relayFor: codexRelayOf, chunked: true },
