@@ -34,7 +34,12 @@ import {
   BrokerStreamRotationError,
   type SeqCursor,
 } from "../../broker/client.js";
-import { harnessPolicy, hasClaudeNativeReferences } from "../../harness.js";
+import {
+  harnessPolicy,
+  hasClaudeNativeReferences,
+  parseSessionSettingsChange,
+  type SessionSettings,
+} from "../../harness.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import {
   type DriverCapabilities,
@@ -134,7 +139,13 @@ const MAX_INFLIGHT_ATTACHMENT_GROUPS = 4;
 
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
-const CONTROL_VERBS = new Set(["interrupt", "set_model", "set_mode", "end"]);
+const CONTROL_VERBS = new Set([
+  "interrupt",
+  "set_model",
+  "set_mode",
+  "set_session_settings",
+  "end",
+]);
 
 function supportsControl(capabilities: DriverCapabilities, kind: string): boolean {
   switch (kind) {
@@ -144,6 +155,8 @@ function supportsControl(capabilities: DriverCapabilities, kind: string): boolea
       return capabilities.controls.setModel;
     case "set_mode":
       return capabilities.controls.setMode;
+    case "set_session_settings":
+      return capabilities.controls.configureSession === true;
     case "end":
       return capabilities.controls.end;
     default:
@@ -673,14 +686,38 @@ export class HostRcRelay {
   /** Current presence: phase (idle/thinking) from worker_status, needs (a pending permission or the
    *  worker awaiting a required action), and the effective permission mode when known. A stable string
    *  key lets us re-announce only on change. */
-  #presence(): { status: string; phase: "idle" | "thinking"; needs: boolean; mode: string | null } {
+  #presence(): {
+    status: string;
+    phase: "idle" | "thinking";
+    needs: boolean;
+    mode: string | null;
+    settings: SessionSettings | null;
+  } {
     const status = this.#session.workerStatus;
     const needs = status === "requires_action" || this.#openPerms.size > 0;
-    return { status, phase: phaseFor(status), needs, mode: this.#session.permissionMode };
+    return {
+      status,
+      phase: phaseFor(status),
+      needs,
+      mode: this.#session.permissionMode,
+      settings:
+        this.#capabilities.controls.configureSession === true
+          ? this.#session.sessionSettings
+          : null,
+    };
   }
 
-  /** Post a session_announce carrying the current presence. Meta-plane + seq===null, so the broker
-   *  never logs it — re-announcing is cheap and idempotent (the viewer keeps only the freshest). */
+  #presenceKey(p: {
+    status: string;
+    needs: boolean;
+    mode: string | null;
+    settings: SessionSettings | null;
+  }): string {
+    return JSON.stringify([p.status, p.needs, p.mode, p.settings]);
+  }
+
+  /** Post unordered encrypted presence. Durable brokers retain these frames; viewers fold only the
+   * freshest state. Keep catalogs bounded and publish on changes or the existing keepalive. */
   async #sendAnnounce(): Promise<void> {
     if (this.#presenceTerminal || this.#session.closed) throw new Error("session closed");
     const p = this.#presence();
@@ -703,6 +740,7 @@ export class HostRcRelay {
       harness: this.#harness,
     };
     if (p.mode !== null) body.mode = p.mode;
+    if (p.settings !== null) body.session_settings = p.settings;
     // This is the live-admission linearization point. It is deliberately before invoking postFrame:
     // sealing itself may await. A close at any later instant therefore sees #presenceStarted and sends
     // the terminal tombstone concurrently, allowing the broker's absorbing fence to suppress a late
@@ -743,7 +781,7 @@ export class HostRcRelay {
     } finally {
       this.#livePresenceControllers.delete(controller);
     }
-    this.#lastPresenceKey = `${p.status}|${p.needs}|${p.mode ?? ""}`;
+    this.#lastPresenceKey = this.#presenceKey(p);
     this.#lastAnnounceAt = Date.now();
     this.#trace.debug("announce", { phase: p.phase, needs: p.needs, mode: p.mode ?? "" });
   }
@@ -756,7 +794,7 @@ export class HostRcRelay {
   #maybeAnnounce(): void {
     if (!this.#announced || this.#presenceTerminal || this.#session.closed) return;
     const p = this.#presence();
-    const key = `${p.status}|${p.needs}|${p.mode ?? ""}`;
+    const key = this.#presenceKey(p);
     if (
       key !== this.#lastPresenceKey ||
       Date.now() - this.#lastAnnounceAt >= ANNOUNCE_KEEPALIVE_MS
@@ -1829,6 +1867,18 @@ export class HostRcRelay {
         if (typeof body.model === "string")
           this.#session.pushControlRequest("set_model", { model: body.model });
         break;
+      case "set_session_settings": {
+        const change = parseSessionSettingsChange(body.change);
+        if (
+          change &&
+          typeof body.expiry === "number" &&
+          Number.isFinite(body.expiry) &&
+          body.expiry > Date.now()
+        ) {
+          this.#session.pushControlRequest("set_session_settings", { change, expiry: body.expiry });
+        }
+        break;
+      }
       case "set_mode":
         if (typeof body.mode === "string" && body.mode !== "") {
           // Drive the worker verb regardless — the driver honors it (mitm) or safely no-ops it

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { deriveIdentity, type Frame, type FrameHeader } from "@remote-claw/clawsec";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { BrokerClient } from "../../../broker/client.js";
+import type { SessionSettings } from "../../../harness.js";
 import type { DriverContext } from "../driver.js";
 import { NativeUploadStore } from "../native-uploads.js";
 import type { HostImage, Session } from "../session.js";
@@ -18,9 +19,34 @@ import {
   type CodexThreadItem,
 } from "./client.js";
 import { CodexDriver } from "./driver.js";
+import type { CodexSettingsUpdate } from "./settings.js";
 
 const THREAD_ID = "01993d50-6c31-7e11-9f70-3a8d9b5e7201";
 const OTHER_THREAD_ID = "01993d50-6c31-7e11-af70-3a8d9b5e7202";
+const SETTINGS: SessionSettings = {
+  models: [
+    {
+      id: "model-a",
+      label: "Model A",
+      defaultEffort: "low",
+      efforts: [
+        { id: "low", description: "Fast" },
+        { id: "high", description: "Thorough" },
+      ],
+    },
+    {
+      id: "model-b",
+      label: "Model B",
+      defaultEffort: "low",
+      efforts: [{ id: "low", description: "Fast" }],
+    },
+  ],
+  collaborationModes: [
+    { id: "plan", label: "Plan" },
+    { id: "default", label: "Default" },
+  ],
+  current: { model: "model-a", effort: "high", collaborationMode: null },
+};
 const enc = (value: string): Uint8Array => new TextEncoder().encode(value);
 const UPLOAD_ROOT = mkdtempSync(join(tmpdir(), "rc-codex-driver-uploads-"));
 afterAll(() => rmSync(UPLOAD_ROOT, { recursive: true, force: true }));
@@ -115,6 +141,11 @@ class FakeCodexClient implements CodexClient {
   initializeCalls = 0;
   nativeVersion = CODEX_APP_SERVER_VERSION;
   readonly resumeCalls: string[] = [];
+  catalog: SessionSettings | null = null;
+  catalogCalls = 0;
+  readonly settingsCalls: Array<{ threadId: string; update: CodexSettingsUpdate }> = [];
+  settingsError: Error | null = null;
+  settingsBarrier: Promise<void> | null = null;
   readonly listCalls: Array<{ threadId: string; cursor: string | undefined }> = [];
   readonly turnListCalls: Array<{ threadId: string; cursor: string | undefined }> = [];
   readonly startCalls: Array<{
@@ -173,6 +204,24 @@ class FakeCodexClient implements CodexClient {
   async resume(threadId: string): Promise<CodexResumeResult> {
     this.resumeCalls.push(threadId);
     return structuredClone(this.resumeResult);
+  }
+
+  async listModels(): Promise<SessionSettings["models"]> {
+    this.catalogCalls++;
+    if (this.catalog === null) throw new CodexAppServerError("catalog unavailable", -32601);
+    return structuredClone(this.catalog.models);
+  }
+
+  async listCollaborationModes(): Promise<SessionSettings["collaborationModes"]> {
+    this.catalogCalls++;
+    if (this.catalog === null) throw new CodexAppServerError("catalog unavailable", -32601);
+    return structuredClone(this.catalog.collaborationModes);
+  }
+
+  async updateSettings(threadId: string, update: CodexSettingsUpdate): Promise<void> {
+    this.settingsCalls.push({ threadId, update: structuredClone(update) });
+    if (this.settingsBarrier !== null) await this.settingsBarrier;
+    if (this.settingsError !== null) throw this.settingsError;
   }
 
   async listItems(threadId: string, cursor: string | undefined): Promise<CodexItemsPage> {
@@ -530,6 +579,287 @@ async function stop(ac: AbortController, run: Promise<number>): Promise<void> {
   ac.abort();
   await expect(run).resolves.toBe(0);
 }
+
+describe("Codex native-confirmed settings", () => {
+  function settingsClient() {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    client.catalog = structuredClone(SETTINGS);
+    client.resumeResult.settings = structuredClone(SETTINGS.current);
+    return client;
+  }
+
+  function changed(
+    model = "model-a",
+    effort: string | null = "high",
+    mode = "plan",
+    threadId = THREAD_ID,
+  ): CodexInbound {
+    return {
+      kind: "notification",
+      value: {
+        method: "thread/settings/updated",
+        params: {
+          threadId,
+          threadSettings: {
+            model,
+            effort,
+            collaborationMode: { mode },
+            approvalPolicy: "never",
+            sandboxPolicy: { type: "dangerFullAccess" },
+          },
+        },
+      },
+    };
+  }
+
+  it.each([
+    "0.151.0",
+    "0.153.4",
+  ])("never reads catalogs or changes settings on %s", async (version) => {
+    const client = settingsClient();
+    client.nativeVersion = version;
+    const launched = await start(client);
+    const ack = vi.spyOn(launched.session, "ack");
+    try {
+      const event = launched.session.pushControlRequest("set_session_settings", {
+        change: { model: "model-a" },
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => ack.mock.calls.some(([id]) => id === event.eventId));
+      expect(client.catalogCalls).toBe(0);
+      expect(client.settingsCalls).toEqual([]);
+      expect(launched.session.sessionSettings).toBeNull();
+      expect(launched.session.closed).toBe(false);
+    } finally {
+      ack.mockRestore();
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it("keeps text working when optional settings catalogs are unavailable", async () => {
+    const client = settingsClient();
+    client.catalog = null;
+    const launched = await start(client);
+    try {
+      expect(launched.session.sessionSettings).toBeNull();
+      const announce = launched.broker.posts.find((post) => post.recordKind === "session_announce");
+      expect(
+        JSON.parse(announce?.text ?? "{}").capabilities.controls.configureSession,
+      ).toBeUndefined();
+      launched.session.pushUserInput("still writable");
+      await waitFor(() => client.startCalls.length === 1);
+      expect(launched.session.closed).toBe(false);
+    } finally {
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it("announces native catalogs/current state, observes peers, and never treats RPC acceptance as confirmation", async () => {
+    const client = settingsClient();
+    const launched = await start(client);
+    const ack = vi.spyOn(launched.session, "ack");
+    try {
+      expect(launched.session.sessionSettings).toEqual(SETTINGS);
+      const announce = launched.broker.posts.find((post) => post.recordKind === "session_announce");
+      expect(JSON.parse(announce?.text ?? "{}")).toMatchObject({
+        capabilities: { controls: { configureSession: true, setModel: false, setMode: false } },
+        session_settings: SETTINGS,
+      });
+      const selection = launched.session.pushControlRequest("set_session_settings", {
+        change: { model: "model-b" },
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => ack.mock.calls.some(([id]) => id === selection.eventId));
+      expect(client.settingsCalls).toEqual([{ threadId: THREAD_ID, update: { model: "model-b" } }]);
+      expect(launched.session.sessionSettings?.current).toEqual(SETTINGS.current);
+      client.emit(changed("foreign", "low", "default", OTHER_THREAD_ID));
+      client.emit({
+        kind: "notification",
+        value: {
+          method: "thread/settings/updated",
+          params: { threadId: THREAD_ID, threadSettings: { model: {}, effort: "low" } },
+        },
+      });
+      client.emit(completed(assistantItem("settings-barrier", "captured")));
+      await waitFor(() => upstream(launched.session, "assistant").length === 1);
+      expect(launched.session.sessionSettings?.current).toEqual(SETTINGS.current);
+      client.emit(changed("model-b", "low", "default"));
+      await waitFor(() => launched.session.sessionSettings?.current.model === "model-b");
+      expect(launched.session.sessionSettings?.current).toEqual({
+        model: "model-b",
+        effort: "low",
+        collaborationMode: "default",
+      });
+      expect(launched.session.permissionMode).toBeNull();
+      expect(JSON.stringify(launched.session.sessionSettings)).not.toContain("sandboxPolicy");
+      client.emit(changed("native-other", "native-effort", "native-mode"));
+      await waitFor(() => launched.session.sessionSettings?.current.model === "native-other");
+      expect(launched.session.sessionSettings?.models).toEqual(SETTINGS.models);
+    } finally {
+      ack.mockRestore();
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it("serializes mode changes behind text, revalidates latest peer state, and drops expired queued choices", async () => {
+    const client = settingsClient();
+    client.resumeResult.thread.status = { type: "active", activeFlags: [] };
+    const launched = await start(client);
+    const ack = vi.spyOn(launched.session, "ack");
+    const now = Date.now();
+    let clock: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      const user = launched.session.pushUserInput("before settings");
+      const mode = launched.session.pushControlRequest("set_session_settings", {
+        change: { collaborationMode: "plan" },
+        expiry: now + 120_000,
+      });
+      const expired = launched.session.pushControlRequest("set_session_settings", {
+        change: { effort: "low" },
+        expiry: now + 30_000,
+      });
+      client.emit(changed("model-b", "low", "default"));
+      await waitFor(() => launched.session.sessionSettings?.current.model === "model-b");
+      expect(client.settingsCalls).toEqual([]);
+      clock = vi.spyOn(Date, "now").mockReturnValue(now + 60_000);
+      client.emit({
+        kind: "notification",
+        value: {
+          method: "thread/status/changed",
+          params: { threadId: THREAD_ID, status: { type: "idle" } },
+        },
+      });
+      await waitFor(() => client.startCalls.length === 1);
+      expect(client.settingsCalls).toEqual([]);
+      client.emit(completed(userItem("settings-prior-user", "before settings", user.eventId)));
+      await waitFor(() => ack.mock.calls.some(([id]) => id === expired.eventId));
+      expect(ack.mock.calls.some(([id]) => id === mode.eventId)).toBe(true);
+      expect(client.settingsCalls).toEqual([
+        {
+          threadId: THREAD_ID,
+          update: {
+            collaborationMode: {
+              mode: "plan",
+              settings: { model: "model-b", reasoning_effort: "low", developer_instructions: null },
+            },
+          },
+        },
+      ]);
+      // Still the peer's confirmed Default: successful RPC did not optimistically select Plan.
+      expect(launched.session.sessionSettings?.current.collaborationMode).toBe("default");
+    } finally {
+      clock?.mockRestore();
+      ack.mockRestore();
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it("requires explicit confirmed effort for mode changes and rejects unsupported requests", async () => {
+    const client = settingsClient();
+    client.resumeResult.settings = { ...SETTINGS.current, effort: null };
+    const launched = await start(client);
+    const ack = vi.spyOn(launched.session, "ack");
+    try {
+      for (const change of [
+        { collaborationMode: "plan" },
+        { model: "unknown" },
+        { effort: "ultra" },
+        { model: "model-a", effort: "low" },
+        { approvalPolicy: "never" },
+      ]) {
+        const event = launched.session.pushControlRequest("set_session_settings", {
+          change,
+          expiry: Date.now() + 30_000,
+        });
+        await waitFor(() => ack.mock.calls.some(([id]) => id === event.eventId));
+      }
+      expect(client.settingsCalls).toEqual([]);
+      for (const expiry of [undefined, Number.NaN, Number.POSITIVE_INFINITY, Date.now() - 1]) {
+        const event = launched.session.pushControlRequest("set_session_settings", {
+          change: { effort: "high" },
+          expiry,
+        });
+        await waitFor(() => ack.mock.calls.some(([id]) => id === event.eventId));
+      }
+      expect(client.settingsCalls).toEqual([]);
+      const effort = launched.session.pushControlRequest("set_session_settings", {
+        change: { effort: "high" },
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => ack.mock.calls.some(([id]) => id === effort.eventId));
+      expect(client.settingsCalls[0]?.update).toEqual({ effort: "high" });
+      expect(launched.session.sessionSettings?.current.effort).toBeNull();
+      client.emit(changed("model-a", "high", "plan"));
+      await waitFor(() => launched.session.sessionSettings?.current.effort === "high");
+      const mode = launched.session.pushControlRequest("set_session_settings", {
+        change: { collaborationMode: "default" },
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => ack.mock.calls.some(([id]) => id === mode.eventId));
+      expect(client.settingsCalls[1]?.update).toEqual({
+        collaborationMode: {
+          mode: "default",
+          settings: { model: "model-a", reasoning_effort: "high", developer_instructions: null },
+        },
+      });
+    } finally {
+      ack.mockRestore();
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it.each([
+    new CodexAppServerError("rejected", -32602),
+    new CodexAppServerError("timed out"),
+  ])("does not retry or close native work after %s", async (error) => {
+    const client = settingsClient();
+    client.settingsError = error;
+    const launched = await start(client);
+    const ack = vi.spyOn(launched.session, "ack");
+    try {
+      const event = launched.session.pushControlRequest("set_session_settings", {
+        change: { model: "model-b" },
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => ack.mock.calls.some(([id]) => id === event.eventId));
+      launched.session.pushUserInput("continue after unconfirmed settings");
+      await waitFor(() => client.startCalls.length === 1);
+      expect(client.settingsCalls).toHaveLength(1);
+      expect(launched.session.sessionSettings?.current).toEqual(SETTINGS.current);
+      expect(launched.session.closed).toBe(false);
+      expect(client.closeCalls).toBe(0);
+    } finally {
+      ack.mockRestore();
+      await stop(launched.ac, launched.run);
+    }
+  });
+
+  it("holds later browser text while a settings RPC is pending but still delivers interrupt", async () => {
+    const client = settingsClient();
+    const pending = Promise.withResolvers<void>();
+    client.settingsBarrier = pending.promise;
+    client.activeTurnId = "native-running-turn";
+    const launched = await start(client);
+    try {
+      launched.session.pushControlRequest("set_session_settings", {
+        change: { effort: "low" },
+        expiry: Date.now() + 30_000,
+      });
+      await waitFor(() => client.settingsCalls.length === 1);
+      launched.session.pushUserInput("after settings");
+      launched.session.pushControlRequest("interrupt");
+      await waitFor(() => client.interruptCalls.length === 1);
+      expect(client.startCalls).toHaveLength(0);
+      pending.resolve();
+      await waitFor(() => client.startCalls.length === 1);
+      expect(client.settingsCalls).toHaveLength(1);
+    } finally {
+      pending.resolve();
+      await stop(launched.ac, launched.run);
+    }
+  });
+});
 
 describe("Codex M3a companion", () => {
   const controllers: AbortController[] = [];

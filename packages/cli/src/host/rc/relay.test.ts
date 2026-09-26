@@ -2210,6 +2210,83 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
 });
 
 describe("HostRcRelay permission mode presence", () => {
+  it("forwards one fresh settings selection without claiming confirmation or changing permission mode", async () => {
+    const session = new Session("s", "t", { permissionMode: "default" });
+    session.sessionSettings = {
+      models: [
+        {
+          id: "m",
+          label: "Model",
+          defaultEffort: "high",
+          efforts: [{ id: "high", description: "High" }],
+        },
+      ],
+      collaborationModes: [{ id: "plan", label: "Plan" }],
+      current: { model: "m", effort: "high", collaborationMode: null },
+    };
+    const client = new FakeClient();
+    const relay = relayOf(session, client, {
+      ...MITM_CAPABILITIES,
+      controls: { ...MITM_CAPABILITIES.controls, configureSession: true },
+    });
+    const pushed = vi.spyOn(session, "pushControlRequest");
+    await relay.announce("settings");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+    const expiry = Date.now() + 60_000;
+    for (const [index, body] of [
+      { change: { effort: "high" } },
+      { change: { model: "m" }, expiry: 0 },
+      { change: { model: "m", permissionMode: "bypassed" }, expiry },
+      { change: { collaborationMode: "plan" }, expiry },
+    ].entries())
+      client.pushInbound(
+        inFrame("set_session_settings", `settings-${index}`, JSON.stringify(body)),
+      );
+    client.pushInbound(inFrame("user", "settings-barrier", "still alive"));
+    await waitFor(() => client.content.some(({ text }) => text === "still alive"));
+    expect(pushed).toHaveBeenCalledExactlyOnceWith("set_session_settings", {
+      change: { collaborationMode: "plan" },
+      expiry,
+    });
+    expect(client.announces.at(-1)?.session_settings).toEqual(session.sessionSettings);
+    expect(session.sessionSettings.current.collaborationMode).toBeNull();
+    expect(session.permissionMode).toBe("default");
+    session.sessionSettings = {
+      ...session.sessionSettings,
+      current: { ...session.sessionSettings.current, collaborationMode: "plan" },
+    };
+    session.wake();
+    await waitFor(
+      () =>
+        (client.announces.at(-1)?.session_settings as typeof session.sessionSettings)?.current
+          .collaborationMode === "plan",
+    );
+    ac.abort();
+    await served;
+  });
+
+  it("does not grant settings mutation capability to a legacy host", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const pushed = vi.spyOn(session, "pushControlRequest");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+    client.pushInbound(
+      inFrame(
+        "set_session_settings",
+        "settings-disabled",
+        JSON.stringify({ change: { model: "m" }, expiry: Date.now() + 60_000 }),
+      ),
+    );
+    client.pushInbound(inFrame("user", "settings-barrier", "still alive"));
+    await waitFor(() => client.content.some(({ text }) => text === "still alive"));
+    expect(pushed).not.toHaveBeenCalled();
+    ac.abort();
+    await served;
+  });
+
   it("seeds the announced mode from session config", async () => {
     const session = new Session("s", "t", { permissionMode: "default" });
     const client = new FakeClient();

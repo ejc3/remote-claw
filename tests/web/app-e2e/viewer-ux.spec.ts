@@ -7,6 +7,118 @@ import { expect, test } from "./fixtures";
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 
+test("native settings wait for confirmation and stay shared across phone and desktop", async ({
+  page,
+  browser,
+  seedHost,
+}, testInfo) => {
+  const { pass, confirmSettings } = await seedHost({
+    caps: "codex-settings",
+    harness: "codex",
+    profile: "smoke",
+  });
+  const desktopContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const desktop = await desktopContext.newPage();
+  const settings = {
+    models: ["Model A", "Model B"].map((label, i) => ({
+      id: `model-${i}`,
+      label,
+      defaultEffort: "medium",
+      efforts: [
+        { id: "medium", description: "Balanced reasoning" },
+        { id: "high", description: "More reasoning for difficult work" },
+      ],
+    })),
+    collaborationModes: [
+      { id: "default", label: "Default" },
+      { id: "plan", label: "Plan" },
+    ],
+    current: { model: "model-0", effort: "medium", collaborationMode: null as string | null },
+  };
+  try {
+    for (const viewer of [page, desktop]) {
+      await viewer.goto(`/${qp}#${encodeURIComponent(pass)}`);
+      await viewer.getByRole("button", { name: "Connect", exact: true }).click();
+      await viewer.locator("button.row", { hasText: "rc box" }).click();
+      await viewer.getByRole("button", { name: "Session actions", exact: true }).click();
+      await expect(
+        viewer.getByRole("group", { name: "Collaboration mode", exact: true }),
+      ).toContainText("Current: Unknown");
+      await expect(
+        viewer.getByRole("button", { name: "Model: Model A", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+    }
+    await page.getByRole("button", { name: "Model: Model B", exact: true }).click();
+    await expect(page.locator(".native-settings-status")).toContainText(
+      "Waiting for native confirmation",
+    );
+    await expect(page.getByRole("button", { name: "Model: Model A", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(page.getByRole("button", { name: "Model: Model B", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    settings.current.model = "model-1";
+    await confirmSettings(settings);
+    for (const viewer of [page, desktop])
+      await expect(
+        viewer.getByRole("button", { name: "Model: Model B", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+    await desktop.getByRole("button", { name: "Effort: high", exact: true }).click();
+    await expect(desktop.locator(".native-settings-status")).toContainText(
+      "Waiting for native confirmation",
+    );
+    settings.current.effort = "high";
+    await confirmSettings(settings);
+    for (const viewer of [page, desktop])
+      await expect(
+        viewer.getByRole("button", { name: "Effort: high", exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Mode: Plan", exact: true }).click();
+    await expect(page.locator(".native-settings-status")).toContainText(
+      "Waiting for native confirmation",
+    );
+    settings.current.collaborationMode = "plan";
+    await confirmSettings(settings);
+    for (const [size, viewer] of [
+      ["phone", page],
+      ["desktop", desktop],
+    ] as const) {
+      await expect(viewer.getByRole("button", { name: "Mode: Plan", exact: true })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      await expect(
+        viewer.getByRole("group", { name: "Collaboration mode", exact: true }),
+      ).toContainText("Changing mode keeps the current model and effort.");
+      for (const theme of ["light", "dark"] as const) {
+        await viewer.emulateMedia({ colorScheme: theme });
+        await viewer
+          .getByRole("button", { name: "Model: Model A", exact: true })
+          .scrollIntoViewIfNeeded();
+        await viewer.screenshot({
+          path: testInfo.outputPath(`settings-${size}-${theme}.png`),
+          animations: "disabled",
+        });
+      }
+    }
+    await page.reload();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+    await page.getByRole("button", { name: "Session actions", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Mode: Plan", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(page.locator(".native-settings-status")).toContainText(
+      "Selections reflect the native session",
+    );
+  } finally {
+    await desktopContext.close();
+  }
+});
+
 test("Claude native references stay in the draft and do not become text or caption sends", async ({
   page,
   seedHost,

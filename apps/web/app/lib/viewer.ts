@@ -24,6 +24,10 @@ import {
   type HarnessDescriptor,
   harnessMetadata,
   parseHarnessDescriptor,
+  parseSessionSettings,
+  parseSessionSettingsChange,
+  type SessionSettings,
+  type SessionSettingsChange,
 } from "@remote-claw/cli/harness";
 
 const td = new TextDecoder();
@@ -222,6 +226,8 @@ export interface Announce {
   needs: boolean;
   /** Current worker permission mode, when announced by a modern host. Old hosts omit it. */
   mode?: string;
+  /** Native-confirmed configuration; distinct from permission mode. */
+  sessionSettings?: SessionSettings;
   /** The session's git snapshot for the branch/dirty/ahead-behind chip (#49); null outside a repo. */
   git: GitInfo | null;
   /** What the host's driver can faithfully service (#149). Absent on a pre-capability host → the viewer
@@ -315,6 +321,9 @@ export function parseCapabilities(raw: unknown, harness?: Harness): Capabilities
       setModel: bool(ctlRaw.setModel, legacyDefaults),
       setMode: bool(ctlRaw.setMode, legacyDefaults),
       end: bool(ctlRaw.end, legacyDefaults),
+      ...(typeof ctlRaw.configureSession === "boolean"
+        ? { configureSession: ctlRaw.configureSession }
+        : {}),
     },
     attachments: bool(c.attachments, legacyDefaults),
     ...(typeof c.files === "boolean" ? { files: c.files } : {}),
@@ -644,6 +653,11 @@ export class Viewer {
           if (harness) announce.harness = harness;
           const caps = parseCapabilities(body.capabilities, harness);
           if (caps) announce.capabilities = caps;
+          const settings =
+            caps?.controls.configureSession === true
+              ? parseSessionSettings(body.session_settings)
+              : null;
+          if (settings) announce.sessionSettings = settings;
           const existing = this.#acceptedAnnounces.get(sessionId);
           if (!shouldAcceptAnnounce(existing, announce)) continue;
           announce.freshnessAt = announceFreshnessAt(existing, announce, receivedAt);
@@ -940,6 +954,13 @@ export class Viewer {
   /** Change the permission mode (default | acceptEdits | plan | bypassPermissions | …). */
   async setMode(sessionId: string, mode: string): Promise<void> {
     await this.#control(sessionId, "set_mode", { mode });
+  }
+
+  /** Select one advertised native setting. POST acceptance is not native confirmation. */
+  async configureSession(sessionId: string, input: SessionSettingsChange): Promise<void> {
+    const change = parseSessionSettingsChange(input);
+    if (!change) throw new Error("Invalid session setting");
+    await this.#control(sessionId, "set_session_settings", { change });
   }
 
   /** Send the authenticated end intent. Current hosts clear abandoned permission gates but cannot

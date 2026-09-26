@@ -32,6 +32,74 @@ function fakeHost(id: Identity): BrokerClient {
 }
 
 describe("web client Viewer (browser-safe, against the real broker)", () => {
+  it("shares confirmed settings with two viewers and seals selections on the control plane", async () => {
+    const id = await uniqueIdentity();
+    const pass = await formatPass(id);
+    const viewers = await Promise.all(
+      [1, 2].map(() => Viewer.fromPass(pass, "https://broker", brokerFetch)),
+    );
+    const host = fakeHost(id);
+    const sid = "native-settings";
+    const settings = {
+      models: [
+        {
+          id: "m",
+          label: "Model",
+          defaultEffort: "high",
+          efforts: [{ id: "high", description: "More reasoning" }],
+        },
+      ],
+      collaborationModes: [{ id: "plan", label: "Plan" }],
+      current: { model: "m", effort: "high", collaborationMode: null as string | null },
+    };
+    async function announce(seq: number, configureSession: boolean, raw: unknown) {
+      await host.postFrame(
+        header(id, { recordKind: "session_announce", sessionId: sid, msgId: `settings-${seq}` }),
+        utf8(
+          JSON.stringify({
+            session_id: sid,
+            title: "Settings",
+            sent_at: Date.now(),
+            incarnation: "settings-test",
+            announce_seq: seq,
+            mode: "default",
+            harness: { agent: "codex", mode: "app-server" },
+            capabilities: { controls: { configureSession } },
+            session_settings: raw,
+          }),
+        ),
+      );
+    }
+    await announce(0, true, settings);
+    for (const viewer of viewers) {
+      const [seen] = await takeGen(viewer.announces(never), 1);
+      expect(seen?.sessionSettings).toEqual(settings);
+      expect(seen?.mode).toBe("default");
+    }
+    const sender = viewers[0];
+    if (!sender) throw new Error("missing viewer");
+    const before = Date.now();
+    await sender.configureSession(sid, { collaborationMode: "plan" });
+    const [control] = await takeGen(host.streamFrames({ session: sid, startIndex: 0 }), 1);
+    if (!control) throw new Error("missing control");
+    expect(control).toMatchObject({ dir: "in", recordKind: "set_session_settings" });
+    const sent = JSON.parse(new TextDecoder().decode(await host.openFrame(control)));
+    expect(sent.change).toEqual({ collaborationMode: "plan" });
+    expect(Object.keys(sent).sort()).toEqual(["change", "expiry"]);
+    expect(sent.expiry).toBeGreaterThan(before);
+    expect(sent.expiry).toBeLessThanOrEqual(Date.now() + 60_000);
+    const confirmed = { ...settings, current: { ...settings.current, collaborationMode: "plan" } };
+    await announce(1, true, confirmed);
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toEqual(confirmed);
+    await announce(2, false, confirmed);
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toBeUndefined();
+    await announce(3, true, { ...settings, current: {} });
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toBeUndefined();
+  });
+
   it("projects canonical attachment frames onto the user ID used by accepted receipts", async () => {
     const id = await uniqueIdentity();
     const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);

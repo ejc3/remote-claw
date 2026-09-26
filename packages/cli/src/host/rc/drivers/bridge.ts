@@ -91,6 +91,9 @@ function snapshotAnnouncement(announcement: BridgeAnnouncement): BridgeAnnouncem
         setModel: announcement.capabilities.controls.setModel,
         setMode: announcement.capabilities.controls.setMode,
         end: announcement.capabilities.controls.end,
+        ...(announcement.capabilities.controls.configureSession !== undefined
+          ? { configureSession: announcement.capabilities.controls.configureSession }
+          : {}),
       },
     },
   };
