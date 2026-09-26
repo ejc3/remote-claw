@@ -980,6 +980,7 @@ describe("Codex app-server boundary", () => {
                 exitCode: 0,
               },
               { type: "mcpToolCall", id: "tool-hidden" },
+              { type: "subAgentActivity", id: "task-visible" },
               { type: "userMessage", id: "user-legacy", content: [{ type: "text", text: "hi" }] },
               { type: "agentMessage", id: "agent-legacy", text: "hello" },
             ],
@@ -998,6 +999,7 @@ describe("Codex app-server boundary", () => {
     expect(page).toMatchObject({
       data: [
         { turnId: "turn-legacy", item: { id: "command-visible", type: "commandExecution" } },
+        { turnId: "turn-legacy", item: { id: "task-visible", type: "subAgentActivity" } },
         { turnId: "turn-legacy", item: { id: "user-legacy" } },
         { turnId: "turn-legacy", turnStatus: "completed", item: { id: "agent-legacy" } },
       ],
@@ -1082,6 +1084,7 @@ describe("Codex app-server boundary", () => {
             },
           },
           { turnId: "turn", item: { type: "mcpToolCall", id: "unsupported" } },
+          { turnId: "turn", item: { type: "subAgentActivity", id: "task" } },
         ],
         nextCursor: null,
       });
@@ -1092,6 +1095,7 @@ describe("Codex app-server boundary", () => {
     const page = await client.listItems(THREAD_ID, undefined, signal);
     expect(page.data).toMatchObject([
       { turnId: "turn", item: { type: "commandExecution", id: "command" } },
+      { turnId: "turn", item: { type: "subAgentActivity", id: "task" } },
     ]);
     expect(socket.sent.at(-1)?.params).toEqual({
       threadId: THREAD_ID,
