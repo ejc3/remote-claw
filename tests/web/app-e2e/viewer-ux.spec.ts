@@ -79,19 +79,62 @@ test("assistant prose, code, and diff highlights stay readable on phone and desk
   const prose = page.locator(".prose.assistant", { hasText: "Build is green" });
   await expect(prose.locator("pre")).toHaveCount(2);
 
-  for (const width of [390, 1280]) {
+  for (const [width, colorScheme] of [
+    [390, "light"],
+    [390, "dark"],
+    [1280, "light"],
+    [1280, "dark"],
+  ] as const) {
+    await page.emulateMedia({ colorScheme });
     await page.setViewportSize({ width, height: 900 });
     const styles = await prose.evaluate((element) => {
       const paragraph = element.querySelector('[role="paragraph"]')!;
       const code = element.querySelector("pre code")!;
       const p = getComputedStyle(paragraph);
       const c = getComputedStyle(code);
+      // The visible signs are ::after, not the data attribute. Their dark-mode line washes are
+      // translucent, so use the browser to composite the actual backgrounds before measuring ink.
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 1;
+      const ctx = canvas.getContext("2d")!;
+      const luminance = () => {
+        const [r = 0, g = 0, b = 0] = Array.from(ctx.getImageData(0, 0, 1, 1).data)
+          .slice(0, 3)
+          .map((value) => {
+            const channel = value / 255;
+            return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+          });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const diffMarkers = Array.from(element.querySelectorAll("[data-line-type]")).map((line) => {
+        const ancestors: Element[] = [];
+        for (let node: Element | null = line; node !== null; node = node.parentElement) {
+          ancestors.push(node);
+        }
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, 1, 1);
+        for (const ancestor of ancestors.reverse()) {
+          ctx.fillStyle = getComputedStyle(ancestor).backgroundColor;
+          ctx.fillRect(0, 0, 1, 1);
+        }
+        const background = luminance();
+        const marker = getComputedStyle(line, "::after");
+        ctx.fillStyle = marker.color;
+        ctx.fillRect(0, 0, 1, 1);
+        const ink = luminance();
+        return {
+          sign: line.getAttribute("data-diff-marker"),
+          content: marker.content,
+          contrast: (Math.max(ink, background) + 0.05) / (Math.min(ink, background) + 0.05),
+        };
+      });
       return {
         fontSize: Number.parseFloat(p.fontSize),
         lineHeight: Number.parseFloat(p.lineHeight),
         fontFamily: p.fontFamily,
         codeSize: Number.parseFloat(c.fontSize),
         codeFamily: c.fontFamily,
+        diffMarkers,
         pageFits: document.documentElement.scrollWidth <= window.innerWidth,
         codeHeadersClear: Array.from(element.querySelectorAll("pre")).every((pre) => {
           const header = pre.firstElementChild!.getBoundingClientRect();
@@ -107,6 +150,13 @@ test("assistant prose, code, and diff highlights stay readable on phone and desk
     expect(styles.codeFamily).toContain("monospace");
     expect(styles.pageFits).toBe(true);
     expect(styles.codeHeadersClear).toBe(true);
+    expect(styles.diffMarkers).toHaveLength(2);
+    for (const marker of styles.diffMarkers) {
+      expect(marker.content).toBe(JSON.stringify(marker.sign));
+      expect(marker.contrast, `${colorScheme} ${marker.sign} at ${width}px`).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    }
     await expect(prose.getByRole("table")).toContainText("Mobile");
     // Diff signs remain text as well as colour; neither platform loses the semantic distinction.
     await expect(prose.locator('[data-line-type="remove"]')).toHaveAttribute(
