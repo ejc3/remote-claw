@@ -774,6 +774,12 @@ summary:focus-visible,
   font-size: 14px;
   line-height: 1.5;
 }
+/* Diff signs carry meaning, unlike decorative syntax punctuation. Keep the code's readable ink on
+   Astryx's add/remove washes; its default punctuation grey is only ~1.6–1.8:1 on these backgrounds. */
+.astryx-codeblock [data-line-type="add"]::after,
+.astryx-codeblock [data-line-type="remove"]::after {
+  color: inherit;
+}
 
 /* Sub-agent thread — indent + a left thread-line so nested agent work reads as nested. */
 .sub-thread {
