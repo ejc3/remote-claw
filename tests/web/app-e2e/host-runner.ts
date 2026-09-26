@@ -69,6 +69,7 @@ function presetCaps(p: string | undefined): DriverCapabilities {
       controls: { interrupt: true, setModel: false, setMode: false, end: false },
       attachments: false,
     };
+  if (p === "claude-questions") return CLAUDE_NATIVE_CAPABILITIES;
   if (p === "codex") return CODEX_CAPABILITIES;
   if (p === "codex-files") return { ...CODEX_CAPABILITIES, files: true };
   if (p === "codex-approval") {
@@ -91,7 +92,7 @@ const askqMode = process.env.RC_E2E_ASKQ; // "1" (single-select) | "multi" (mult
 const withAskq = askqMode === "1" || askqMode === "multi";
 const askqMulti = askqMode === "multi";
 const smoke = process.env.RC_E2E_PROFILE === "smoke";
-const capsPreset = process.env.RC_E2E_CAPS;
+const capsPreset = process.env.RC_E2E_CAPS ?? "";
 const harnessPreset = process.env.RC_E2E_HARNESS;
 
 // A fresh identity isolates each test; an explicit fixture pass lets one test share its bus across
@@ -166,7 +167,10 @@ commands.on("line", (line) => {
   if (line.trim() === "resolve-permission" && capsPreset === "codex-approval") {
     session.pushUpstream({ type: "control_cancel_request", request_id: "perm-e2e-native" });
   }
-  if (line.trim() === "resolve-permission" && capsPreset === "codex-questions") {
+  if (
+    line.trim() === "resolve-permission" &&
+    ["codex-questions", "claude-questions"].includes(capsPreset)
+  ) {
     session.pushUpstream({ type: "control_cancel_request", request_id: "askq-e2e-1" });
   }
   if (line.trim() === "terminal") {
@@ -207,7 +211,7 @@ try {
     ? smokeScenario()
     : scenario(
         withPerm && capsPreset !== "codex-approval",
-        withAskq && capsPreset !== "codex-questions",
+        withAskq && !["codex-questions", "claude-questions"].includes(capsPreset),
         askqMulti,
         process.env.RC_E2E_RICH_TEXT === "1",
       )) {
@@ -229,7 +233,8 @@ try {
       },
     });
   }
-  if (withAskq && capsPreset === "codex-questions") {
+  if (withAskq && ["codex-questions", "claude-questions"].includes(capsPreset)) {
+    const claude = capsPreset === "claude-questions";
     session.pushUpstream({
       type: "control_request",
       request_id: "askq-e2e-1",
@@ -238,17 +243,18 @@ try {
         tool_name: "AskUserQuestion",
         tool_input: {
           nativeQuestions: true,
+          ...(claude ? { allowSkip: true } : {}),
           questions: [
-            { id: "__proto__", header: "First", allowFreeText: false },
+            { id: "__proto__", header: "First", allowFreeText: claude },
             { id: "constructor", header: "Second", allowFreeText: true },
           ].map((question) => ({
             ...question,
-            question: "Choose a path",
+            question: claude ? `Choose the ${question.header.toLowerCase()} path` : "Choose a path",
             options: [
               { label: "Blue", description: "Blue path" },
               { label: "Green", description: "Green path" },
             ],
-            multiSelect: false,
+            multiSelect: claude && question.header === "Second",
           })),
         },
       },

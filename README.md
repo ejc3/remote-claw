@@ -102,7 +102,7 @@ The implemented native modes are:
 | --- | --- |
 | `--rc-app <origin>` (default `--rc-driver=mitm`) | Runs real Claude Code behind a loopback TLS proxy, answers `/v1/code/sessions/**` locally, and relays through the E2E-encrypted broker. This replaces Anthropic Remote Control, so the official Claude client cannot join. |
 | `--rc-trace` | Passes traffic to Anthropic while recording bounded, redacted protocol diagnostics. The official client can drive the session, but remote-claw browsers cannot. |
-| `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text, image/file groups with an optional caption, one-shot session-scoped Interrupt, [fresh single-choice responses](docs/protocol.md#claude-native-single-choice-questions), and [bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals). Bounded available image previews survive viewer reload; uploads deliberately supply bytes to native Claude without changing persistent permission settings. Browser-authored native `@` file references remain unsupported. Unsupported permissions/forms, model/mode changes, and end stay native/local. |
+| `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text, image/file groups with an optional caption, one-shot session-scoped Interrupt, [bounded native question responses](docs/protocol.md#claude-native-questions), and [bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals). Bounded available image previews survive viewer reload; uploads deliberately supply bytes to native Claude without changing persistent permission settings. Browser-authored native `@` file references remain unsupported. Unsupported permissions/forms, model/mode changes, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
 | `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The mutable surface remains non-empty non-slash text plus interrupt. Read-only MAIN-session running/idle status is advertised; native/local UI still owns permissions, questions, model/mode, attachments, and end. |
 | `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0, 0.153.4, or 0.154.0 on Linux arm64. Browser mutations are non-empty non-slash text, image groups with an optional caption, and interrupt; exact 0.154.0 also accepts general files as private host-owned references. Available bounded image previews survive viewer reload. Native status and completed shell commands/results are read-only. Exact 0.153.4 and 0.154.0 additionally implement one-shot ordinary local-command approvals and bounded non-secret blocking choice forms; 0.151.0 approvals/questions and unsupported request shapes remain native-owned. |
@@ -260,7 +260,7 @@ node dist/remote-claw.js --rc-app https://your-app.example \
 
 Use a durable `sqlite`/Turso broker profile and the same backend in the viewer. Browser mutations are
 ordinary non-empty non-slash text, images/files with an optional non-slash caption, one-shot session-scoped
-Interrupt, [supported single-choice responses](docs/protocol.md#claude-native-single-choice-questions),
+Interrupt, [bounded native question responses](docs/protocol.md#claude-native-questions),
 and [bounded one-time Bash decisions](docs/protocol.md#claude-native-bash-approvals).
 Images/files reuse the encrypted composer group. The host writes private upload files and submits
 their references through ordinary native text, deliberately sharing the uploaded bytes with Claude
@@ -287,13 +287,14 @@ from historical M1 in the [release roadmap](docs/release-finish-line.md).
 
 Validated worker tool calls and textual tool results also appear as read-only activity,
 with failures kept visible in the transcript and existing output truncation applied. This does not
-infer running state or background-task lifecycle. Fresh single offered-choice forms and supported
-Bash approvals can be answered here; unsupported permissions/forms stay in Claude. Bash Allow copies
+infer running state or background-task lifecycle. Fresh native forms of 1–4 distinct questions support
+single/multiple choices, bounded Other text, and per-question Skip; supported Bash approvals can also
+be answered here. Unsupported permissions/forms stay in Claude. Bash Allow copies
 the native command/description unchanged; Deny rejects that command. The card explicitly notes that
 Claude did not provide a working directory, rather than guessing one. History and startup/reconnect
 overlap never restore decision authority. The separate
-[question acceptance](docs/release-finish-line.md#claude-native-single-choice-questions) records the
-native-app/two-viewer result; [Bash acceptance](docs/release-finish-line.md#claude-native-bash-approvals)
+[wider-form acceptance](docs/release-finish-line.md#claude-native-wider-question-forms) tracks the current
+slice separately from the historical single-choice result; [Bash acceptance](docs/release-finish-line.md#claude-native-bash-approvals)
 is tracked separately. Model/mode, general-file, and end actions remain native/local.
 
 To restart only the companion for a still-running native session, explicitly supply that session's

@@ -411,6 +411,30 @@ describe("stable viewer surface", () => {
     expect(html).not.toContain("Codex");
   });
 
+  it("renders four Claude questions with advertised multi-select, Other, and per-question Skip", () => {
+    const html = renderBubble(
+      nativeQuestionMessage({
+        nativeQuestions: true,
+        allowSkip: true,
+        questions: Array.from({ length: 4 }, (_, index) => ({
+          id: `question-${index}`,
+          header: `Question ${index + 1}`,
+          question: `Choose path ${index + 1}`,
+          multiSelect: index % 2 === 1,
+          allowFreeText: true,
+          options: [{ label: "Blue", description: "Blue path" }],
+        })),
+      }),
+      { ...nativeQuestionOpts, permissionAgent: "Claude" },
+    );
+    expect(html.match(/class="q-block"/g)).toHaveLength(4);
+    expect(html.match(/class="q-freeform"/g)).toHaveLength(4);
+    expect(html.match(/Skip this question/g)).toHaveLength(4);
+    expect(html.match(/Choose any that apply/g)).toHaveLength(2);
+    expect(html).not.toContain("Skip all");
+    expect(html).not.toContain(">Dismiss<");
+  });
+
   it("keeps native question submissions pending and resolutions neutral without publishing answers", () => {
     for (const behavior of ["pending", "resolved"] as const) {
       const html = renderBubble(

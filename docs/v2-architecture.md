@@ -416,7 +416,7 @@ native/provider history are unaffected. Canonical previews share a 32 MiB decode
 reconciler across history/live; exhausted previews retain labels. See
 [upload bounds and retention](protocol.md#10-attachments).
 The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text, images/files, Interrupt,
-[fresh single-choice responses](protocol.md#claude-native-single-choice-questions), and
+[bounded native question responses](protocol.md#claude-native-questions), and
 [bounded one-time Bash decisions](protocol.md#claude-native-bash-approvals). Unsupported permissions
 and forms, status, and other controls remain disabled. This surface is Linux-only and
 pins exact Claude 2.1.237. The [release roadmap](release-finish-line.md) owns current Interrupt acceptance,
@@ -424,8 +424,10 @@ separately from historical M1. [Image acceptance](release-finish-line.md#claude-
 also remains a separate follow-on, not a rewrite of M1. The
 [files/previews implementation](release-finish-line.md#native-files-and-image-previews) has separate
 bounded native acceptance.
-The separate [question result](release-finish-line.md#claude-native-single-choice-questions) records its
-native-app/two-viewer acceptance; [Bash acceptance](release-finish-line.md#claude-native-bash-approvals)
+Current question forms admit 1–4 distinct questions with single/multiple choices, bounded Other, and
+per-question Skip. Single answers remain strings and multi answers arrays. The separate
+[wider-form result](release-finish-line.md#claude-native-wider-question-forms) tracks current acceptance
+without widening the historical single-choice result; [Bash acceptance](release-finish-line.md#claude-native-bash-approvals)
 is separate. Both use one `ClaudeNativeControls` lifecycle. History grants no response authority;
 losing the live stream with an unresolved request retires only the companion, not native Claude.
 
@@ -541,7 +543,7 @@ have narrower, truthfully labeled guarantees.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
-| Claude native companion | Structured text projection, host-owned image/file uploads and bounded previews, read-only tool activity, one-shot session-scoped Interrupt, [fresh single-choice responses](protocol.md#claude-native-single-choice-questions), and [bounded Bash decisions](protocol.md#claude-native-bash-approvals) over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; unsupported permissions/forms, other controls, and status remain native/disabled; files/previews native acceptance is separate |
+| Claude native companion | Structured text projection, host-owned image/file uploads and bounded previews, read-only tool activity, one-shot session-scoped Interrupt, [bounded native question responses](protocol.md#claude-native-questions), and [bounded Bash decisions](protocol.md#claude-native-bash-approvals) over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; unsupported permissions/forms, other controls, and status remain native/disabled; files/previews native acceptance is separate |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
 | Codex | Current code accepts exact 0.151.0, 0.153.4, and 0.154.0/Linux arm64 with text/images/interrupt/status, bounded image previews, and read-only completed command activity; exact 0.153.4 and 0.154.0 implement one-shot ordinary local-command approvals and bounded native choice forms; general files require exact 0.154.0. Historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0; separate 0.153.4 managed recovery and [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) also passed | One explicit thread and attached local-TUI precondition; files/previews and other current acceptance are tracked in the release roadmap; unsupported permissions/questions, legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect, per-device unsubscribe, and other browser controls remain unclaimed |
@@ -680,8 +682,9 @@ The <code>claude-native</code> driver uses these bounded <code>AnthropicRcClient
 - <code>postEvent</code> for one user event with a caller-owned UUID and timestamp;
 - current <code>postInterrupt</code> for one session-scoped Stop with caller-owned UUID/request ID,
   separate from the historical M1 text acceptance;
-- current <code>postQuestionResponse</code> for one recorded native single-choice form and offered
-  label, under the [question boundary](protocol.md#claude-native-single-choice-questions); and
+- current <code>postQuestionResponse</code> for one complete recorded native form with 1–4 distinct
+  questions and retained single-string/multi-array answers, under the
+  [question boundary](protocol.md#claude-native-questions); and
 - current <code>postCommandResponse</code> for one recorded Bash Allow/Deny decision, under the
   [Bash boundary](protocol.md#claude-native-bash-approvals).
 

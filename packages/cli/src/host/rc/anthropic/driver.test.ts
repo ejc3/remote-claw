@@ -1847,7 +1847,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
         input: {
           requestId: "native-question",
           toolUseId: "native-tool",
-          ...(kind === "question" ? { answer: "Blue" } : { behavior: kind }),
+          ...(kind === "question" ? { answers: ["Blue"] } : { behavior: kind }),
         },
       });
       expect(
