@@ -191,7 +191,7 @@ home-folder UI artifacts, outside Git.
 
 | Follow-on | Status | Bounded user outcome |
 | --- | --- | --- |
-| Native work visibility, Claude first | Claude tools and Codex completed commands implemented and live-accepted | Real tool calls, results, and errors reach the existing shared activity/details UI in provider order; no invented task lifecycle |
+| Native work visibility, Claude first | Claude tools, Codex completed commands, and [0.154.0 task observations](#codex-native-task-observations) implemented and live-accepted | Real observations reach the existing activity/details UI; no invented child state or task controls |
 | Desktop/mobile daily-use finish | Current: recovery warning scoped; [draft navigation and credential restoration](#viewer-daily-use--2026-09-25) implemented | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | [Complete for exact 0.154.0/Linux arm64/managed Unix/paginated](#codex-official-remote-recovery--complete) | Existing TUI and actual Mac desktop app keep the same native thread across companion restart/broker loss; reopened viewers select a fresh projection, recover history once, and complete later browser work |
@@ -570,6 +570,26 @@ pause, so this does not qualify uninterrupted survival or mobile-app/native-proc
 seed's preexisting full-access policy was unchanged; no tool, approval, or question acceptance is
 claimed by this text-only follow-up. Private evidence:
 `/home/ubuntu/remote-claw-ui-artifacts/native-final-2026-09-26.rDZlFW/README.md`.
+
+### Codex native task observations
+
+Current implementation: exact Codex 0.154.0/Linux arm64 projects bounded parent-thread
+`subAgentActivity` into the existing encrypted activity rows. Started/interacted/interrupted/completed
+remain native observations, not inferred child success, a live task tracker, or control authority.
+No child subscriptions, prompts/output forwarding, permissions, or native-idle changes are added.
+The [protocol boundary](protocol.md#codex-native-task-observations) owns exact bounds and finality.
+
+The 2026-09-26 managed-Unix/paginated native acceptance passed with the retained local TUI and two
+independent Chromium viewers (390×844 phone, 1280×900 desktop). An earlier native started/completed
+pair appeared once from history; a new no-tool child then produced live started/completed rows and
+one parent final, all retained once after both viewers reloaded. Fresh-companion replay also passed.
+Phone/desktop screenshots in light/dark were opened; no UI or CSS change was needed. Artifacts are
+outside Git under `~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/native-tasks.Re3OYz/`.
+
+`interacted`/`interrupted` and legacy-history handling have deterministic adapter coverage, not
+separate live acceptance. This does not qualify Claude-native child tasks, child controls/output,
+native task success semantics, mobile network-loss recovery, or token streaming. Detailed regression
+stays at the adapter boundary; existing browser coverage already owns activity-sheet rendering.
 
 ### Codex native session settings
 

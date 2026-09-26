@@ -122,8 +122,10 @@ current values only. Session selection/reload refreshes catalogs beyond the boun
 window, and viewers never inherit a catalog across host incarnations or removed capabilities. See the
 [settings boundary](docs/protocol.md#codex-native-session-settings) and
 [separate acceptance](docs/release-finish-line.md#codex-native-session-settings).
-Other controls, streaming partials, file
-changes, and task lifecycle remain unsupported. The [release roadmap](docs/release-finish-line.md)
+Exact 0.154.0 additionally projects bounded native parent-thread `subAgentActivity` events through
+existing task rows; these observations grant no child controls or inferred success/idle state.
+Other controls, streaming partials, file changes, and reconstructed task tracking remain unsupported.
+The [release roadmap](docs/release-finish-line.md)
 owns current-version/activity/interrupt/image, command-approval, and question acceptance; the bounded
 question phone/desktop/native-TUI run passed on 0.153.4. The separate
 [0.154.0 acceptance](docs/release-finish-line.md#codex-current-version-acceptance) records the current
@@ -135,7 +137,7 @@ accepts literal `unix://` only as Codex's same-user managed control socket
 the historical explicit-port loopback WebSocket form and rejecting arbitrary Unix paths. Resume's
 reported `historyMode` selects bounded ascending `thread/items/list` for `paginated` or
 `thread/turns/list` with `itemsView:"full"` for `legacy`; both readers retain user/assistant text and
-`commandExecution`. Each page requests one item/turn to avoid combining large inline-image groups;
+`commandExecution` plus `subAgentActivity` (projected only on exact 0.154.0). Each page requests one item/turn to avoid combining large inline-image groups;
 the raw scan is capped at 100,000 pages. The projection filters unsupported or unfinished shapes before the shared 10,000
 projected-native-item cap. Codex coordinates are `(turnId,itemId)`, and changed
 projected bytes at an already-seen coordinate fence the projection. The supported durable broker is
