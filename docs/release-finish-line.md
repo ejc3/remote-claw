@@ -196,7 +196,8 @@ home-folder UI artifacts, outside Git.
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | [Complete for exact 0.154.0/Linux arm64/managed Unix/paginated](#codex-official-remote-recovery--complete) | Existing TUI and actual Mac desktop app keep the same native thread across companion restart/broker loss; reopened viewers select a fresh projection, recover history once, and complete later browser work |
 | Screenshot/file input | Historical Codex and Claude-native images live-accepted; [files and bounded previews implemented, bounded native acceptance passed](#native-files-and-image-previews) for Claude-native and exact Codex 0.154.0 | Phone/desktop send encrypted mixed groups with native-confirmed delivery and bounded canonical previews; uploads deliberately share bytes without changing persistent permission/sandbox settings |
-| Native-phone foreground recovery | [Short Android background/resume passed](#native-phone-backgroundresume--2026-09-26) for both agents | Foreground catches up once and later phone input works; true network-loss/deep-sleep recovery remains unverified |
+| Native-phone foreground recovery | [Short Android background/resume](#native-phone-backgroundresume--2026-09-26) passed for both agents; separate [OS lifecycle outcomes](#native-phone-os-lifecycle--2026-09-26) also passed | Native Claude thaw and ChatGPT app-process reopen restore usable sessions; true network-loss/deep-sleep recovery remains unverified |
+| Native session settings | Exact Codex 0.154.0 [implemented; bounded native/browser acceptance passed](#codex-native-session-settings) | Phone/desktop pick native models, efforts, and collaboration modes; selections require native confirmation and never change permission/sandbox policy |
 | Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance). Claude [single-choice acceptance](#claude-native-single-choice-questions), [bounded Bash acceptance](#claude-native-bash-approvals), and [wider-form acceptance](#claude-native-wider-question-forms) passed | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted; 0.154.0 native-app text and browser/TUI mutation [acceptance passed](#codex-current-version-acceptance) | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
@@ -479,9 +480,26 @@ Only owned temporary broker/companions/viewers were stopped afterward; native se
 were preserved. Private evidence:
 `/home/ubuntu/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/phone-recovery/README.md`.
 
+### Native-phone OS lifecycle — 2026-09-26
+
+**Two distinct bounded native-only outcomes passed.** On the same Moto G/Android 15 and app versions,
+Claude's process naturally entered the Android cached-app freezer (`cgroup.freeze=1`). A native
+no-tools host turn completed while that process remained frozen. Ordinary foregrounding thawed the
+same process, displayed the reply once, and accepted a new phone-origin turn. ChatGPT instead exited
+under an OS-recorded one-time-permission revocation; a proposed targeted-freeze check aborted before
+any freeze or host prompt. Normal reopening restored the exact retained Codex thread and accepted one
+new phone-origin turn, without sign-in or re-pairing. Canonical history and native TUI retained each
+sent marker once; the unsent freeze marker was absent.
+
+These were native-app/host checks, not additional two-viewer, settings-picker, or approval acceptance.
+No test-issued kill, freeze override, permission/account/pairing, or network-setting change occurred.
+The outcomes do not establish socket loss, network outage, device lock, Doze, or deep-sleep recovery.
+Private evidence and scoped OS observations:
+`~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/native-process-suspension.CllYoe/README.md`.
+
 ### Claude wider-form wire capture — 2026-09-26
 
-**Native evidence captured; wider browser forms not implemented.** In the same Manual-mode fixture,
+**Historical capture, before the separate wider-form implementation.** In the same Manual-mode fixture,
 two actual Claude Android AskUserQuestion cards established precise request/response shapes. A
 multi-select question with labels `Alpha, beta` and `Gamma / delta`, plus built-in Other text
 `Custom: cyan, magenta`, returned an answer array preserving those three elements. The displayed
@@ -491,8 +509,9 @@ responses preserved original questions and native tool/request IDs; canonical wi
 `toolUseResult.answers` agreed. Exactly two question calls, no other tools, retries, policy changes,
 or new fixture. This is not single-select Other, multi-question, or cross-client qualification.
 
-The existing remote-claw single offered-choice boundary remains unchanged until its separate wider-form
-slice lands. Private sanitized fixtures and actual-phone captures:
+At capture time, remote-claw still had the single offered-choice boundary; the later
+[wider-form acceptance](#claude-native-wider-question-forms) owns the completed browser integration.
+Private sanitized fixtures and actual-phone captures:
 `/home/ubuntu/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/claude-forms/README.md`.
 
 ### Claude-native human input — 2026-09-26
@@ -604,6 +623,69 @@ pause, so this does not qualify uninterrupted survival or mobile-app/native-proc
 seed's preexisting full-access policy was unchanged; no tool, approval, or question acceptance is
 claimed by this text-only follow-up. Private evidence:
 `/home/ubuntu/remote-claw-ui-artifacts/native-final-2026-09-26.rDZlFW/README.md`.
+
+### Codex native session settings
+
+**Current: implemented; bounded native/browser acceptance passed 2026-09-26.** This slice
+uses exact Codex 0.154.0/Linux arm64 and keeps the historical 0.151.0/0.153.4 and prior 0.154.0
+acceptance scopes unchanged. Claude model/mode settings and all other unadvertised controls remain
+native/local; no broader approval, streaming, or task-lifecycle claim is added.
+
+The existing session sheet now offers native model catalogs, the current model's effort choices and
+descriptions, and native collaboration modes. Catalog IDs are not hardcoded in the viewer. Unknown
+native values stay visibly unknown or retain their native value without becoming extra selectable
+options. Only native resume/settings notifications drive current selections; one pending choice
+disables further picks until matching native state, a conflicting native change, or a 60-second
+timeout. Unconfirmed changes are labeled honestly and never retried automatically.
+
+The optional capability is enabled only after bounded native model/mode discovery. Catalog failure
+does not fail a healthy conversation. The host permits one model, effort, or collaboration-mode
+change, rechecks expiry/catalog at the native writer, and sends one `thread/settings/update` through
+the existing browser-input FIFO. Mode changes preserve the current native model and explicit
+supported effort; they are unavailable until both are known and supported. Permission, sandbox,
+persistent configuration, and custom developer-instruction updates are not exposed. The
+[protocol section](protocol.md#codex-native-session-settings) owns the exact wire boundary.
+
+Two independent phone-layout/desktop Chromium viewers passed catalog selection, no optimistic ticks,
+native-shaped confirmation in both viewers, and reload consistency. Phone/desktop light/dark
+screenshots were opened and inspected. Focused parser/adapter/UI tests cover unknown and unsupported
+values, catalog bounds/fallback, mode/effort preservation, stale/expired writes, confirmation versus
+RPC acceptance, and timeout/peer-contradiction feedback.
+
+The catalog-retention follow-up keeps native current values in each announcement but includes full
+catalogs only initially, on catalog change, and on authenticated catch-up. Durable broker presence is
+stored, so compact keepalives avoid unbounded repetition of the large catalog. Focused relay/viewer
+regressions cover same-incarnation reuse, malformed/capability-removal invalidation, both backend
+kinds, and nonblocking bounded refresh recovery. The browser sentinel advances beyond the last-64
+discovery window before reload and recovers the catalog through session-selection catch-up. This
+transport check does not repeat or broaden the separate actual-native settings acceptance below.
+
+A separate writer follow-up prevents a peer's later mode choice from restoring stale model/effort
+after an earlier RPC returns before native confirmation. One expected-state guard is set before the
+RPC and cleared only by matching native state, including preserved model/effort for mode. Later
+settings are consumed without a native write while unconfirmed; already-confirmed targets are
+no-ops. Text/interrupt remain usable. If confirmation never arrives, further browser settings require
+native reconciliation or a fresh companion, not browser reload. Deterministic adapter tests own this
+ordering/timeout case; no additional native-setting or policy acceptance is inferred.
+
+The separate actual 0.154.0/Linux arm64/managed-Unix run used one retained native thread and
+independent 390×844 phone-layout and 1280×900 desktop viewers. Effort changed from ultra to high;
+the first native settings notification established Default mode rather than the viewer guessing it
+from resume. Model changed from GPT-5.6-Sol to GPT-5.6-Terra, then collaboration mode changed to Plan
+and back to Default. Subsequent no-tools turns recorded native Terra/high with the matching plan/default
+collaboration settings, not merely a successful RPC. Each marker had one user and one assistant in
+native history and both viewers. The original Sol/ultra/Default values were restored through native
+notifications and verified in both viewers after reload. Native turn records retained the preexisting
+`approvalPolicy:never` and full-access sandbox baseline; this is not approval-policy acceptance.
+The native TUI and actual ChatGPT Android app corroborated both replies. Live phone/desktop
+light/dark screenshots were inspected. No physical-phone/WebKit viewer transport, official-app
+settings-picker parity, broad model/effort matrix, provider switch, or additional native version is implied.
+
+Private browser evidence is under
+`/home/ubuntu/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/settings-browser/`.
+Actual native settings notifications, turn contexts, two-viewer actions, and TUI evidence are under
+the sibling `native-settings.ZNvEGo/` directory; Android corroboration is in
+`~/remote-claw-ui-artifacts/claude-finish-2026-09-26.nM0JIC/settings-codex-native-2245.{png,xml}`.
 
 ### Daily-use recovery warning
 

@@ -113,6 +113,119 @@ export interface ControlCapabilities {
   setModel: boolean;
   setMode: boolean;
   end: boolean;
+  /** Native-confirmed model/effort/collaboration settings, separate from permission mode. */
+  configureSession?: boolean;
+}
+
+export interface SessionSettings {
+  models: readonly {
+    id: string;
+    label: string;
+    defaultEffort: string;
+    efforts: readonly { id: string; description: string }[];
+  }[];
+  collaborationModes: readonly { id: string; label: string }[];
+  current: {
+    model: string | null;
+    effort: string | null;
+    collaborationMode: string | null;
+  };
+}
+
+export type SessionSettingsChange =
+  | { model: string }
+  | { effort: string }
+  | { collaborationMode: string };
+
+/** Copy exactly one bounded user selection. Native adapters additionally validate live catalogs. */
+export function parseSessionSettingsChange(raw: unknown): SessionSettingsChange | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  const entries = Object.entries(raw);
+  if (entries.length !== 1) return null;
+  const entry = entries[0];
+  if (!entry) return null;
+  const [key, value] = entry;
+  if (typeof value !== "string" || value.trim() === "" || value.length > 256) return null;
+  if (key === "model") return { model: value };
+  if (key === "effort") return { effort: value };
+  if (key === "collaborationMode") return { collaborationMode: value };
+  return null;
+}
+
+/** Bounded copied display catalog. Unknown confirmed values are visible, never additional choices. */
+export function parseSessionSettings(raw: unknown): SessionSettings | null {
+  const record = (value: unknown): Record<string, unknown> | null =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+  const text = (value: unknown, max = 256): value is string =>
+    typeof value === "string" && value.trim() !== "" && value.length <= max;
+  const data = record(raw);
+  const current = record(data?.current);
+  if (
+    !data ||
+    !current ||
+    !Array.isArray(data.models) ||
+    data.models.length < 1 ||
+    data.models.length > 32 ||
+    !Array.isArray(data.collaborationModes) ||
+    data.collaborationModes.length > 8 ||
+    ![current.model, current.effort, current.collaborationMode].every(
+      (value) => value === null || text(value),
+    )
+  )
+    return null;
+  const models: SessionSettings["models"][number][] = [];
+  for (const value of data.models) {
+    const model = record(value);
+    if (
+      !model ||
+      !text(model.id) ||
+      !text(model.label) ||
+      !text(model.defaultEffort) ||
+      !Array.isArray(model.efforts) ||
+      model.efforts.length < 1 ||
+      model.efforts.length > 12 ||
+      models.some((entry) => entry.id === model.id)
+    )
+      return null;
+    const efforts: { id: string; description: string }[] = [];
+    for (const value of model.efforts) {
+      const effort = record(value);
+      if (
+        !effort ||
+        !text(effort.id) ||
+        !text(effort.description, 512) ||
+        efforts.some((entry) => entry.id === effort.id)
+      )
+        return null;
+      efforts.push({ id: effort.id, description: effort.description });
+    }
+    if (!efforts.some((entry) => entry.id === model.defaultEffort)) return null;
+    models.push({ id: model.id, label: model.label, defaultEffort: model.defaultEffort, efforts });
+  }
+  const collaborationModes: { id: string; label: string }[] = [];
+  for (const value of data.collaborationModes) {
+    const mode = record(value);
+    if (
+      !mode ||
+      !text(mode.id) ||
+      !text(mode.label) ||
+      collaborationModes.some((entry) => entry.id === mode.id)
+    )
+      return null;
+    collaborationModes.push({ id: mode.id, label: mode.label });
+  }
+  const result: SessionSettings = {
+    models,
+    collaborationModes,
+    current: {
+      model: current.model as string | null,
+      effort: current.effort as string | null,
+      collaborationMode: current.collaborationMode as string | null,
+    },
+  };
+  return JSON.stringify(result).length <= 65_536 ? result : null;
 }
 
 export interface DriverCapabilities {

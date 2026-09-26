@@ -3,6 +3,7 @@ import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import NodeWebSocket from "ws";
+import type { SessionSettings } from "../../../harness.js";
 import {
   isLikelyBase64,
   MAX_ATTACHMENT_B64,
@@ -10,6 +11,13 @@ import {
   MAX_ATTACHMENT_TOTAL_BYTES,
 } from "../relay.js";
 import type { HostImage } from "../session.js";
+import {
+  type CodexSettingsUpdate,
+  parseCodexModels,
+  parseCodexModes,
+  parseCodexResumeSettings,
+  parseCodexSettingsUpdate,
+} from "./settings.js";
 
 const REQUEST_TIMEOUT_MS = 15_000;
 const CODEX_UNIX_MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
@@ -61,6 +69,7 @@ export interface CodexInitializeResult {
 }
 
 export interface CodexResumeResult {
+  settings?: SessionSettings["current"];
   thread: {
     id: string;
     name?: string;
@@ -92,6 +101,9 @@ export function isCodexTurnStatus(value: unknown): value is CodexTurnStatus {
 export interface CodexClient {
   initialize(signal: AbortSignal): Promise<CodexInitializeResult>;
   resume(threadId: string, signal: AbortSignal): Promise<CodexResumeResult>;
+  listModels(signal: AbortSignal): Promise<SessionSettings["models"]>;
+  listCollaborationModes(signal: AbortSignal): Promise<SessionSettings["collaborationModes"]>;
+  updateSettings(threadId: string, update: CodexSettingsUpdate, signal: AbortSignal): Promise<void>;
   listTurnMetadata(
     threadId: string,
     cursor: string | undefined,
@@ -358,7 +370,9 @@ export class CodexAppServerClient implements CodexClient {
     }
     // A display label is optional and must not prevent an otherwise valid thread from attaching.
     const name = typeof thread.name === "string" ? thread.name.trim().slice(0, 512) : "";
+    const settings = parseCodexResumeSettings(result);
     return {
+      ...(settings === undefined ? {} : { settings }),
       thread: {
         id: thread.id,
         ...(name === "" ? {} : { name }),
@@ -367,6 +381,62 @@ export class CodexAppServerClient implements CodexClient {
         historyMode: thread.historyMode,
       },
     };
+  }
+
+  async listModels(signal: AbortSignal): Promise<SessionSettings["models"]> {
+    const entries: unknown[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    for (;;) {
+      const result = record(
+        await this.#request(
+          "model/list",
+          {
+            limit: 32 - entries.length,
+            includeHidden: false,
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+          signal,
+        ),
+      );
+      if (
+        !Array.isArray(result?.data) ||
+        result.data.length > 32 - entries.length ||
+        (result.nextCursor !== null &&
+          (typeof result.nextCursor !== "string" || result.nextCursor === ""))
+      )
+        throw new CodexAppServerError("Codex returned an invalid model catalog");
+      entries.push(...result.data);
+      if (result.nextCursor === null) break;
+      if (entries.length >= 32 || result.data.length === 0 || cursors.has(result.nextCursor))
+        throw new CodexAppServerError("Codex model catalog exceeded its bound");
+      cursor = result.nextCursor;
+      cursors.add(cursor);
+    }
+    const models = parseCodexModels(entries);
+    if (models === null) throw new CodexAppServerError("Codex returned an invalid model catalog");
+    return models;
+  }
+
+  async listCollaborationModes(
+    signal: AbortSignal,
+  ): Promise<SessionSettings["collaborationModes"]> {
+    const response = record(await this.#request("collaborationMode/list", {}, signal));
+    const modes = parseCodexModes(response?.data);
+    if (modes === null) throw new CodexAppServerError("Codex returned an invalid mode catalog");
+    return modes;
+  }
+
+  async updateSettings(
+    threadId: string,
+    update: CodexSettingsUpdate,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const safe = parseCodexSettingsUpdate(update);
+    if (!isCodexThreadId(threadId) || safe === null)
+      throw new CodexAppServerError("Codex received invalid session settings");
+    await this.#request("thread/settings/update", { threadId, ...safe }, signal);
+    // An RPC response is acknowledgement only. thread/settings/updated owns displayed values.
   }
 
   async listTurnMetadata(

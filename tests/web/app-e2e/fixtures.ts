@@ -10,6 +10,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { test as base } from "@playwright/test";
+import type { SessionSettings } from "@remote-claw/cli/harness";
 import { bypassForTarget, primeVercelBypass } from "./protection-bypass";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -23,6 +24,8 @@ export interface SeedResult {
   terminalize: () => Promise<void>;
   /** End the scripted native command/question through its production cancellation projection. */
   resolvePermission: () => Promise<void>;
+  /** Publish a scripted native settings confirmation independently of browser POST acceptance. */
+  confirmSettings: (settings: SessionSettings) => Promise<void>;
 }
 export type SeedHost = (opts?: {
   /** Reuse this test's identity for a distinct session on the same discovery bus. Passed via env. */
@@ -53,6 +56,7 @@ export type SeedHost = (opts?: {
     | "opencode"
     | "codex"
     | "codex-files"
+    | "codex-settings"
     | "codex-approval"
     | "codex-questions";
   /** Harness preset (RC_E2E_HARNESS) for the agent+mode badge (#164). Unset is the private MITM relay;
@@ -185,6 +189,16 @@ function spawnHost(opts: {
             pass: o.pass,
             sessionId: o.sessionId,
             terminalize: () => terminalize(o.sessionId as string),
+            confirmSettings: (settings) =>
+              new Promise<void>((resolve, reject) => {
+                if (child.stdin === null || child.stdin.destroyed) {
+                  reject(new Error("host-runner exited before confirming settings"));
+                  return;
+                }
+                child.stdin.write(`settings:${JSON.stringify(settings)}\n`, (error) =>
+                  error ? reject(error) : resolve(),
+                );
+              }),
             resolvePermission: () =>
               new Promise<void>((resolve, reject) => {
                 if (child.stdin === null || child.stdin.destroyed) {

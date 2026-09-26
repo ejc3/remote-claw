@@ -2209,7 +2209,264 @@ describe("HostRcRelay seq discipline (adversarial-review fixes)", () => {
   });
 });
 
+describe("HostRcRelay bounded settings discovery", () => {
+  function settingsSession(): Session {
+    const session = new Session("s", "t", {});
+    session.sessionSettings = {
+      models: Array.from({ length: 20 }, (_, index) => ({
+        id: `model-${index}`,
+        label: `Model ${index}`,
+        defaultEffort: "high",
+        efforts: Array.from({ length: 8 }, (_, effort) => ({
+          id: effort === 0 ? "high" : `effort-${effort}`,
+          description: "x".repeat(300),
+        })),
+      })),
+      collaborationModes: [{ id: "plan", label: "Plan" }],
+      current: { model: "model-0", effort: "high", collaborationMode: null },
+    };
+    return session;
+  }
+  const capabilities = {
+    ...MITM_CAPABILITIES,
+    controls: { ...MITM_CAPABILITIES.controls, configureSession: true },
+  };
+
+  it("omits unchanged large catalogs from keepalives and native current changes, but sends changed/restored catalogs", async () => {
+    const session = settingsSession();
+    const original = session.sessionSettings;
+    if (!original) throw new Error("missing settings");
+    expect(JSON.stringify(original).length).toBeGreaterThan(50_000);
+    expect(JSON.stringify(original).length).toBeLessThan(65_536);
+    const client = new FakeClient();
+    const relay = relayOf(session, client, capabilities);
+    await relay.announce("settings");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 20_001);
+    try {
+      await waitFor(() => client.streamStarts.length === 1);
+      session.wake();
+      await waitFor(() => client.announces.length === 2);
+      expect(client.announces[0]?.session_settings).toEqual(original);
+      expect(client.announces[1]?.session_settings).toEqual({ current: original.current });
+      expect(JSON.stringify(client.announces[1]?.session_settings).length).toBeLessThan(256);
+      session.sessionSettings = {
+        ...structuredClone(original),
+        current: { ...original.current, collaborationMode: "plan" },
+      };
+      session.wake();
+      await waitFor(() => client.announces.length === 3);
+      expect(client.announces[2]?.session_settings).toEqual({
+        current: session.sessionSettings.current,
+      });
+      session.sessionSettings = {
+        ...session.sessionSettings,
+        models: session.sessionSettings.models.map((model) => ({
+          ...model,
+          label: `${model.label} updated`,
+        })),
+      };
+      session.wake();
+      await waitFor(() => client.announces.length === 4);
+      expect(client.announces[3]?.session_settings).toEqual(session.sessionSettings);
+      session.sessionSettings = null;
+      session.wake();
+      await waitFor(() => client.announces.length === 5);
+      expect(client.announces[4]?.session_settings).toBeUndefined();
+      session.sessionSettings = original;
+      session.wake();
+      await waitFor(() => client.announces.length === 6);
+      expect(client.announces[5]?.session_settings).toEqual(original);
+    } finally {
+      clock.mockRestore();
+      ac.abort();
+      await served;
+    }
+  });
+
+  it.each([
+    true,
+    false,
+  ])("refreshes full settings on authenticated catch-up (durable=%s)", async (durable) => {
+    const session = settingsSession();
+    const client = new FakeClient();
+    client.reportedDurable = durable;
+    const relay = relayOf(session, client, capabilities);
+    await relay.announce("settings");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+    try {
+      await waitFor(() => client.streamStarts.length === 1);
+      client.failOpen.add("forged-catalog-refresh");
+      client.pushInbound(
+        inFrame("catch_up", "forged-catalog-refresh", JSON.stringify({ since: 0 })),
+      );
+      client.pushInbound(inFrame("user", "catalog-auth-barrier", "native input still works"));
+      await waitFor(() => client.content.some((post) => post.text === "native input still works"));
+      expect(client.announces).toHaveLength(1);
+      client.pushInbound(inFrame("catch_up", "catalog-refresh", JSON.stringify({ since: 0 })));
+      await waitFor(() => client.announces.length === 2);
+      expect(client.opened).toContain("catalog-refresh");
+      expect(client.announces[1]?.session_settings).toEqual(session.sessionSettings);
+      expect(session.closed).toBe(false);
+    } finally {
+      ac.abort();
+      await served;
+    }
+  });
+
+  it("coalesces catch-ups arriving during a full refresh and never blocks transcript publication", async () => {
+    const session = settingsSession();
+    const client = new BlockingAdvisoryAnnounceClient();
+    client.reportedDurable = true;
+    const posts = vi.spyOn(client, "postFrame");
+    const relay = relayOf(session, client, capabilities);
+    await relay.announce("settings");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+    try {
+      await waitFor(() => client.streamStarts.length === 1);
+      client.pushInbound(inFrame("catch_up", "catalog-first", "{}"));
+      await client.advisoryStarted;
+      for (const id of ["second", "third"])
+        client.pushInbound(inFrame("catch_up", `catalog-${id}`, "{}"));
+      const current = session.sessionSettings;
+      if (!current) throw new Error("missing settings");
+      session.sessionSettings = {
+        ...current,
+        current: { ...current.current, collaborationMode: "plan" },
+      };
+      session.pushUpstream(assistant("transcript passed catalog refresh"));
+      await waitFor(() =>
+        client.content.some((post) => post.text.includes("transcript passed catalog refresh")),
+      );
+      await waitFor(() => client.opened.includes("catalog-third"));
+      expect(
+        posts.mock.calls.filter(([header]) => header.recordKind === "session_announce"),
+      ).toHaveLength(2);
+      client.releaseAdvisory();
+      await waitFor(() => client.announces.length === 3);
+      expect(client.announces[2]?.session_settings).toEqual(session.sessionSettings);
+      expect(session.closed).toBe(false);
+    } finally {
+      client.releaseAdvisory();
+      ac.abort();
+      await served;
+      await relay.settlePresence();
+      posts.mockRestore();
+    }
+  });
+
+  it("retains a failed catalog refresh for the next advisory wake without poisoning transcript or retry-spinning", async () => {
+    const session = settingsSession();
+    const client = new FailOnceAdvisoryAnnounceClient();
+    client.reportedDurable = true;
+    const relay = relayOf(session, client, capabilities);
+    await relay.announce("settings");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+    try {
+      await waitFor(() => client.streamStarts.length === 1);
+      client.pushInbound(inFrame("catch_up", "catalog-failed-refresh", "{}"));
+      await waitFor(() => client.announceAttempts === 2);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(client.announceAttempts).toBe(2);
+      expect(session.closed).toBe(false);
+      session.pushUpstream(assistant("after advisory failure"));
+      await waitFor(
+        () =>
+          client.announceAttempts === 3 &&
+          client.content.some((post) => post.text.includes("after advisory failure")),
+      );
+      expect(client.announces.at(-1)?.session_settings).toEqual(session.sessionSettings);
+      await expect(relay.prepare()).resolves.toBeUndefined();
+    } finally {
+      ac.abort();
+      await served;
+    }
+  });
+});
+
 describe("HostRcRelay permission mode presence", () => {
+  it("forwards one fresh settings selection without claiming confirmation or changing permission mode", async () => {
+    const session = new Session("s", "t", { permissionMode: "default" });
+    session.sessionSettings = {
+      models: [
+        {
+          id: "m",
+          label: "Model",
+          defaultEffort: "high",
+          efforts: [{ id: "high", description: "High" }],
+        },
+      ],
+      collaborationModes: [{ id: "plan", label: "Plan" }],
+      current: { model: "m", effort: "high", collaborationMode: null },
+    };
+    const client = new FakeClient();
+    const relay = relayOf(session, client, {
+      ...MITM_CAPABILITIES,
+      controls: { ...MITM_CAPABILITIES.controls, configureSession: true },
+    });
+    const pushed = vi.spyOn(session, "pushControlRequest");
+    await relay.announce("settings");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+    const expiry = Date.now() + 60_000;
+    for (const [index, body] of [
+      { change: { effort: "high" } },
+      { change: { model: "m" }, expiry: 0 },
+      { change: { model: "m", permissionMode: "bypassed" }, expiry },
+      { change: { collaborationMode: "plan" }, expiry },
+    ].entries())
+      client.pushInbound(
+        inFrame("set_session_settings", `settings-${index}`, JSON.stringify(body)),
+      );
+    client.pushInbound(inFrame("user", "settings-barrier", "still alive"));
+    await waitFor(() => client.content.some(({ text }) => text === "still alive"));
+    expect(pushed).toHaveBeenCalledExactlyOnceWith("set_session_settings", {
+      change: { collaborationMode: "plan" },
+      expiry,
+    });
+    expect(client.announces.at(-1)?.session_settings).toEqual(session.sessionSettings);
+    expect(session.sessionSettings.current.collaborationMode).toBeNull();
+    expect(session.permissionMode).toBe("default");
+    session.sessionSettings = {
+      ...session.sessionSettings,
+      current: { ...session.sessionSettings.current, collaborationMode: "plan" },
+    };
+    session.wake();
+    await waitFor(
+      () =>
+        (client.announces.at(-1)?.session_settings as typeof session.sessionSettings)?.current
+          .collaborationMode === "plan",
+    );
+    ac.abort();
+    await served;
+  });
+
+  it("does not grant settings mutation capability to a legacy host", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const relay = relayOf(session, client);
+    const pushed = vi.spyOn(session, "pushControlRequest");
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal).catch(() => {});
+    client.pushInbound(
+      inFrame(
+        "set_session_settings",
+        "settings-disabled",
+        JSON.stringify({ change: { model: "m" }, expiry: Date.now() + 60_000 }),
+      ),
+    );
+    client.pushInbound(inFrame("user", "settings-barrier", "still alive"));
+    await waitFor(() => client.content.some(({ text }) => text === "still alive"));
+    expect(pushed).not.toHaveBeenCalled();
+    ac.abort();
+    await served;
+  });
+
   it("seeds the announced mode from session config", async () => {
     const session = new Session("s", "t", { permissionMode: "default" });
     const client = new FakeClient();

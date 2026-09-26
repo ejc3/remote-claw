@@ -7,6 +7,8 @@ import {
   parseHarnessDescriptor,
   parseNativeFileInput,
   parseNativePatchInput,
+  parseSessionSettings,
+  parseSessionSettingsChange,
   UNKNOWN_HARNESS,
 } from "./harness.js";
 import { MITM_CAPABILITIES, STABLE_MITM_CAPABILITIES } from "./host/rc/driver.js";
@@ -75,6 +77,81 @@ describe("shared harness contract", () => {
     expect(
       parseNativeFileInput("Write", { file_path: "/tmp/file", content: "a".repeat(32000) })?.tool,
     ).toBe("Write");
+  });
+
+  it("accepts exactly one bounded settings selection without permission fields", () => {
+    for (const change of [
+      { model: "native-model" },
+      { effort: "high" },
+      { collaborationMode: "plan" },
+    ]) {
+      expect(parseSessionSettingsChange(change)).toEqual(change);
+      expect(parseSessionSettingsChange(change)).not.toBe(change);
+    }
+    for (const change of [
+      null,
+      [],
+      {},
+      { model: "" },
+      { model: "x".repeat(257) },
+      { model: "model", effort: "high" },
+      { permissionMode: "bypassPermissions" },
+      { collaborationMode: "plan", developer_instructions: "change policy" },
+    ]) {
+      expect(parseSessionSettingsChange(change)).toBeNull();
+    }
+  });
+
+  it("bounds and copies settings catalogs without guessing unknown current settings", () => {
+    const snapshot = {
+      models: [
+        {
+          id: "m",
+          label: "Native model",
+          defaultEffort: "high",
+          efforts: [{ id: "high", description: "More reasoning" }],
+        },
+      ],
+      collaborationModes: [{ id: "plan", label: "Plan" }],
+      current: { model: "unlisted-native-model", effort: null, collaborationMode: null },
+    };
+    const parsed = parseSessionSettings(snapshot);
+    expect(parsed).toEqual(snapshot);
+    expect(parsed?.models[0]).not.toBe(snapshot.models[0]);
+    expect(parsed?.models.some((model) => model.id === snapshot.current.model)).toBe(false);
+    expect(parseSessionSettings({ ...snapshot, current: {} })).toBeNull();
+    expect(
+      parseSessionSettings({ ...snapshot, models: [...snapshot.models, ...snapshot.models] }),
+    ).toBeNull();
+    expect(
+      parseSessionSettings({ ...snapshot, collaborationModes: [{ id: "x", label: " " }] }),
+    ).toBeNull();
+    expect(
+      parseSessionSettings({
+        ...snapshot,
+        models: [{ ...snapshot.models[0], defaultEffort: "missing" }],
+      }),
+    ).toBeNull();
+    expect(
+      parseSessionSettings({
+        ...snapshot,
+        models: Array.from({ length: 33 }, (_, i) => ({ ...snapshot.models[0], id: String(i) })),
+      }),
+    ).toBeNull();
+    expect(
+      parseSessionSettings({
+        ...snapshot,
+        models: Array.from({ length: 32 }, (_, i) => ({
+          id: String(i),
+          label: "Model",
+          defaultEffort: "0",
+          efforts: Array.from({ length: 12 }, (_, j) => ({
+            id: String(j),
+            description: "x".repeat(512),
+          })),
+        })),
+      }),
+    ).toBeNull();
   });
   it("reserves pinned Claude native reference grammar without blocking ordinary emails", () => {
     for (const text of [

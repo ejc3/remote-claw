@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parseSessionSettings, type SessionSettings } from "../../../harness.js";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import {
   CODEX_APPROVAL_CAPABILITIES,
@@ -28,11 +29,29 @@ import {
 } from "./client.js";
 import { CodexFileApprovals } from "./file-approvals.js";
 import { CodexUserQuestions } from "./questions.js";
+import {
+  type CodexSettingsUpdate,
+  codexSettingsUpdate,
+  parseCodexCurrentSettings,
+} from "./settings.js";
 
 // One native item per page keeps retained inline images from combining into an oversized frame.
 // Preserve the existing roughly 100k raw-item scan budget, independently of projected item limits.
 const HISTORY_PAGE_LIMIT = 100_000;
 const CORRELATION_TIMEOUT_MS = 15_000;
+
+function settingsConfirmed(
+  update: CodexSettingsUpdate,
+  current: SessionSettings["current"],
+): boolean {
+  if ("model" in update) return current.model === update.model;
+  if ("effort" in update) return current.effort === update.effort;
+  return (
+    current.collaborationMode === update.collaborationMode.mode &&
+    current.model === update.collaborationMode.settings.model &&
+    current.effort === update.collaborationMode.settings.reasoning_effort
+  );
+}
 
 export class CodexProjectionError extends Error {
   constructor(message: string) {
@@ -182,7 +201,7 @@ class IdleGate {
   }
 }
 
-/** Keep controls live while ordinary text waits for Codex's one native runner. */
+/** Order browser text/settings together while interrupts and native decisions remain responsive. */
 class BrowserTurnQueue {
   readonly #items: RcEvent[] = [];
   #wake = Promise.withResolvers<void>();
@@ -378,7 +397,13 @@ class CodexReconciler {
 export class CodexDriver implements Driver {
   get capabilities() {
     const base = this.#approvals === null ? CODEX_CAPABILITIES : CODEX_APPROVAL_CAPABILITIES;
-    return this.#filesSupported ? { ...base, files: true } : base;
+    return {
+      ...base,
+      ...(this.#filesSupported ? { files: true } : {}),
+      ...(this.#settingsSupported
+        ? { controls: { ...base.controls, configureSession: true } }
+        : {}),
+    };
   }
   readonly #ctx: DriverContext;
   readonly #options: CodexDriverOptions;
@@ -393,6 +418,9 @@ export class CodexDriver implements Driver {
   readonly #uploads: NativeUploadStore;
   readonly #historyRepairs = new HistoryRepairQueue();
   #filesSupported = false;
+  #settingsSupported = false;
+  /** RPC acceptance is not native application; dependent writes must not embed stale settings. */
+  #expectedSettings: CodexSettingsUpdate | null = null;
 
   constructor(ctx: DriverContext, options: CodexDriverOptions) {
     this.#ctx = ctx;
@@ -447,6 +475,26 @@ export class CodexDriver implements Driver {
         resumed.thread.status.type === "systemError"
       ) {
         throw new CodexProjectionError("Codex thread is not writable");
+      }
+
+      if (nativeVersion === "0.154.0") {
+        try {
+          const [models, collaborationModes] = await Promise.all([
+            this.#client.listModels(signal),
+            this.#client.listCollaborationModes(signal),
+          ]);
+          const settings = parseSessionSettings({
+            models,
+            collaborationModes,
+            current: resumed.settings ?? { model: null, effort: null, collaborationMode: null },
+          });
+          if (settings === null) throw new CodexAppServerError("Codex settings catalog is invalid");
+          session.sessionSettings = settings;
+          this.#settingsSupported = true;
+        } catch {
+          // Optional catalogs cannot turn a healthy conversation into a failed projection.
+          this.#trace.warn("Codex settings catalog unavailable; settings remain native-only");
+        }
       }
 
       const gate = new IdleGate(resumed.thread.status);
@@ -629,6 +677,18 @@ export class CodexDriver implements Driver {
     }
     const { method, params } = inbound.value;
     if (params.threadId !== this.#options.threadId) return;
+    if (method === "thread/settings/updated") {
+      if (!this.#settingsSupported || session.sessionSettings === null) return;
+      const current = parseCodexCurrentSettings(params.threadSettings);
+      if (current === null) return;
+      const settings = parseSessionSettings({ ...session.sessionSettings, current });
+      if (settings === null) return;
+      session.sessionSettings = settings;
+      if (this.#expectedSettings !== null && settingsConfirmed(this.#expectedSettings, current))
+        this.#expectedSettings = null;
+      session.wake();
+      return;
+    }
     if (method === "turn/completed") {
       const turn = record(params.turn);
       if (
@@ -691,7 +751,8 @@ export class CodexDriver implements Driver {
     while (!signal.aborted && !session.closed) {
       const event = await this.#browserTurns.shift(signal);
       if (event === undefined || signal.aborted || session.closed) return;
-      await this.#injectText(session, event, gate, signal);
+      if (event.eventType === "user") await this.#injectText(session, event, gate, signal);
+      else await this.#updateSettings(session, event, signal);
     }
   }
 
@@ -706,6 +767,10 @@ export class CodexDriver implements Driver {
       }
       if (event.eventType === "control_request") {
         const request = record(event.payload.request);
+        if (request?.subtype === "set_session_settings") {
+          this.#browserTurns.push(event);
+          continue;
+        }
         if (request?.subtype === "interrupt") await this.#interruptCurrent(session, signal);
         // Initialize and every other control remain local no-ops.
       }
@@ -714,6 +779,42 @@ export class CodexDriver implements Driver {
         this.#fileApprovals?.respond(event.payload, signal);
         this.#questions?.respond(event.payload, signal);
       }
+      session.ack(event.eventId);
+    }
+  }
+
+  async #updateSettings(session: Session, event: RcEvent, signal: AbortSignal): Promise<void> {
+    try {
+      const request = record(event.payload.request);
+      if (!this.#settingsSupported || session.sessionSettings === null || request === null) return;
+      if (this.#expectedSettings !== null) {
+        this.#trace.warn("Codex settings choice dropped: prior update lacks native confirmation");
+        return;
+      }
+      const update = codexSettingsUpdate(request.change, session.sessionSettings);
+      // A settings choice may have waited behind a browser turn. Re-check current native choices and
+      // expiry here, immediately before the one RPC, rather than using admission-time values.
+      if (
+        update === null ||
+        typeof request.expiry !== "number" ||
+        !Number.isFinite(request.expiry) ||
+        request.expiry <= Date.now() ||
+        signal.aborted ||
+        session.closed
+      )
+        return;
+      if (settingsConfirmed(update, session.sessionSettings.current)) return;
+      // Set before invoking the client: the matching native notification may precede its response.
+      this.#expectedSettings = update;
+      try {
+        await this.#client.updateSettings(this.#options.threadId, update, signal);
+      } catch {
+        // No retry: a timeout can mean the update already applied. Preserve only native-confirmed
+        // state and keep observing this healthy conversation; the viewer's waiting label expires.
+        if (!signal.aborted && !session.closed)
+          this.#trace.warn("Codex settings update not confirmed");
+      }
+    } finally {
       session.ack(event.eventId);
     }
   }

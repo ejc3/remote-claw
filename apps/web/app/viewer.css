@@ -1870,6 +1870,46 @@ summary:focus-visible,
   color: var(--accent-text);
   font-weight: 700;
 }
+.native-settings-group {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.native-settings .sheet-title {
+  margin: 0;
+  font-size: 11.5px;
+}
+.native-settings .sheet-note {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.native-settings .native-settings-status {
+  padding-top: 6px;
+}
+.native-settings-group + .native-settings-group,
+.native-settings + .sheet-title {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+.native-settings .mode-row {
+  min-height: 48px;
+}
+.native-settings .mode-row:disabled {
+  opacity: 1;
+}
+.native-settings .mode-row-main {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.native-settings .mode-row-desc {
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.45;
+}
 .session-details {
   display: grid;
   gap: 8px;
