@@ -26,6 +26,25 @@ describe("sessionDisplayTitle", () => {
     ).toBe(native.title);
     expect(sessionDisplayTitle({ title: native.title, cwd: native.cwd })).toBe(native.title);
   });
+
+  it.each([
+    ["cse_Native-01", "ive-01"],
+    ["cse_Native_01", "ive_01"],
+    ["cse_a-B_01", "a-B_01"],
+  ])("compacts the canonical native ID %s", (id, suffix) => {
+    expect(sessionDisplayTitle({ ...native, title: `Claude ${id}` })).toBe(
+      `remote-claw · ${suffix}`,
+    );
+  });
+
+  it.each([
+    "Claude cse_",
+    "Claude cse_native/01",
+    "Claude cse_native.01",
+    "Claude cse_native note",
+  ])("preserves noncanonical fallback-like title %s", (title) => {
+    expect(sessionDisplayTitle({ ...native, title })).toBe(title);
+  });
 });
 
 // Session ⋯ sheet (#111): model switcher (set_model) + interrupt + copy-branch.

@@ -866,7 +866,7 @@ function harnessDetail(harness: Harness | undefined): string {
 export function sessionDisplayTitle(s: Pick<Announce, "title" | "cwd" | "harness">): string {
   const nativeId =
     s.harness?.agent === "claude-code" && s.harness.mode === "native-rc"
-      ? /^Claude cse_([A-Za-z0-9]+)$/.exec(s.title)?.[1]
+      ? /^Claude cse_([A-Za-z0-9_-]+)$/.exec(s.title)?.[1]
       : undefined;
   if (!nativeId) return s.title;
   return `${(s.cwd && basename(s.cwd)) || "Claude session"} · ${nativeId.slice(-6)}`;
