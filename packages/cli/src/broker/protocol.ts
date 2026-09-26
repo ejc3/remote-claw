@@ -31,6 +31,7 @@ export const CONTROL_KINDS = new Set([
   "interrupt",
   "set_mode",
   "set_model",
+  "set_session_settings",
   "command",
   "end",
   "attachment", // a viewer-sent file/photo (#44): the host writes it to disk + has claude Read it

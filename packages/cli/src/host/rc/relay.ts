@@ -16,7 +16,7 @@
 // has a fixed run cap with no rollover/recovery cursors; Local because it is process memory), the host
 // keeps an in-memory `#log` and re-posts it on a viewer `catch_up`. On a DURABLE-log backend
 // (per-channel SQLite), the broker retains every frame, so a viewer's subscribe(startIndex:0) replays
-// full history on its own; the host builds no `#log` and ignores `catch_up`.
+// full history on its own; the host builds no `#log`. Catch-up still refreshes settings discovery.
 //
 // The transcript `seq` is allocated solely here (§6: clients never assign order), and an
 // incarnation-long, unbounded `#seen` set dedups the at-least-once inbound stream. This relay's
@@ -34,7 +34,12 @@ import {
   BrokerStreamRotationError,
   type SeqCursor,
 } from "../../broker/client.js";
-import { harnessPolicy, hasClaudeNativeReferences } from "../../harness.js";
+import {
+  harnessPolicy,
+  hasClaudeNativeReferences,
+  parseSessionSettingsChange,
+  type SessionSettings,
+} from "../../harness.js";
 import { NOOP_TRACER, type Tracer } from "../../trace.js";
 import {
   type DriverCapabilities,
@@ -134,7 +139,13 @@ const MAX_INFLIGHT_ATTACHMENT_GROUPS = 4;
 
 /** Client control verbs (§3.7) the relay forwards to the worker as a `control_request`. (A slash
  *  command rides the `user` path instead — claude processes `/compact` etc. as input.) */
-const CONTROL_VERBS = new Set(["interrupt", "set_model", "set_mode", "end"]);
+const CONTROL_VERBS = new Set([
+  "interrupt",
+  "set_model",
+  "set_mode",
+  "set_session_settings",
+  "end",
+]);
 
 function supportsControl(capabilities: DriverCapabilities, kind: string): boolean {
   switch (kind) {
@@ -144,6 +155,8 @@ function supportsControl(capabilities: DriverCapabilities, kind: string): boolea
       return capabilities.controls.setModel;
     case "set_mode":
       return capabilities.controls.setMode;
+    case "set_session_settings":
+      return capabilities.controls.configureSession === true;
     case "end":
       return capabilities.controls.end;
     default:
@@ -211,7 +224,7 @@ const RELAY_INCARNATION = `${RELAY_INCARNATION_STARTED_AT.toString(36)}-${Math.r
 const ANNOUNCE_KEEPALIVE_MS = 20_000;
 
 /** The session's live presence, derived from the worker's status + any open permission gates. Carried
- *  on the (idempotent, meta-plane, never-logged) session_announce so the viewer can show a
+ *  on the unordered meta-plane session_announce so the viewer can show a
  *  thinking/needs-you indicator (#48) and detect disconnect from announce-freshness (#58). */
 export function phaseFor(workerStatus: string): "idle" | "thinking" {
   // Live claude (2.1.x) reports "running"; the captured/older protocol used "busy" — both = thinking.
@@ -557,6 +570,10 @@ export class HostRcRelay {
   readonly #livePresenceControllers = new Set<AbortController>();
   #advisoryPresenceInFlight = false;
   #advisoryPresenceDirty = false;
+  /** Successful catalog snapshot, not current values; keepalives need only the latter. */
+  #lastSettingsCatalog: string | null = null;
+  /** Coalesced authenticated catch-up request; never queues a separate presence publication. */
+  #settingsCatalogRequested = false;
   /** Throttle: the last announced presence key + when, so we only re-announce on change or keepalive. */
   #lastPresenceKey = "";
   #lastAnnounceAt = 0;
@@ -673,17 +690,49 @@ export class HostRcRelay {
   /** Current presence: phase (idle/thinking) from worker_status, needs (a pending permission or the
    *  worker awaiting a required action), and the effective permission mode when known. A stable string
    *  key lets us re-announce only on change. */
-  #presence(): { status: string; phase: "idle" | "thinking"; needs: boolean; mode: string | null } {
+  #presence(): {
+    status: string;
+    phase: "idle" | "thinking";
+    needs: boolean;
+    mode: string | null;
+    settings: SessionSettings | null;
+  } {
     const status = this.#session.workerStatus;
     const needs = status === "requires_action" || this.#openPerms.size > 0;
-    return { status, phase: phaseFor(status), needs, mode: this.#session.permissionMode };
+    return {
+      status,
+      phase: phaseFor(status),
+      needs,
+      mode: this.#session.permissionMode,
+      settings:
+        this.#capabilities.controls.configureSession === true
+          ? this.#session.sessionSettings
+          : null,
+    };
   }
 
-  /** Post a session_announce carrying the current presence. Meta-plane + seq===null, so the broker
-   *  never logs it — re-announcing is cheap and idempotent (the viewer keeps only the freshest). */
+  #presenceKey(p: {
+    status: string;
+    needs: boolean;
+    mode: string | null;
+    settings: SessionSettings | null;
+  }): string {
+    return JSON.stringify([p.status, p.needs, p.mode, p.settings]);
+  }
+
+  /** Durable brokers retain presence. Send current values every time, but the bounded catalog only
+   * on first discovery, catalog changes, or authenticated viewer catch-up. */
   async #sendAnnounce(): Promise<void> {
     if (this.#presenceTerminal || this.#session.closed) throw new Error("session closed");
     const p = this.#presence();
+    const catalog =
+      p.settings === null
+        ? null
+        : JSON.stringify([p.settings.models, p.settings.collaborationModes]);
+    const includeCatalog =
+      catalog !== null && (this.#settingsCatalogRequested || catalog !== this.#lastSettingsCatalog);
+    // Consume before awaiting so a catch-up arriving during this post remains pending afterward.
+    this.#settingsCatalogRequested = false;
     // Allocate before the first await. JavaScript runs this section atomically, so every publish
     // admitted by one relay gets a strict generation even when the HTTP requests overlap.
     const announceSeq = this.#annCount++;
@@ -703,6 +752,8 @@ export class HostRcRelay {
       harness: this.#harness,
     };
     if (p.mode !== null) body.mode = p.mode;
+    if (p.settings !== null)
+      body.session_settings = includeCatalog ? p.settings : { current: p.settings.current };
     // This is the live-admission linearization point. It is deliberately before invoking postFrame:
     // sealing itself may await. A close at any later instant therefore sees #presenceStarted and sends
     // the terminal tombstone concurrently, allowing the broker's absorbing fence to suppress a late
@@ -740,10 +791,17 @@ export class HostRcRelay {
         }
         throw error;
       }
+    } catch (error) {
+      // A failed advisory post is not proof a late viewer received its catalog. Let the existing
+      // heartbeat/coalescer retry it; do not join transcript publication or create a retry loop.
+      if (includeCatalog && !this.#presenceTerminal && !this.#session.closed)
+        this.#settingsCatalogRequested = true;
+      throw error;
     } finally {
       this.#livePresenceControllers.delete(controller);
     }
-    this.#lastPresenceKey = `${p.status}|${p.needs}|${p.mode ?? ""}`;
+    if (includeCatalog || catalog === null) this.#lastSettingsCatalog = catalog;
+    this.#lastPresenceKey = this.#presenceKey(p);
     this.#lastAnnounceAt = Date.now();
     this.#trace.debug("announce", { phase: p.phase, needs: p.needs, mode: p.mode ?? "" });
   }
@@ -756,8 +814,9 @@ export class HostRcRelay {
   #maybeAnnounce(): void {
     if (!this.#announced || this.#presenceTerminal || this.#session.closed) return;
     const p = this.#presence();
-    const key = `${p.status}|${p.needs}|${p.mode ?? ""}`;
+    const key = this.#presenceKey(p);
     if (
+      this.#settingsCatalogRequested ||
       key !== this.#lastPresenceKey ||
       Date.now() - this.#lastAnnounceAt >= ANNOUNCE_KEEPALIVE_MS
     ) {
@@ -800,6 +859,7 @@ export class HostRcRelay {
     this.#advisoryPresenceInFlight = false;
     if (this.#presenceTerminal || this.#session.closed) {
       this.#advisoryPresenceDirty = false;
+      this.#settingsCatalogRequested = false;
       return;
     }
     if (this.#advisoryPresenceDirty) {
@@ -816,6 +876,7 @@ export class HostRcRelay {
     if (this.#terminalPresenceTask !== null) return this.#terminalPresenceTask;
     this.#presenceTerminal = true;
     this.#advisoryPresenceDirty = false;
+    this.#settingsCatalogRequested = false;
     // Abort every live announce fetch before publishing the tombstone. A request already committed at
     // the broker is ordered before terminal; a request not yet committed cannot linger past close and
     // later resurrect. The absorbing broker fence handles the unavoidable response/commit race.
@@ -1465,11 +1526,18 @@ export class HostRcRelay {
           this.#trace.debug("user prompt", { seq: userSeq, bytes: text.length });
         }
       } else if (frame.recordKind === "catch_up") {
+        if (
+          this.#capabilities.controls.configureSession === true &&
+          this.#session.sessionSettings !== null
+        ) {
+          this.#settingsCatalogRequested = true;
+          this.#maybeAnnounce();
+        }
         if (this.#durable) {
           // The durable backend's own log answers catch_up: the viewer's subscribe(startIndex:0) already
           // replays the full history straight from the frames table, so there's nothing for the host to
           // re-post. `since` is irrelevant, but the frame was still authenticated before dedup above.
-          this.#trace.debug("catch_up ignored — durable backend serves history");
+          this.#trace.debug("catch_up transcript replay skipped — durable backend serves history");
         } else {
           const body = JSON.parse(new TextDecoder().decode(plaintext));
           const since = typeof body.since === "number" ? body.since : 0;
@@ -1829,6 +1897,18 @@ export class HostRcRelay {
         if (typeof body.model === "string")
           this.#session.pushControlRequest("set_model", { model: body.model });
         break;
+      case "set_session_settings": {
+        const change = parseSessionSettingsChange(body.change);
+        if (
+          change &&
+          typeof body.expiry === "number" &&
+          Number.isFinite(body.expiry) &&
+          body.expiry > Date.now()
+        ) {
+          this.#session.pushControlRequest("set_session_settings", { change, expiry: body.expiry });
+        }
+        break;
+      }
       case "set_mode":
         if (typeof body.mode === "string" && body.mode !== "") {
           // Drive the worker verb regardless — the driver honors it (mitm) or safely no-ops it

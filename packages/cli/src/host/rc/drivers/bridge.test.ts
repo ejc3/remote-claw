@@ -217,7 +217,10 @@ describe("bridge lifecycle", () => {
     const abort = new AbortController();
     const handle = startBridgeSession({
       session,
-      capabilities: MITM_CAPABILITIES,
+      capabilities: {
+        ...MITM_CAPABILITIES,
+        controls: { ...MITM_CAPABILITIES.controls, configureSession: true },
+      },
       harness: TMUX_HARNESS,
       newClient: () => client as unknown as BrokerClient,
       identityId: ID,
@@ -241,6 +244,9 @@ describe("bridge lifecycle", () => {
     await waitFor(() => pushed.length === 1);
 
     expect(pushed).toEqual(["hello after discovery"]);
+    expect(client.announces[0]?.capabilities).toMatchObject({
+      controls: { configureSession: true },
+    });
     expect(client.posts.map((post) => post.kind)).toEqual(["accepted", "user"]);
 
     abort.abort();

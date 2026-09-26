@@ -14,6 +14,7 @@
 import { createInterface } from "node:readline";
 import { deriveIdentity, formatPass, parsePass } from "@remote-claw/clawsec";
 import { BrokerClient, securityProvider } from "@remote-claw/cli/broker";
+import { parseSessionSettings } from "@remote-claw/cli/harness";
 import {
   CLAUDE_NATIVE_CAPABILITIES,
   CLAUDE_NATIVE_HARNESS,
@@ -72,6 +73,11 @@ function presetCaps(p: string | undefined): DriverCapabilities {
   if (p === "claude-questions") return CLAUDE_NATIVE_CAPABILITIES;
   if (p === "codex") return CODEX_CAPABILITIES;
   if (p === "codex-files") return { ...CODEX_CAPABILITIES, files: true };
+  if (p === "codex-settings")
+    return {
+      ...CODEX_CAPABILITIES,
+      controls: { ...CODEX_CAPABILITIES.controls, configureSession: true },
+    };
   if (p === "codex-approval") {
     const { structuredQuestions: _questions, ...approvalOnly } = CODEX_APPROVAL_CAPABILITIES;
     return approvalOnly;
@@ -118,6 +124,24 @@ const sessionConfig =
       ? { permissionMode: "bypassPermissions" }
       : {};
 const session = new Session(sessionId, title, sessionConfig);
+if (capsPreset === "codex-settings") {
+  session.sessionSettings = {
+    models: ["Model A", "Model B"].map((label, i) => ({
+      id: `model-${i}`,
+      label,
+      defaultEffort: "medium",
+      efforts: [
+        { id: "medium", description: "Balanced reasoning" },
+        { id: "high", description: "More reasoning for difficult work" },
+      ],
+    })),
+    collaborationModes: [
+      { id: "default", label: "Default" },
+      { id: "plan", label: "Plan" },
+    ],
+    current: { model: "model-0", effort: "medium", collaborationMode: null },
+  };
+}
 const clientOpts: ConstructorParameters<typeof BrokerClient>[0] = {
   baseUrl: base,
   provider: securityProvider("sealed", id),
@@ -164,6 +188,13 @@ if (process.env.RC_E2E_ATTACHMENT_ECHO === "1") {
 }
 const commands = createInterface({ input: process.stdin });
 commands.on("line", (line) => {
+  if (line.startsWith("settings:") && capsPreset === "codex-settings") {
+    const settings = parseSessionSettings(JSON.parse(line.slice("settings:".length)));
+    if (settings) {
+      session.sessionSettings = settings;
+      session.wake();
+    }
+  }
   if (line.trim() === "resolve-permission" && capsPreset === "codex-approval") {
     session.pushUpstream({ type: "control_cancel_request", request_id: "perm-e2e-native" });
   }

@@ -14,7 +14,8 @@ Five drivers exist:
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
 - `codex` — the exact 0.151.0, 0.153.4, or 0.154.0/Linux arm64 app-server companion: text, images, and interrupt,
   native status, and read-only completed shell commands/results; exact 0.153.4 and 0.154.0 implement one-shot
-  ordinary local-command approvals and bounded non-secret blocking choice forms.
+  ordinary local-command approvals and bounded non-secret blocking choice forms; exact 0.154.0 also
+  conditionally offers native-confirmed model/effort/collaboration settings.
 
 The private MITM remains the supported Claude beta. The native companion has passed its structured
 API-path, local Graduate, literal official web UI coexistence, and separate exact-SHA
@@ -295,6 +296,26 @@ A bounded process-local text FIFO leaves interrupt reachable while text waits. I
 observed active native turn; stale-target rejection is a no-op, never a retry against a newer turn.
 Only native status releases queued text, not interrupt RPC acceptance. Background commands may outlive
 the interrupted model turn; see [control semantics](protocol.md#11-compatibility-control-verbs).
+Exact 0.154.0 discovers bounded native model/effort/mode catalogs before advertising optional
+`controls.configureSession`. The shared `SessionSettings` snapshot and one-field
+`SessionSettingsChange` keep the viewer independent of Codex model IDs. Other adapters may implement
+that same seam without changing the viewer; unsupported adapters omit the capability. Settings use
+`set_session_settings`, not legacy Claude aliases or permission `set_mode`. The adapter serializes
+settings with browser input, rechecks expiry/catalog before one `thread/settings/update`, and publishes
+only native resume/`thread/settings/updated` values. A mode change requires and preserves the current
+native model plus explicit supported effort, with no permission/sandbox/config update. Catalog
+failure leaves a healthy conversation usable with settings native-only; uncertain settings writes
+never retry. A single expected-confirmation guard prevents later browser settings from using stale
+model/effort after an RPC response or timeout. Only matching native state clears it (including the
+preserved model/effort for mode); already-confirmed targets are no-ops. Until matching reconciliation
+or a fresh companion, later settings are consumed without a write while text/interrupt stay usable.
+Relay keepalives/current-value updates carry only native `current` settings; full catalogs
+are included initially, on catalog change, and on authenticated `catch_up` for either backend. A
+viewer may reuse a catalog only within the same accepted host incarnation and capability; session
+selection/reload requests a fresh snapshot because discovery is bounded to the last 64 bus frames.
+See the [protocol](protocol.md#codex-native-session-settings) and
+[separate acceptance](release-finish-line.md#codex-native-session-settings).
+
 The immutable projection coordinate is `(turnId,itemId)`, because Codex item IDs are only turn-scoped.
 An exact replay deduplicates; changed projected bytes at the same pair fence the projection.
 Completed `commandExecution` shares that identity fence and produces read-only `Shell` calls and bounded
@@ -378,7 +399,7 @@ attached for the projection lifetime.
 
 The exact advertised viewer capabilities are:
 
-| Driver | Permissions | Status | Interrupt | Model | Mode | End | Attachments |
+| Driver | Permissions | Status | Interrupt | Legacy model | Permission mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable `mitm` | no | yes | no | no | no | no | no |
 | `claude-native` | supported Bash decisions and bounded question forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
@@ -388,6 +409,10 @@ The exact advertised viewer capabilities are:
 | `codex` 0.151.0 | no | yes | yes | no | no | no | yes; images only |
 | `codex` 0.153.4 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
 | `codex` 0.154.0 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
+
+The model/mode columns describe legacy controls. Optional native settings are a separate
+`controls.configureSession` capability, currently implemented only for exact Codex 0.154.0 after
+valid catalog discovery; they do not change those legacy or permission-mode flags.
 
 See [tmux-driver.md](tmux-driver.md) and [opencode-driver.md](opencode-driver.md) for adapter-specific
 limitations.

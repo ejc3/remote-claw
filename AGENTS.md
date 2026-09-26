@@ -105,7 +105,24 @@ Secret, optionless, nonblocking, malformed, and all 0.151.0 questions stay nativ
 Dismiss or multiselect is sent. Fresh opaque viewer IDs bind exact connection-owned native requests;
 answers use native question IDs rather than display wording. Broker admission
 means pending, and only native resolution closes the card without claiming which peer won. Ambiguous
-writes never retry or stop native work. Other controls, streaming partials, file
+writes never retry or stop native work. Exact 0.154.0 also conditionally advertises native session
+settings after bounded model/mode catalog discovery succeeds. `set_session_settings` accepts one
+model, effort, or collaboration-mode selection; legacy `set_model` and permission `set_mode` stay
+disabled. Native resume/`thread/settings/updated` state owns displayed values, never RPC acceptance.
+Mode-only updates preserve the current native model and explicit supported effort; no permission,
+sandbox, or persistent configuration fields are sent. Settings share the bounded browser-input FIFO,
+recheck expiry/catalog before one native RPC, and never retry an uncertain update. An expected-state
+guard consumes later settings without writing until matching native confirmation (including preserved
+model/effort for mode); RPC acceptance/failure does not clear it. Confirmed targets are no-ops. If
+confirmation never arrives, native reconciliation or a fresh companion is required for more browser
+settings; text/interrupt remain usable. Catalog failure
+leaves settings native-only without failing a healthy conversation. Encrypted presence includes the
+full catalog only initially, on catalog change, or on authenticated catch-up; other announces carry
+current values only. Session selection/reload refreshes catalogs beyond the bounded 64-frame discovery
+window, and viewers never inherit a catalog across host incarnations or removed capabilities. See the
+[settings boundary](docs/protocol.md#codex-native-session-settings) and
+[separate acceptance](docs/release-finish-line.md#codex-native-session-settings).
+Other controls, streaming partials, file
 changes, and task lifecycle remain unsupported. The [release roadmap](docs/release-finish-line.md)
 owns current-version/activity/interrupt/image, command-approval, and question acceptance; the bounded
 question phone/desktop/native-TUI run passed on 0.153.4. The separate

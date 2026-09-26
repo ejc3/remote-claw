@@ -12,6 +12,7 @@
 // downstream events — preventing duplicate turns on a reconnect race. (§17.2/§17.3.)
 
 import { randomUUID } from "node:crypto";
+import type { SessionSettings } from "../../harness.js";
 
 /** A wake primitive: a promise that resolves on the next `wake()`, then re-arms. The async stand-in
  *  for threading.Condition.notify_all() — every follower awaiting `wait()` is released together. */
@@ -204,6 +205,8 @@ export class Session {
   readonly createdAt: string;
   workerEpoch = 1;
   workerStatus = "WORKER_STATUS_UNSPECIFIED";
+  /** Catalog plus native-confirmed values; permissionMode is independent. */
+  sessionSettings: SessionSettings | null = null;
   permissionMode: string | null;
   closed = false;
   /** First local fail-stop/teardown cause. Diagnostic only; never transported or derived from content. */

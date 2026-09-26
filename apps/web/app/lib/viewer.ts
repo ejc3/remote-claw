@@ -24,6 +24,10 @@ import {
   type HarnessDescriptor,
   harnessMetadata,
   parseHarnessDescriptor,
+  parseSessionSettings,
+  parseSessionSettingsChange,
+  type SessionSettings,
+  type SessionSettingsChange,
 } from "@remote-claw/cli/harness";
 
 const td = new TextDecoder();
@@ -222,6 +226,8 @@ export interface Announce {
   needs: boolean;
   /** Current worker permission mode, when announced by a modern host. Old hosts omit it. */
   mode?: string;
+  /** Native-confirmed configuration; distinct from permission mode. */
+  sessionSettings?: SessionSettings;
   /** The session's git snapshot for the branch/dirty/ahead-behind chip (#49); null outside a repo. */
   git: GitInfo | null;
   /** What the host's driver can faithfully service (#149). Absent on a pre-capability host → the viewer
@@ -315,6 +321,9 @@ export function parseCapabilities(raw: unknown, harness?: Harness): Capabilities
       setModel: bool(ctlRaw.setModel, legacyDefaults),
       setMode: bool(ctlRaw.setMode, legacyDefaults),
       end: bool(ctlRaw.end, legacyDefaults),
+      ...(typeof ctlRaw.configureSession === "boolean"
+        ? { configureSession: ctlRaw.configureSession }
+        : {}),
     },
     attachments: bool(c.attachments, legacyDefaults),
     ...(typeof c.files === "boolean" ? { files: c.files } : {}),
@@ -646,6 +655,30 @@ export class Viewer {
           if (caps) announce.capabilities = caps;
           const existing = this.#acceptedAnnounces.get(sessionId);
           if (!shouldAcceptAnnounce(existing, announce)) continue;
+          if (caps?.controls.configureSession === true) {
+            const raw = body.session_settings;
+            // Current-only keepalives may reuse only this accepted incarnation's valid catalog.
+            // An invalid full snapshot, removed capability or new host never inherits old choices.
+            const currentOnly =
+              typeof raw === "object" &&
+              raw !== null &&
+              !Array.isArray(raw) &&
+              Object.keys(raw).length === 1 &&
+              Object.hasOwn(raw, "current");
+            const settings =
+              parseSessionSettings(raw) ??
+              (currentOnly &&
+              announce.incarnation !== null &&
+              existing?.incarnation === announce.incarnation &&
+              existing.capabilities?.controls.configureSession === true &&
+              existing.sessionSettings !== undefined
+                ? parseSessionSettings({
+                    ...existing.sessionSettings,
+                    current: (raw as { current: unknown }).current,
+                  })
+                : null);
+            if (settings) announce.sessionSettings = settings;
+          }
           announce.freshnessAt = announceFreshnessAt(existing, announce, receivedAt);
           this.#acceptedAnnounces.set(sessionId, announce);
           this.#rememberIncarnation(sessionId, announce.incarnation);
@@ -875,7 +908,7 @@ export class Viewer {
     }
   }
 
-  /** Ask the host to replay history from `since` (a control frame on the session channel). */
+  /** Ask for history plus fresh settings discovery, including on durable transcript backends. */
   async requestHistory(sessionId: string, since = 0): Promise<void> {
     this.#assertSessionWritable(sessionId);
     await this.#client.postFrame(
@@ -940,6 +973,13 @@ export class Viewer {
   /** Change the permission mode (default | acceptEdits | plan | bypassPermissions | …). */
   async setMode(sessionId: string, mode: string): Promise<void> {
     await this.#control(sessionId, "set_mode", { mode });
+  }
+
+  /** Select one advertised native setting. POST acceptance is not native confirmation. */
+  async configureSession(sessionId: string, input: SessionSettingsChange): Promise<void> {
+    const change = parseSessionSettingsChange(input);
+    if (!change) throw new Error("Invalid session setting");
+    await this.#control(sessionId, "set_session_settings", { change });
   }
 
   /** Send the authenticated end intent. Current hosts clear abandoned permission gates but cannot
