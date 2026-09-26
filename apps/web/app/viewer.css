@@ -308,6 +308,7 @@ summary:focus-visible,
   font-size: 13px;
 }
 .disconnect-button {
+  min-width: 44px;
   min-height: 44px;
   color: var(--text-dim);
 }
@@ -577,10 +578,9 @@ summary:focus-visible,
 }
 .back {
   color: var(--accent-text);
+  min-width: 44px;
   min-height: 44px; /* ≥44px touch target — it's the primary mobile back-nav (#151) */
-  /* Never wrap or shrink. Without these the header's other items (badge, git chip) refused to give up
-     width, so "‹ Sessions" broke onto two lines AND pushed the session title — flex:1, min-width:0 — to
-     zero width, leaving a header that didn't say which session you were in. */
+  /* Keep the icon's hit area intact while the session title takes the remaining header width. */
   flex-shrink: 0;
   white-space: nowrap;
 }
@@ -828,6 +828,9 @@ summary:focus-visible,
   gap: 1px;
 }
 .activity-rollup-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 14.5px;
   line-height: 1.35;
   font-weight: 650;
@@ -998,6 +1001,27 @@ summary:focus-visible,
 }
 .tool-result[data-error="true"] > summary {
   color: var(--del-fg);
+}
+/* Main-thread errors remain independently expandable, aligned with the neighboring activity cards. */
+.transcript > .tool-result[data-error="true"][data-sub="false"] {
+  margin: 4px 0 8px;
+  border: 1px solid color-mix(in srgb, var(--del-fg) 24%, var(--line-soft));
+  border-radius: 12px;
+  background: var(--surface);
+}
+.transcript > .tool-result[data-error="true"][data-sub="false"] > summary {
+  min-height: 50px;
+  padding: 7px 10px;
+  gap: 9px;
+  font-size: 14.5px;
+  font-weight: 600;
+}
+.transcript > .tool-result[data-error="true"][data-sub="false"] > summary:hover {
+  background: var(--surface-2);
+}
+.transcript > .tool-result[data-error="true"][data-sub="false"] > summary .tool-glyph {
+  width: 22px;
+  color: inherit;
 }
 .tool-result .chev {
   display: grid;
@@ -1570,6 +1594,11 @@ summary:focus-visible,
   box-shadow: 0 16px 48px -16px rgba(0, 0, 0, 0.7);
   animation: sheet-pop 0.13s ease-out;
 }
+.sheet--anchored.sheet--activity {
+  width: min(560px, calc(100vw - 24px));
+  max-width: calc(100vw - 24px);
+  padding: 10px 14px 14px;
+}
 @keyframes sheet-pop {
   from {
     transform: translateY(-4px);
@@ -1649,11 +1678,34 @@ summary:focus-visible,
 .activity-list .tool-glyph {
   background: var(--surface);
 }
-.activity-list .task-row .tool-label {
+.sheet--activity .activity-sheet-summary {
+  font-size: 14px;
+}
+.sheet--activity .tool-row,
+.sheet--activity .tool-result,
+.sheet--activity .task-row {
+  font-size: 14.5px;
+  line-height: 1.45;
+}
+.sheet--activity .tool-row-x > summary,
+.sheet--activity .tool-result > summary,
+.sheet--activity .tool-row:not(.tool-row-x),
+.sheet--activity .task-row {
+  padding: 8px;
+}
+.sheet--activity .tool-result[data-error="false"] > summary {
+  color: var(--text-dim);
+}
+.sheet--activity .tool-line {
+  display: flex;
+  flex: 1;
+}
+.activity-list .tool-label {
   overflow: visible;
   text-overflow: clip;
   white-space: normal;
-  line-height: 1.35;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
 }
 .sheet-title {
   font-size: 10.5px;
@@ -1762,8 +1814,14 @@ summary:focus-visible,
   color: var(--text-faint);
   font-size: 11.5px;
 }
+.mobile-app-controls {
+  display: none;
+}
 .sheet--anchored .sheet-heading {
   font-size: 15px;
+}
+.sheet--anchored.sheet--activity .sheet-heading {
+  font-size: 17px;
 }
 .sheet--anchored .mode-row {
   min-height: 56px;
@@ -1821,6 +1879,9 @@ summary:focus-visible,
   .topbar {
     gap: 8px;
     padding-inline: 12px;
+  }
+  .app[data-view="chat"] .topbar {
+    display: none;
   }
   /* The session count is already represented by the list itself. Removing it on a phone lets the brand
      stay on one line and gives the theme/forget controls calm, distinct hit areas instead of four cramped
@@ -1881,10 +1942,39 @@ summary:focus-visible,
     flex: 1 1 0;
   }
   .composer {
-    padding-inline: 10px;
+    padding: 8px 10px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
   }
   .composer-shell {
+    padding: 5px;
     border-radius: 16px;
+  }
+  .composer-row .astryx-button {
+    min-width: 44px;
+  }
+  .mobile-app-controls {
+    display: grid;
+    gap: 4px;
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--line-soft);
+  }
+  .mobile-app-appearance,
+  .mobile-app-connection {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 52px;
+    padding: 2px 10px;
+    font-size: 14.5px;
+    color: var(--text);
+  }
+  .mobile-app-appearance .astryx-button,
+  .mobile-app-connection .astryx-button {
+    flex: none;
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 

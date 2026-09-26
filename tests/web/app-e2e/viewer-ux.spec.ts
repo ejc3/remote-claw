@@ -356,14 +356,38 @@ test("the session-list badge labels native RC, tmux, OpenCode, and Codex from th
 // #design-pass: Disconnect wipes the credential and bounces to the gate — a single misclick used to
 // drop a live session instantly. It is now a two-step confirm: the first tap only ARMS (relabels), and
 // the session stays connected; only the second tap forgets.
-test("Disconnect is a two-step confirm — one tap arms without dropping the session", async ({
+test("compact phone header keeps identity, appearance and two-step Disconnect reachable", async ({
   page,
   seedHost,
 }) => {
-  const { pass } = await seedHost();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const title = "Claude cse_01RvWc1hvVrdSLxpZhXqbWVN";
+  const { pass } = await seedHost({ title, harness: "native-rc", caps: "native-rc" });
   await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
   await page.getByRole("button", { name: "Connect" }).click();
-  await expect(page.locator("button.row", { hasText: "rc box" })).toBeVisible();
+  const row = page.locator("button.row", { hasText: "XqbWVN" });
+  await expect(row.locator(".row-title")).not.toContainText("cse_");
+  await expect(row).toHaveAttribute("title", new RegExp(title));
+  await expect(page.locator(".topbar")).toBeVisible();
+  await row.click();
+  await expect(page.locator(".topbar")).toBeHidden();
+  await expect(page.locator(".chat-head .row-title")).toHaveAttribute("title", title);
+  await expect(page.locator(".local-input-disclosure")).toBeVisible();
+  const header = await page.locator(".chat-head").boundingBox();
+  expect(header?.y).toBe(0);
+  expect(header?.height).toBeLessThanOrEqual(60);
+  await page.screenshot({ path: test.info().outputPath("phone-native-header.png") });
+
+  // Back restores global controls; opening settings keeps them reachable within the conversation too.
+  await page.getByRole("button", { name: "Sessions", exact: true }).click();
+  await expect(page.locator(".topbar")).toBeVisible();
+  await row.click();
+  await page.getByRole("button", { name: "Session actions", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Session settings" });
+  await expect(settings.locator(".session-details")).toContainText(title);
+  await settings.getByRole("button", { name: /^Theme:/ }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.screenshot({ path: test.info().outputPath("phone-app-controls.png") });
 
   // First tap: ARMS (the label/aria-label flips) but does NOT forget. The armed button's presence already
   // proves we didn't bounce to the gate (the gate has no such button), so we assert that and click confirm
@@ -371,6 +395,11 @@ test("Disconnect is a two-step confirm — one tap arms without dropping the ses
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   const confirm = page.getByRole("button", { name: "Confirm disconnect" });
   await expect(confirm).toHaveText("Confirm"); // armed, still in the Console (not the gate)
+  await expect(confirm).toBeFocused(); // arming must not replace the modal's focused host button
+  await page.keyboard.press("Tab");
+  await expect(settings.getByRole("button", { name: "Close Session settings" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(confirm).toBeFocused();
   await confirm.click(); // second tap forgets
 
   // Now the credential is wiped and we land back on the connect gate.
@@ -1129,7 +1158,12 @@ test.describe("desktop layout (≥761px)", () => {
     const sheet = page.getByRole("dialog", { name: "Activity details" });
     await expect(sheet).toHaveClass(/sheet--anchored/);
     const output = sheet.locator('details.tool-result[data-error="false"]').first();
+    expect((await sheet.boundingBox())?.width).toBeGreaterThanOrEqual(500);
     await output.locator("summary").click();
+
+    // Activity details are wider than settings, but must stay onscreen near the desktop breakpoint.
+    await page.setViewportSize({ width: 800, height: 900 });
+    await expect(sheet).toBeInViewport({ ratio: 1 });
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(sheet).not.toHaveClass(/sheet--anchored/);

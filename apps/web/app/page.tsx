@@ -32,6 +32,7 @@ import { handoffEnabled } from "./lib/handoff-feature";
 import { friendlySendError } from "./lib/send-error";
 import {
   type ActivityGroup,
+  activityTitle,
   basename,
   diffOf,
   dirname,
@@ -861,6 +862,16 @@ function harnessDetail(harness: Harness | undefined): string {
   return harnessMetadata(harness).detail;
 }
 
+/** Presentation only: preserve user titles and the exact native identity in details/tooltips. */
+export function sessionDisplayTitle(s: Pick<Announce, "title" | "cwd" | "harness">): string {
+  const nativeId =
+    s.harness?.agent === "claude-code" && s.harness.mode === "native-rc"
+      ? /^Claude cse_([A-Za-z0-9_-]+)$/.exec(s.title)?.[1]
+      : undefined;
+  if (!nativeId) return s.title;
+  return `${(s.cwd && basename(s.cwd)) || "Claude session"} · ${nativeId.slice(-6)}`;
+}
+
 /** One interaction policy on phone and desktop; provider names do not grant or disable features. */
 export function viewerInteractionPolicy(
   harness: Harness | undefined,
@@ -1125,34 +1136,29 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
     return next ?? 0;
   };
 
+  // Keep the same host button while arming, including inside the mobile settings focus trap.
+  const disconnectControl = (
+    <Button
+      className="disconnect-button"
+      variant={forgetArmed ? "destructive" : "ghost"}
+      size="sm"
+      label={forgetArmed ? "Confirm" : ""}
+      {...(!forgetArmed ? { icon: <UiIcon name="disconnect" size={18} /> } : {})}
+      aria-label={forgetArmed ? "Confirm disconnect" : "Disconnect"}
+      tooltip={forgetArmed ? "Confirm disconnect" : "Disconnect"}
+      onClick={requestDisconnect}
+    />
+  );
+
   return (
-    <div className="app">
+    <div className="app" data-view={selected === null ? "list" : "chat"}>
       <header className="topbar">
         <Brand />
         <span className="count">
           {list.length} session{list.length === 1 ? "" : "s"}
         </span>
         <ThemeToggle className="topbar-theme" />
-        {forgetArmed ? (
-          <Button
-            className="disconnect-button"
-            variant="destructive"
-            size="sm"
-            label="Confirm"
-            aria-label="Confirm disconnect"
-            onClick={requestDisconnect}
-          />
-        ) : (
-          <IconButton
-            className="disconnect-button"
-            variant="ghost"
-            size="sm"
-            icon={<UiIcon name="disconnect" size={18} />}
-            label="Disconnect"
-            tooltip="Disconnect"
-            onClick={requestDisconnect}
-          />
-        )}
+        {disconnectControl}
       </header>
 
       <div className="panes" data-view={selected === null ? "list" : "chat"}>
@@ -1210,7 +1216,7 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
                     isPulsing={cs === "reconnecting"}
                     label={connStateLabel(cs)}
                   />
-                  <span className="row-title">{s.title}</span>
+                  <span className="row-title">{sessionDisplayTitle(s)}</span>
                   {connected && reportsStatus && s.needs ? (
                     <Badge className="needs-badge" variant="warning" label="needs you" />
                   ) : connected && reportsStatus && s.phase === "thinking" ? (
@@ -1252,6 +1258,18 @@ function Console(props: { viewer: Viewer; onForget: () => void }) {
             draft={drafts.get(selected) ?? EMPTY_DRAFT}
             updateDraft={updateDraft}
             onBack={() => setSelected(null)}
+            appControls={
+              <>
+                <div className="mobile-app-appearance">
+                  <span>Appearance</span>
+                  <ThemeToggle />
+                </div>
+                <div className="mobile-app-connection">
+                  <span>Disconnect from machine</span>
+                  {disconnectControl}
+                </div>
+              </>
+            }
           />
         )}
       </div>
@@ -1269,6 +1287,7 @@ export function Transcript(props: {
   draft: ComposerDraft;
   updateDraft: UpdateDraft;
   onBack: () => void;
+  appControls?: ReactNode;
 }) {
   const { viewer, sessionId, announce, now, reconnectingSince } = props;
   const [messages, setMessages] = useState<Message[]>([]);
@@ -1831,17 +1850,18 @@ export function Transcript(props: {
   return (
     <section className="chat">
       <div className="chat-head">
-        {/* `.back` keeps only its layout: flex-shrink:0 + nowrap (so it can't push the session title to
-            zero width) and the hidden-on-desktop rule. Chrome is the ghost Button. */}
-        <Button
+        <IconButton
           className="back"
           variant="ghost"
           size="sm"
           icon={<UiIcon name="arrow-left" size={17} />}
           label="Sessions"
+          tooltip="Sessions"
           onClick={props.onBack}
         />
-        <span className="row-title">{props.title}</span>
+        <span className="row-title" title={props.title}>
+          {announce ? sessionDisplayTitle(announce) : props.title}
+        </span>
         {permsBypassed && (
           <span
             className="perms-bypassed"
@@ -2087,6 +2107,7 @@ export function Transcript(props: {
       )}
       {sessionSheet && (
         <SessionSheet
+          appControls={props.appControls}
           sessionTitle={props.title}
           agentLabel={harnessLabel(announce?.harness)}
           connectionLabel={harnessDetail(announce?.harness)}
@@ -2285,10 +2306,12 @@ function Sheet({
   label,
   onClose,
   children,
+  wide = false,
 }: {
   label: string;
   onClose: () => void;
   children: ReactNode;
+  wide?: boolean;
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   // onClose is a fresh arrow each parent render; read it through a ref so the focus/scroll-lock effect
@@ -2325,6 +2348,7 @@ function Sheet({
       const vh = window.innerHeight;
       const gap = 6;
       const edge = 12;
+      const width = Math.min(wide ? 560 : 360, vw - edge * 2);
       const roomBelow = vh - t.bottom - gap - edge;
       const roomAbove = t.top - gap - edge;
       const available = Math.max(roomBelow, roomAbove);
@@ -2341,9 +2365,8 @@ function Sheet({
       // Inline cap is the actual chosen-side room (and never wider than the generic desktop 520px cap).
       // `.sheet` already owns overflow-y:auto, so a long activity run remains fully reachable.
       s.maxHeight = Math.min(520, Math.floor(available));
-      if (t.left < vw / 2)
-        s.left = Math.round(t.left); // left-side trigger → align left edges
-      else s.right = Math.round(vw - t.right); // right-side trigger → align right edges
+      if (t.left < vw / 2) s.left = Math.round(Math.max(edge, Math.min(t.left, vw - width - edge)));
+      else s.right = Math.round(Math.max(edge, Math.min(vw - t.right, vw - width - edge)));
       setAnchorStyle(s);
     };
     place();
@@ -2351,7 +2374,7 @@ function Sheet({
     // a desktop window. Otherwise the old inline offset can leave the dialog entirely off-screen.
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
-  }, []);
+  }, [wide]);
   useEffect(() => {
     const trigger = document.activeElement as HTMLElement | null; // the button that opened the sheet
     const focusables = () =>
@@ -2414,7 +2437,7 @@ function Sheet({
         onClick={onClose}
       />
       <div
-        className={anchored ? "sheet sheet--anchored" : "sheet"}
+        className={`${anchored ? "sheet sheet--anchored" : "sheet"}${wide ? " sheet--activity" : ""}`}
         style={anchorStyle ?? undefined}
         ref={dialogRef}
         role="dialog"
@@ -2494,6 +2517,7 @@ const MODELS = [
  *  `canModel`/`canInterrupt` reflect the host driver's capabilities (#149): a driver that can't honor a
  *  verb gets that control disabled with an explanatory note, never a button that silently no-ops. */
 export function SessionSheet({
+  appControls,
   sessionTitle,
   agentLabel,
   connectionLabel,
@@ -2508,6 +2532,7 @@ export function SessionSheet({
   onCopyBranch,
   onClose,
 }: {
+  appControls?: ReactNode;
   sessionTitle: string;
   agentLabel: string;
   connectionLabel: string;
@@ -2608,6 +2633,7 @@ export function SessionSheet({
           <span>{permissionLabel}</span>
         </div>
       </div>
+      {appControls && <div className="mobile-app-controls">{appControls}</div>}
     </Sheet>
   );
 }
@@ -2622,6 +2648,7 @@ function ActivityRollup({
   onOpen: () => void;
 }) {
   const summary = summarizeActivity(group.messages);
+  const title = activityTitle(group.messages);
   // Keep exactly one replaceable announcement node per run. Re-keying it makes each appended batch an
   // aria-relevant="additions" event even though the compact button only changes text; replacing the prior
   // node avoids retaining a second hidden transcript in both the DOM and accessibility tree.
@@ -2647,7 +2674,7 @@ function ActivityRollup({
       <button
         type="button"
         className="activity-rollup"
-        aria-label={`Activity: ${summary}`}
+        aria-label={`Activity: ${summary} — ${title}`}
         aria-haspopup="dialog"
         aria-expanded={expanded}
         onClick={onOpen}
@@ -2656,7 +2683,9 @@ function ActivityRollup({
           <UiIcon name="tool" size={18} />
         </span>
         <span className="activity-rollup-copy">
-          <span className="activity-rollup-title">Activity</span>
+          <span className="activity-rollup-title" title={title}>
+            {title}
+          </span>
           <span className="activity-rollup-meta">{summary}</span>
         </span>
         <span className="activity-rollup-chevron" aria-hidden>
@@ -2675,7 +2704,7 @@ function ActivityRollup({
 function ActivitySheet({ group, onClose }: { group: ActivityGroup; onClose: () => void }) {
   const summary = summarizeActivity(group.messages);
   return (
-    <Sheet label="Activity details" onClose={onClose}>
+    <Sheet label="Activity details" onClose={onClose} wide>
       <p className="activity-sheet-summary">{summary}</p>
       <ol className="activity-list" aria-label="Activity events">
         {group.messages.map((message) => (
