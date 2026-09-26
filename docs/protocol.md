@@ -139,8 +139,8 @@ and caps decoded ciphertext below the deployment edge's request-body ceiling.
 
 | Plane | Key | Current record kinds |
 | --- | --- | --- |
-| Content | per-session `K_session` | `user`, `assistant`, `assistant_sub`, thinking variants, `result`, `system`, `status`, `rate_limit`, `can_use_tool`, `tool_use`, `tool_result`, `task`, `permission_request` |
-| Control | `control_key` | `catch_up`, `permission`, `interrupt`, `set_mode`, `set_model`, `command`, `end`, `attachment` |
+| Content | per-session `K_session` | `user`, `user_attachment`, `assistant`, `assistant_sub`, thinking variants, `result`, `system`, `status`, `rate_limit`, `can_use_tool`, `tool_use`, `tool_result`, `task`, `permission_request` |
+| Control | `control_key` | `catch_up`, `permission`, `interrupt`, `set_mode`, `set_model`, `set_session_settings`, `command`, `end`, `attachment` |
 | Meta | `K_meta` | `accepted`, `session_announce`, `session_terminal`, `permission_resolved` |
 
 Unknown kinds fail instead of being assigned a guessed key. Content carries a numeric transcript
@@ -449,7 +449,8 @@ History depends on the effective broker backend:
 - On a non-durable backend, the host keeps an in-memory content log. A viewer sends `catch_up` with a
   `since` sequence, and the host republishes original `seq`/`msg_id` values.
 - On a durable backend, the broker log is history. Viewers subscribe from the beginning and the host
-  keeps no replay log; `catch_up` is authenticated but ignored.
+  keeps no transcript replay log; authenticated `catch_up` skips transcript replay but can refresh
+  the optional session-settings catalog on either backend.
 
 Before a durable relay becomes discoverable, it reads both recovery cursors. `/api/seq` resumes the
 outbound transcript counter at `maxSeq + 1`; `/api/frame-count` sets the new relay incarnation's
@@ -505,7 +506,7 @@ The capability vector tells the viewer when status must not be presented as auth
 Capabilities are advertised by each driver and enforced again in the host, so an old or custom viewer
 cannot bypass a disabled button:
 
-| Driver | Structured permissions | Status | Interrupt | Set model | Set mode | End | Attachments |
+| Driver | Structured permissions | Status | Interrupt | Legacy set model | Permission mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
 | Claude native companion | supported Bash decisions and bounded question forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
@@ -515,6 +516,10 @@ cannot bypass a disabled button:
 | Codex 0.151.0 | no | yes | yes | no | no | no | yes; images only |
 | Codex 0.153.4 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
 | Codex 0.154.0 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
+
+The model/mode columns above describe legacy `set_model` and permission `set_mode`, not the separate
+`controls.configureSession` capability. Only exact Codex 0.154.0 conditionally advertises
+[native session settings](#codex-native-session-settings) after successful catalog discovery.
 
 Text input on the stable Claude, pinned Codex, and maintained tmux surfaces must be non-empty and non-slash.
 Tmux also accepts attachments as ordinary relay-owned user turns; Codex accepts image groups and,
@@ -803,11 +808,12 @@ uploads directory, publishes one transcript echo, then injects a normal prompt r
 
 ## 11. Compatibility control verbs
 
-The viewer stamps `interrupt`, `set_model`, `set_mode`, and `end` with an expiry. The relay drops those
-actions when stale and maps supported controls to driver events:
+The viewer stamps `interrupt`, `set_model`, `set_mode`, `set_session_settings`, and `end` with an
+expiry. The relay drops those actions when stale and maps supported controls to driver events:
 
 - `interrupt` → Claude `interrupt`, OpenCode abort, or Codex exact-turn `turn/interrupt`;
-- `set_model` → Claude `set_model`; and
+- `set_model` → Claude `set_model`;
+- `set_session_settings` → the separately advertised Codex settings path below; and
 - `set_mode` → Claude `set_permission_mode` only where advertised.
 
 The Claude-native companion sends one session-scoped `control_request` containing the existing
@@ -858,8 +864,8 @@ interrupt
 ```
 
 Unknown subtypes return an error response. An outbound-only Claude session additionally accepts only
-`initialize`. remote-claw's relay deliberately drives only `interrupt`, `set_model`, and
-`set_permission_mode`, and only when the active driver advertises that capability. The stable Claude
+`initialize`. For that Claude bridge, remote-claw's relay deliberately drives only `interrupt`,
+`set_model`, and `set_permission_mode`, and only when the active driver advertises that capability. The stable Claude
 capability vector currently advertises all three false.
 
 Claude's REPL bridge has no working remote `end_session`; the official RC server's request is rejected
@@ -867,10 +873,74 @@ by Claude too. The current `end` action therefore only clears abandoned permissi
 advertised false by every driver. Slash commands use ordinary `user` input, but the stable Claude,
 pinned OpenCode M2, pinned Codex M3a, and maintained tmux surfaces reject slash-leading text.
 
-`catch_up` is a separate replay request, not a native control verb. The viewer currently stamps it
-with an expiry, but the host's replay branch does not enforce that expiry. Stable sequence and message
-IDs keep the resulting transcript replay idempotent; a withheld request can still cause redundant
-non-durable replay later.
+### Codex native session settings
+
+Exact Codex 0.154.0/Linux arm64 conditionally advertises `controls.configureSession:true` after
+`model/list` and `collaborationMode/list` return bounded valid catalogs. The former is paginated with
+`includeHidden:false` and at most 32 models; each model has at most 12 advertised effort choices.
+The mode list is bounded to eight entries and this pinned adapter admits only native `plan` and
+`default` IDs. Models, labels, effort descriptions, and choices come from the native catalog, not a
+viewer-maintained model list. Catalog failure leaves this optional capability unavailable while the
+conversation continues. Older Codex versions and other drivers do not acquire it implicitly.
+
+Encrypted announces always carry native `current` model, effort, and collaboration mode when settings
+are available. The initial announce, a catalog change, or authenticated `catch_up` includes the full
+`session_settings:{models,collaborationModes,current}` snapshot. Other announces, including keepalives
+and current-value changes, send only `session_settings:{current}`: unordered presence still occupies
+durable broker storage, so unchanged catalogs must not repeat every 20 seconds. Catalog refresh uses
+the existing bounded advisory-presence coalescer, never blocking transcript publication. A failed
+refresh remains requested for the next ordinary wake/keepalive, without an immediate retry loop.
+
+The viewer merges current-only state only with a valid catalog already accepted from the same explicit
+host incarnation and with `configureSession:true` still advertised. A new incarnation, removed
+capability, or malformed payload cannot inherit that catalog. Initial discovery reads only the last
+64 bus frames; selecting a session or reloading requests authenticated `catch_up`, which supplies a
+fresh full snapshot even if the initial catalog is outside that window. This does not require full
+bus replay or a new catalog RPC/store.
+
+Resume may supply model/effort but does not establish collaboration mode;
+missing values remain `null`/Unknown. Exact-thread `thread/settings/updated` notifications replace
+current state. Values absent from the catalog remain readable but never become extra picker options.
+
+The viewer sends `set_session_settings` with `{change:{model}}`, `{change:{effort}}`, or
+`{change:{collaborationMode}}` and the existing 60-second expiry. The host accepts exactly one bounded
+non-empty selection, enforces the advertised capability, and rechecks catalog membership and expiry
+at the native writer after any wait in the shared browser-input FIFO. Model/effort selections become
+the corresponding single field in `thread/settings/update`; mode-only changes send native
+`collaborationMode:{mode,settings:{model,reasoning_effort,developer_instructions:null}}`, preserving
+the current native model and explicit supported effort. Unknown/unsupported current model or effort
+prevents a mode change. The null instruction field uses the selected mode's built-in instructions;
+this path exposes no custom instructions, permission, sandbox, or persistent-configuration update.
+
+One adapter-local expected-confirmation guard is set before each settings RPC. While it is pending,
+later browser settings are consumed without a native write and produce a trace warning; they are not
+queued for automatic retry. Only a valid exact-thread native notification matching the attempted
+field clears the guard. A mode confirmation must also match its preserved model and effort. RPC
+success, failure, timeout, unrelated notices, and mismatched current values do not clear it. An
+already native-confirmed effective target is a no-op with no RPC or new guard. Text and interrupt
+remain usable after an unconfirmed settings RPC settles. Further browser settings require matching
+native reconciliation or a fresh companion; browser reload alone does not reset this host guard.
+
+The settings sheet retains one pending selection, disables further picks while waiting, and ticks
+only native-current values. HTTP/RPC acceptance is not confirmation. Matching native state confirms;
+a conflicting native change or a 60-second wait reports unconfirmed without retry. A failed/uncertain
+settings RPC does not retire an otherwise healthy conversation or fabricate a selected value. The
+legacy Claude alias picker and permission-mode path are unchanged.
+
+[Official app-server documentation](https://learn.chatgpt.com/docs/app-server#models) describes
+catalog discovery and native effort choices; the pinned `thread/settings/update` seam is implemented
+separately in `codex/client.ts`, `codex/settings.ts`, and `codex/driver.ts`. Its bounded acceptance is
+tracked in the [release roadmap](release-finish-line.md#codex-native-session-settings), not inferred
+from general API documentation.
+
+### Catch-up requests
+
+`catch_up` is a separate transcript-replay/settings-discovery request, not a native control verb. It
+refreshes an available settings catalog through advisory presence on durable and non-durable
+backends; only the latter also replays transcript content. The viewer currently stamps it with an
+expiry, but this host branch does not enforce that expiry. Stable sequence and message IDs keep the
+resulting transcript replay idempotent; a withheld request can still cause redundant non-durable
+replay or catalog refresh later.
 
 ## 12. Failure boundaries
 

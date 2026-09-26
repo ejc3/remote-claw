@@ -17,6 +17,8 @@ import {
   harnessMetadata,
   harnessPolicy,
   hasClaudeNativeReferences,
+  type SessionSettings,
+  type SessionSettingsChange,
 } from "@remote-claw/cli/harness";
 import {
   type CSSProperties,
@@ -25,6 +27,7 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -107,6 +110,63 @@ const MAX_STAGED_IMAGES = MAX_ATTACHMENT_ITEMS;
 /** How long an unconfirmed optimistic permission-mode pick survives before reverting to the announced mode
  *  — a fallback so a set_mode the host never confirms (or that silently failed) can't stick indefinitely. */
 const OPTIMISTIC_MODE_TTL_MS = 8000;
+const NATIVE_SETTINGS_CONFIRM_MS = 60_000;
+
+export interface PendingNativeSetting {
+  change: SessionSettingsChange;
+  before: SessionSettings["current"];
+  deadline: number;
+}
+
+/** Local validation complements the host's live catalog check; unknown native values stay visible. */
+export function canChooseNativeSetting(
+  settings: SessionSettings,
+  change: SessionSettingsChange,
+): boolean {
+  const current = settings.current;
+  const model = settings.models.find((entry) => entry.id === current.model);
+  if ("model" in change) {
+    return (
+      change.model !== current.model && settings.models.some((entry) => entry.id === change.model)
+    );
+  }
+  if ("effort" in change) {
+    return (
+      change.effort !== current.effort &&
+      model?.efforts.some((entry) => entry.id === change.effort) === true
+    );
+  }
+  return (
+    change.collaborationMode !== current.collaborationMode &&
+    current.effort !== null &&
+    model?.efforts.some((entry) => entry.id === current.effort) === true &&
+    settings.collaborationModes.some((entry) => entry.id === change.collaborationMode)
+  );
+}
+
+/** A sent control is not confirmation. Only the native snapshot can finish a pending selection. */
+export function nativeSettingOutcome(
+  pending: PendingNativeSetting,
+  current: SessionSettings["current"],
+  now: number,
+): "pending" | "confirmed" | "unconfirmed" {
+  if (now >= pending.deadline) return "unconfirmed";
+  const { change, before } = pending;
+  const matched =
+    "model" in change
+      ? current.model === change.model
+      : "effort" in change
+        ? current.effort === change.effort && current.model === before.model
+        : current.collaborationMode === change.collaborationMode &&
+          current.model === before.model &&
+          current.effort === before.effort;
+  if (matched) return "confirmed";
+  return current.model !== before.model ||
+    current.effort !== before.effort ||
+    current.collaborationMode !== before.collaborationMode
+    ? "unconfirmed"
+    : "pending";
+}
 
 export function shouldShowGapRecovery(gap: TranscriptGap | null, now: number): boolean {
   return gap !== null && now - gap.since >= TRANSCRIPT_GAP_STALL_MS;
@@ -1426,6 +1486,9 @@ export function Transcript(props: {
   // The model is set via set_model but the worker doesn't self-report it, so we track the last choice
   // ourselves to tick the active row in the sheet (#design-pass model-active-tick).
   const [optimisticModel, setOptimisticModel] = useState<string | null>(null);
+  const [pendingSetting, setPendingSetting] = useState<PendingNativeSetting | null>(null);
+  const pendingSettingRef = useRef<PendingNativeSetting | null>(null);
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [modeSheet, setModeSheet] = useState(false);
   const [sessionSheet, setSessionSheet] = useState(false);
   // Stick-to-bottom scrolling (#design-pass): the scroll container, whether the reader is at the bottom,
@@ -1508,6 +1571,9 @@ export function Transcript(props: {
     files: supportsFiles,
   };
   const supportsRemotePermissions = interaction.structuredPermissions;
+  const supportsNativeSettings = interaction.text && caps?.controls.configureSession === true;
+  const nativeSettings = supportsNativeSettings ? announce?.sessionSettings : undefined;
+  const canConfigureSession = connected && nativeSettings !== undefined;
   const canSetMode = remoteMutationEnabled(connected, supportsSetMode);
   const canSetModel = remoteMutationEnabled(connected, supportsSetModel);
   const canInterrupt = remoteMutationEnabled(connected, supportsInterrupt);
@@ -1543,6 +1609,58 @@ export function Transcript(props: {
   const canSend = remoteMutationEnabled(
     connected,
     interaction.text && composerHasPayload && !slashBlocked,
+  );
+
+  const finishSetting = useCallback((pending: PendingNativeSetting, confirmed: boolean) => {
+    if (pendingSettingRef.current !== pending) return;
+    pendingSettingRef.current = null;
+    setPendingSetting(null);
+    setSettingsNotice(
+      confirmed
+        ? "Native settings confirmed."
+        : "Change unconfirmed. Check the current native settings before trying again.",
+    );
+  }, []);
+  useEffect(() => {
+    if (pendingSetting === null) return;
+    const outcome = nativeSettings
+      ? nativeSettingOutcome(pendingSetting, nativeSettings.current, Date.now())
+      : "pending";
+    if (outcome !== "pending") finishSetting(pendingSetting, outcome === "confirmed");
+  }, [pendingSetting, nativeSettings, finishSetting]);
+  useEffect(() => {
+    if (pendingSetting === null) return;
+    const timer = setTimeout(
+      () => finishSetting(pendingSetting, false),
+      Math.max(0, pendingSetting.deadline - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [pendingSetting, finishSetting]);
+  const chooseNativeSetting = useCallback(
+    async (change: SessionSettingsChange) => {
+      if (
+        !canConfigureSession ||
+        !nativeSettings ||
+        pendingSettingRef.current ||
+        !canChooseNativeSetting(nativeSettings, change)
+      )
+        return;
+      const pending: PendingNativeSetting = {
+        change,
+        before: { ...nativeSettings.current },
+        deadline: Date.now() + NATIVE_SETTINGS_CONFIRM_MS,
+      };
+      pendingSettingRef.current = pending;
+      setPendingSetting(pending);
+      setSettingsNotice(null);
+      try {
+        await viewer.configureSession(sessionId, change);
+      } catch {
+        // Transport failure can follow admission: do not retry or claim the old choice won.
+        if (mountedRef.current) finishSetting(pending, false);
+      }
+    },
+    [canConfigureSession, nativeSettings, sessionId, viewer, finishSetting],
   );
 
   // Reconcile a fresh announce against the optimistic pick: clear it once the announce CONFIRMS the pick or
@@ -2283,6 +2401,16 @@ export function Transcript(props: {
           branch={announce?.git?.branch ?? null}
           currentModel={optimisticModel}
           canModel={canSetModel}
+          {...(supportsNativeSettings
+            ? {
+                nativeSettings: {
+                  settings: nativeSettings ?? null,
+                  pending: pendingSetting !== null,
+                  notice: settingsNotice,
+                  onChange: (change: SessionSettingsChange) => void chooseNativeSetting(change),
+                },
+              }
+            : {})}
           canInterrupt={canInterrupt}
           hostConnected={connected}
           onModel={(id) => void chooseModel(id)}
@@ -2670,6 +2798,130 @@ const MODELS = [
   { id: "haiku", label: "Haiku", desc: "Fastest — quick answers" },
 ] as const;
 
+interface NativeSettingsProps {
+  settings: SessionSettings | null;
+  pending: boolean;
+  notice: string | null;
+  onChange: (change: SessionSettingsChange) => void;
+}
+
+export function NativeSettingsSection({
+  settings,
+  pending,
+  notice,
+  onChange,
+  connected,
+}: NativeSettingsProps & { connected: boolean }) {
+  const sectionId = useId();
+  if (!settings) {
+    return <p className="sheet-note">Native settings are not available yet.</p>;
+  }
+  const { current } = settings;
+  const model = settings.models.find((entry) => entry.id === current.model);
+  const mode = settings.collaborationModes.find((entry) => entry.id === current.collaborationMode);
+  const effortKnown = model?.efforts.some((entry) => entry.id === current.effort) === true;
+  const row = (
+    label: string,
+    value: string,
+    description: string | undefined,
+    change: SessionSettingsChange,
+    active: boolean,
+  ) => {
+    const kind = "model" in change ? "Model" : "effort" in change ? "Effort" : "Mode";
+    const descriptionId = description
+      ? `${sectionId}-${kind}-${encodeURIComponent(value)}`
+      : undefined;
+    return (
+      <button
+        key={value}
+        type="button"
+        className="mode-row"
+        data-active={active}
+        aria-pressed={active}
+        aria-label={`${kind}: ${label}`}
+        aria-describedby={descriptionId}
+        disabled={!connected || pending || !canChooseNativeSetting(settings, change)}
+        onClick={() => onChange(change)}
+      >
+        <span className="mode-row-main">
+          <span className="mode-row-label">{label}</span>
+          {description && (
+            <span className="mode-row-desc" id={descriptionId}>
+              {description}
+            </span>
+          )}
+        </span>
+        {active && (
+          <span className="mode-check" aria-hidden="true">
+            <UiIcon name="check" size={18} />
+          </span>
+        )}
+      </button>
+    );
+  };
+  return (
+    <div className="native-settings" data-pending={pending}>
+      <p className="sheet-note native-settings-status" role="status">
+        {pending
+          ? "Waiting for native confirmation…"
+          : (notice ?? "Selections reflect the native session.")}
+      </p>
+      {!connected && <p className="sheet-note">Reconnect to the host before changing settings.</p>}
+      <fieldset className="native-settings-group">
+        <legend className="sheet-title">Model</legend>
+        <p className="sheet-note">Current: {model?.label ?? current.model ?? "Unknown"}</p>
+        {settings.models.map((entry) =>
+          row(
+            entry.label,
+            entry.id,
+            entry.id === entry.label ? undefined : entry.id,
+            { model: entry.id },
+            entry.id === current.model,
+          ),
+        )}
+      </fieldset>
+      <fieldset className="native-settings-group">
+        <legend className="sheet-title">Reasoning effort</legend>
+        <p className="sheet-note">Current: {current.effort ?? "Unknown"}</p>
+        {model ? (
+          model.efforts.map((entry) =>
+            row(
+              entry.id,
+              entry.id,
+              entry.description,
+              { effort: entry.id },
+              entry.id === current.effort,
+            ),
+          )
+        ) : (
+          <p className="sheet-note">Choose a known model to see its effort options.</p>
+        )}
+      </fieldset>
+      {settings.collaborationModes.length > 0 && (
+        <fieldset className="native-settings-group">
+          <legend className="sheet-title">Collaboration mode</legend>
+          <p className="sheet-note">
+            Current: {mode?.label ?? current.collaborationMode ?? "Unknown"}
+          </p>
+          <p className="sheet-note">Changing mode keeps the current model and effort.</p>
+          {!effortKnown && (
+            <p className="sheet-note">Confirm a supported model and effort before changing mode.</p>
+          )}
+          {settings.collaborationModes.map((entry) =>
+            row(
+              entry.label,
+              entry.id,
+              undefined,
+              { collaborationMode: entry.id },
+              entry.id === current.collaborationMode,
+            ),
+          )}
+        </fieldset>
+      )}
+    </div>
+  );
+}
+
 /** The session ⋯ sheet: switch model (set_model), interrupt the current turn, copy the git branch.
  *  `canModel`/`canInterrupt` reflect the host driver's capabilities (#149): a driver that can't honor a
  *  verb gets that control disabled with an explanatory note, never a button that silently no-ops. */
@@ -2682,6 +2934,7 @@ export function SessionSheet({
   branch,
   currentModel,
   canModel,
+  nativeSettings,
   canInterrupt,
   hostConnected,
   onModel,
@@ -2699,6 +2952,7 @@ export function SessionSheet({
   currentModel: string | null;
   /** The driver can switch model (opencode can't — it needs a providerID/modelID, not the viewer's aliases). */
   canModel: boolean;
+  nativeSettings?: NativeSettingsProps;
   /** The driver can interrupt the current turn (true for every current driver; gated defensively). */
   canInterrupt: boolean;
   /** Fresh host presence is required before any remote mutation, even when the driver supports it. */
@@ -2710,37 +2964,43 @@ export function SessionSheet({
 }) {
   return (
     <Sheet label="Session settings" onClose={onClose}>
-      <div className="sheet-title">Model</div>
-      {canModel ? (
-        MODELS.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            className="mode-row"
-            data-active={m.id === currentModel}
-            aria-pressed={m.id === currentModel}
-            onClick={() => onModel(m.id)}
-          >
-            <span className="mode-row-glyph">
-              <UiIcon name="model" size={19} />
-            </span>
-            <span className="mode-row-main">
-              <span className="mode-row-label">{m.label}</span>
-              <span className="mode-row-desc">{m.desc}</span>
-            </span>
-            {m.id === currentModel && (
-              <span className="mode-check" aria-hidden>
-                <UiIcon name="check" size={18} />
-              </span>
-            )}
-          </button>
-        ))
+      {nativeSettings ? (
+        <NativeSettingsSection {...nativeSettings} connected={hostConnected} />
       ) : (
-        <p className="sheet-note">
-          {hostConnected
-            ? "This harness can’t switch model from the viewer."
-            : "Reconnect to the host before changing model."}
-        </p>
+        <>
+          <div className="sheet-title">Model</div>
+          {canModel ? (
+            MODELS.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                className="mode-row"
+                data-active={m.id === currentModel}
+                aria-pressed={m.id === currentModel}
+                onClick={() => onModel(m.id)}
+              >
+                <span className="mode-row-glyph">
+                  <UiIcon name="model" size={19} />
+                </span>
+                <span className="mode-row-main">
+                  <span className="mode-row-label">{m.label}</span>
+                  <span className="mode-row-desc">{m.desc}</span>
+                </span>
+                {m.id === currentModel && (
+                  <span className="mode-check" aria-hidden>
+                    <UiIcon name="check" size={18} />
+                  </span>
+                )}
+              </button>
+            ))
+          ) : (
+            <p className="sheet-note">
+              {hostConnected
+                ? "This harness can’t switch model from the viewer."
+                : "Reconnect to the host before changing model."}
+            </p>
+          )}
+        </>
       )}
       <div className="sheet-title">Controls</div>
       <button

@@ -15,6 +15,7 @@ import {
   isCodexThreadId,
   normalizeCodexAppServerUrl,
 } from "./client.js";
+import type { CodexSettingsUpdate } from "./settings.js";
 
 const THREAD_ID = "01993d50-6c31-7e11-9f70-3a8d9b5e7201";
 
@@ -95,6 +96,164 @@ function takeServerRequest(client: CodexAppServerClient): CodexServerRequest {
 }
 
 describe("Codex app-server boundary", () => {
+  it("reads bounded settings catalogs and sends only the exact model/effort/mode RPC whitelist", async () => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    const model = (slug: string) => ({
+      id: `picker-${slug}`,
+      model: slug,
+      displayName: slug,
+      hidden: false,
+      defaultReasoningEffort: "low",
+      supportedReasoningEfforts: [{ reasoningEffort: "low", description: "Fast" }],
+    });
+    socket.send = (raw) => {
+      const message = JSON.parse(raw) as {
+        id: number;
+        method: string;
+        params: Record<string, unknown>;
+      };
+      if (message.method === "model/list") {
+        socket.sent.push(message);
+        socket.respond(
+          message.id,
+          message.params.cursor === undefined
+            ? { data: [model("slug-a")], nextCursor: "second" }
+            : { data: [model("slug-b")], nextCursor: null },
+        );
+      } else if (message.method === "collaborationMode/list") {
+        socket.sent.push(message);
+        socket.respond(message.id, {
+          data: [
+            { name: "Plan", mode: "plan", reasoning_effort: "medium" },
+            { name: "Default", mode: "default", reasoning_effort: null },
+          ],
+        });
+      } else if (message.method === "thread/settings/update") {
+        socket.sent.push(message);
+        socket.respond(message.id, {});
+      } else originalSend(raw);
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    try {
+      await client.initialize(signal);
+      expect((await client.listModels(signal)).map((model) => model.id)).toEqual([
+        "slug-a",
+        "slug-b",
+      ]);
+      expect(
+        socket.sent
+          .filter((message) => message.method === "model/list")
+          .map((message) => message.params),
+      ).toEqual([
+        { limit: 32, includeHidden: false },
+        { limit: 31, includeHidden: false, cursor: "second" },
+      ]);
+      expect(await client.listCollaborationModes(signal)).toEqual([
+        { id: "plan", label: "Plan" },
+        { id: "default", label: "Default" },
+      ]);
+      const updates: CodexSettingsUpdate[] = [
+        { model: "slug-a" },
+        { effort: "low" },
+        {
+          collaborationMode: {
+            mode: "plan",
+            settings: { model: "slug-a", reasoning_effort: "low", developer_instructions: null },
+          },
+        },
+      ];
+      for (const update of updates) await client.updateSettings(THREAD_ID, update, signal);
+      expect(
+        socket.sent
+          .filter((message) => message.method === "thread/settings/update")
+          .map((message) => message.params),
+      ).toEqual(updates.map((update) => ({ threadId: THREAD_ID, ...update })));
+      await expect(
+        client.updateSettings(
+          THREAD_ID,
+          { model: "slug-a", approvalPolicy: "never" } as CodexSettingsUpdate,
+          signal,
+        ),
+      ).rejects.toThrow("invalid session settings");
+      await expect(
+        client.updateSettings("not-a-thread", { effort: "low" }, signal),
+      ).rejects.toThrow("invalid session settings");
+      expect(
+        socket.sent.filter((message) => message.method === "thread/settings/update"),
+      ).toHaveLength(3);
+      expect(client.drainInbound()).toEqual([]); // RPC response fabricated no settings notification.
+    } finally {
+      client.close();
+    }
+  });
+
+  it.each([
+    "oversized",
+    "cycle",
+  ])("bounds native model catalog pagination (%s)", async (failure) => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    socket.send = (raw) => {
+      const message = JSON.parse(raw) as { id: number; method: string };
+      if (message.method !== "model/list") return originalSend(raw);
+      socket.sent.push(message);
+      socket.respond(
+        message.id,
+        failure === "oversized"
+          ? { data: Array(33).fill({}), nextCursor: null }
+          : { data: [{}], nextCursor: "same" },
+      );
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    try {
+      await client.initialize(signal);
+      await expect(client.listModels(signal)).rejects.toThrow(/model catalog/);
+      expect(socket.sent.filter((message) => message.method === "model/list")).toHaveLength(
+        failure === "oversized" ? 1 : 2,
+      );
+    } finally {
+      client.close();
+    }
+  });
+
+  it("retains native resume model/effort without guessing collaboration mode", async () => {
+    const socket = new FakeSocket();
+    const originalSend = socket.send.bind(socket);
+    socket.send = (raw) => {
+      const message = JSON.parse(raw) as { id: number; method: string };
+      if (message.method !== "thread/resume") return originalSend(raw);
+      socket.sent.push(message);
+      socket.respond(message.id, {
+        model: "native-model",
+        reasoningEffort: null,
+        thread: {
+          id: THREAD_ID,
+          status: { type: "idle" },
+          canAcceptDirectInput: true,
+          historyMode: "paginated",
+          model: "old-model",
+          reasoningEffort: "old-effort",
+          collaborationMode: "plan",
+        },
+      });
+    };
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    try {
+      await client.initialize(signal);
+      expect((await client.resume(THREAD_ID, signal)).settings).toEqual({
+        model: "native-model",
+        effort: null,
+        collaborationMode: null,
+      });
+    } finally {
+      client.close();
+    }
+  });
+
   it("sends only text and host-prepared inline images without native policy overrides", async () => {
     const socket = new FakeSocket();
     const client = new CodexAppServerClient("unix://", () => socket);

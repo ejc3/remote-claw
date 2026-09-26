@@ -125,7 +125,10 @@ Current acceptance is tracked in the
 [release roadmap](release-finish-line.md), without rewriting the historical 0.151.0 results.
 The separate [0.154.0 result](release-finish-line.md#codex-current-version-acceptance) records that
 tuple's tested journeys and exclusions.
-Other controls, streaming partials, file
+Exact 0.154.0 now conditionally offers [native model/effort/collaboration settings](protocol.md#codex-native-session-settings)
+after catalog discovery, without changing permissions or sandbox policy. The
+[separate settings slice](release-finish-line.md#codex-native-session-settings) tracks its current
+acceptance; Claude settings remain native/local. Other controls, streaming partials, file
 changes, task lifecycle, and other versions/platforms remain outside this implementation.
 
 ### tmux compatibility
