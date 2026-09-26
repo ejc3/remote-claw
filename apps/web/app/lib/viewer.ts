@@ -653,13 +653,32 @@ export class Viewer {
           if (harness) announce.harness = harness;
           const caps = parseCapabilities(body.capabilities, harness);
           if (caps) announce.capabilities = caps;
-          const settings =
-            caps?.controls.configureSession === true
-              ? parseSessionSettings(body.session_settings)
-              : null;
-          if (settings) announce.sessionSettings = settings;
           const existing = this.#acceptedAnnounces.get(sessionId);
           if (!shouldAcceptAnnounce(existing, announce)) continue;
+          if (caps?.controls.configureSession === true) {
+            const raw = body.session_settings;
+            // Current-only keepalives may reuse only this accepted incarnation's valid catalog.
+            // An invalid full snapshot, removed capability or new host never inherits old choices.
+            const currentOnly =
+              typeof raw === "object" &&
+              raw !== null &&
+              !Array.isArray(raw) &&
+              Object.keys(raw).length === 1 &&
+              Object.hasOwn(raw, "current");
+            const settings =
+              parseSessionSettings(raw) ??
+              (currentOnly &&
+              announce.incarnation !== null &&
+              existing?.incarnation === announce.incarnation &&
+              existing.capabilities?.controls.configureSession === true &&
+              existing.sessionSettings !== undefined
+                ? parseSessionSettings({
+                    ...existing.sessionSettings,
+                    current: (raw as { current: unknown }).current,
+                  })
+                : null);
+            if (settings) announce.sessionSettings = settings;
+          }
           announce.freshnessAt = announceFreshnessAt(existing, announce, receivedAt);
           this.#acceptedAnnounces.set(sessionId, announce);
           this.#rememberIncarnation(sessionId, announce.incarnation);
@@ -889,7 +908,7 @@ export class Viewer {
     }
   }
 
-  /** Ask the host to replay history from `since` (a control frame on the session channel). */
+  /** Ask for history plus fresh settings discovery, including on durable transcript backends. */
   async requestHistory(sessionId: string, since = 0): Promise<void> {
     this.#assertSessionWritable(sessionId);
     await this.#client.postFrame(

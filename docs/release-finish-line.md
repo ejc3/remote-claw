@@ -574,6 +574,14 @@ screenshots were opened and inspected. Focused parser/adapter/UI tests cover unk
 values, catalog bounds/fallback, mode/effort preservation, stale/expired writes, confirmation versus
 RPC acceptance, and timeout/peer-contradiction feedback.
 
+The catalog-retention follow-up keeps native current values in each announcement but includes full
+catalogs only initially, on catalog change, and on authenticated catch-up. Durable broker presence is
+stored, so compact keepalives avoid unbounded repetition of the large catalog. Focused relay/viewer
+regressions cover same-incarnation reuse, malformed/capability-removal invalidation, both backend
+kinds, and nonblocking bounded refresh recovery. The browser sentinel advances beyond the last-64
+discovery window before reload and recovers the catalog through session-selection catch-up. This
+transport check does not repeat or broaden the separate actual-native settings acceptance below.
+
 The separate actual 0.154.0/Linux arm64/managed-Unix run used one retained native thread and
 independent 390×844 phone-layout and 1280×900 desktop viewers. Effort changed from ultra to high;
 the first native settings notification established Default mode rather than the viewer guessing it

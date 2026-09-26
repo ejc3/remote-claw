@@ -52,15 +52,25 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
       collaborationModes: [{ id: "plan", label: "Plan" }],
       current: { model: "m", effort: "high", collaborationMode: null as string | null },
     };
-    async function announce(seq: number, configureSession: boolean, raw: unknown) {
+    async function announce(
+      seq: number,
+      configureSession: boolean,
+      raw: unknown,
+      incarnation = "settings-test",
+    ) {
       await host.postFrame(
-        header(id, { recordKind: "session_announce", sessionId: sid, msgId: `settings-${seq}` }),
+        header(id, {
+          recordKind: "session_announce",
+          sessionId: sid,
+          msgId: `${incarnation}-${seq}`,
+        }),
         utf8(
           JSON.stringify({
             session_id: sid,
             title: "Settings",
             sent_at: Date.now(),
-            incarnation: "settings-test",
+            incarnation,
+            incarnation_started_at: incarnation === "settings-test" ? 1_000 : 2_000,
             announce_seq: seq,
             mode: "default",
             harness: { agent: "codex", mode: "app-server" },
@@ -89,15 +99,101 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
     expect(sent.expiry).toBeGreaterThan(before);
     expect(sent.expiry).toBeLessThanOrEqual(Date.now() + 60_000);
     const confirmed = { ...settings, current: { ...settings.current, collaborationMode: "plan" } };
-    await announce(1, true, confirmed);
+    await announce(1, true, { current: confirmed.current });
     for (const viewer of viewers)
       expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toEqual(confirmed);
-    await announce(2, false, confirmed);
+    await announce(2, true, { ...confirmed, models: [] });
     for (const viewer of viewers)
       expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toBeUndefined();
-    await announce(3, true, { ...settings, current: {} });
+    await announce(3, true, { current: confirmed.current });
     for (const viewer of viewers)
       expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toBeUndefined();
+    await announce(4, true, confirmed);
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toEqual(confirmed);
+    await announce(5, false, confirmed);
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toBeUndefined();
+    await announce(6, true, { current: confirmed.current });
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toBeUndefined();
+    await announce(7, true, confirmed);
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toEqual(confirmed);
+    await announce(0, true, { current: confirmed.current }, "new-settings-host");
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toBeUndefined();
+    await announce(1, true, confirmed, "new-settings-host");
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toEqual(confirmed);
+    await announce(2, true, { current: {} }, "new-settings-host");
+    for (const viewer of viewers)
+      expect((await takeGen(viewer.announces(never), 1))[0]?.sessionSettings).toBeUndefined();
+  });
+
+  it("a late viewer whose discovery window has no catalog requests and receives fresh settings", async () => {
+    const id = await uniqueIdentity();
+    const host = fakeHost(id);
+    const sid = "late-settings";
+    const settings = {
+      models: [
+        {
+          id: "m",
+          label: "Model",
+          defaultEffort: "high",
+          efforts: [{ id: "high", description: "High" }],
+        },
+      ],
+      collaborationModes: [{ id: "plan", label: "Plan" }],
+      current: { model: "m", effort: "high", collaborationMode: "plan" },
+    };
+    async function publish(seq: number, full: boolean) {
+      await host.postFrame(
+        header(id, {
+          recordKind: "session_announce",
+          sessionId: sid,
+          msgId: `late-settings-${seq}`,
+        }),
+        utf8(
+          JSON.stringify({
+            session_id: sid,
+            title: "Late settings",
+            sent_at: Date.now(),
+            incarnation: "late-host",
+            incarnation_started_at: 1_000,
+            announce_seq: seq,
+            harness: { agent: "codex", mode: "app-server" },
+            capabilities: { controls: { configureSession: true } },
+            session_settings: full ? settings : { current: settings.current },
+          }),
+        ),
+      );
+    }
+    // Model the retained discovery window after the original full catalog has fallen out of it.
+    // Do not depend on a backend replaying older bus frames than the viewer's requested tail.
+    await publish(64, false);
+    const viewer = await Viewer.fromPass(await formatPass(id), "https://broker", brokerFetch);
+    const [initial] = await takeGen(viewer.announces(never), 1);
+    expect(initial?.capabilities?.controls.configureSession).toBe(true);
+    expect(initial?.sessionSettings).toBeUndefined();
+    await viewer.requestHistory(sid, 0);
+    const [request] = await takeGen(host.streamFrames({ session: sid, startIndex: 0 }), 1);
+    expect(request).toMatchObject({ dir: "in", recordKind: "catch_up" });
+    if (!request) throw new Error("missing catch-up");
+    expect(JSON.parse(new TextDecoder().decode(await host.openFrame(request)))).toMatchObject({
+      since: 0,
+    });
+    // Minimal fake host answers the same authenticated catch-up tested against HostRcRelay separately.
+    await publish(65, true);
+    let recovered = false;
+    for await (const announced of viewer.announces(never)) {
+      if (announced.sessionSettings === undefined) continue;
+      expect(announced.announceSeq).toBe(65);
+      expect(announced.sessionSettings).toEqual(settings);
+      recovered = true;
+      break;
+    }
+    expect(recovered).toBe(true);
   });
 
   it("projects canonical attachment frames onto the user ID used by accepted receipts", async () => {

@@ -104,10 +104,24 @@ test("native settings wait for confirmation and stay shared across phone and des
         });
       }
     }
+    // Retained presence is a last-64-frame discovery window, not a full catalog replay. Advance it
+    // with observed current-only updates, then reload a fresh Viewer. Session selection must request
+    // an authenticated catch_up and recover the catalog from the real host on this durable broker.
+    for (let i = 0; i < 66; i++) {
+      settings.current.effort = i % 2 === 0 ? "medium" : "high";
+      await confirmSettings(settings);
+      await expect(
+        page.getByRole("button", { name: `Effort: ${settings.current.effort}`, exact: true }),
+      ).toHaveAttribute("aria-pressed", "true");
+    }
     await page.reload();
     await page.locator("button.row", { hasText: "rc box" }).click();
     await page.getByRole("button", { name: "Session actions", exact: true }).click();
     await expect(page.getByRole("button", { name: "Mode: Plan", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(page.getByRole("button", { name: "Effort: high", exact: true })).toHaveAttribute(
       "aria-pressed",
       "true",
     );

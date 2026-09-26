@@ -234,7 +234,10 @@ normally refreshes it every 20 seconds. The viewer treats a valid announcement a
 the durable backend.
 
 On cold start the viewer tails the last 64 bus frames. This is a bounded presence view, not a complete
-offline session directory.
+offline session directory. Optional session settings include full catalogs initially, on catalog
+change, and on authenticated `catch_up`; regular announces retain only native current values. Session
+selection/reload requests catch-up on both backend kinds so an older catalog need not be in that
+64-frame window. Only the same accepted host incarnation and explicit capability may reuse a catalog.
 
 ### 6.2 Session ordering
 
@@ -491,7 +494,10 @@ non-slash text, image groups with an optional non-slash caption, and interrupt. 
 implement one-shot ordinary local-command approvals and bounded native choice forms; 0.151.0
 approvals/questions and unsupported request shapes remain native-owned. Exact 0.154.0 additionally
 offers optional [native model/effort/collaboration settings](protocol.md#codex-native-session-settings)
-after bounded catalog discovery. Its encrypted `session_settings` snapshot reports native values;
+after bounded catalog discovery. Its encrypted `session_settings` reports native current values;
+unchanged catalogs are omitted from keepalives/current updates and refreshed through the bounded
+advisory-presence path on initial discovery, catalog change, or authenticated catch-up. This avoids
+persisting full catalogs every 20 seconds on durable brokers without requiring complete bus replay.
 one-field `set_session_settings` changes use the shared browser-input FIFO, expire, and never retry.
 Mode-only updates preserve the current native model and explicit supported effort. No permission,
 sandbox, or persistent-configuration fields are exposed. Missing catalogs disable only this optional

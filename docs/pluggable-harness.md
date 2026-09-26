@@ -305,7 +305,11 @@ settings with browser input, rechecks expiry/catalog before one `thread/settings
 only native resume/`thread/settings/updated` values. A mode change requires and preserves the current
 native model plus explicit supported effort, with no permission/sandbox/config update. Catalog
 failure leaves a healthy conversation usable with settings native-only; uncertain settings writes
-never retry. See the [protocol](protocol.md#codex-native-session-settings) and
+never retry. Relay keepalives/current-value updates carry only native `current` settings; full catalogs
+are included initially, on catalog change, and on authenticated `catch_up` for either backend. A
+viewer may reuse a catalog only within the same accepted host incarnation and capability; session
+selection/reload requests a fresh snapshot because discovery is bounded to the last 64 bus frames.
+See the [protocol](protocol.md#codex-native-session-settings) and
 [separate acceptance](release-finish-line.md#codex-native-session-settings).
 
 The immutable projection coordinate is `(turnId,itemId)`, because Codex item IDs are only turn-scoped.

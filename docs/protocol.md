@@ -432,7 +432,8 @@ History depends on the effective broker backend:
 - On a non-durable backend, the host keeps an in-memory content log. A viewer sends `catch_up` with a
   `since` sequence, and the host republishes original `seq`/`msg_id` values.
 - On a durable backend, the broker log is history. Viewers subscribe from the beginning and the host
-  keeps no replay log; `catch_up` is authenticated but ignored.
+  keeps no transcript replay log; authenticated `catch_up` skips transcript replay but can refresh
+  the optional session-settings catalog on either backend.
 
 Before a durable relay becomes discoverable, it reads both recovery cursors. `/api/seq` resumes the
 outbound transcript counter at `maxSeq + 1`; `/api/frame-count` sets the new relay incarnation's
@@ -865,8 +866,22 @@ The mode list is bounded to eight entries and this pinned adapter admits only na
 viewer-maintained model list. Catalog failure leaves this optional capability unavailable while the
 conversation continues. Older Codex versions and other drivers do not acquire it implicitly.
 
-Encrypted announces carry `session_settings` with the catalogs and native `current` model, effort,
-and collaboration mode. Resume may supply model/effort but does not establish collaboration mode;
+Encrypted announces always carry native `current` model, effort, and collaboration mode when settings
+are available. The initial announce, a catalog change, or authenticated `catch_up` includes the full
+`session_settings:{models,collaborationModes,current}` snapshot. Other announces, including keepalives
+and current-value changes, send only `session_settings:{current}`: unordered presence still occupies
+durable broker storage, so unchanged catalogs must not repeat every 20 seconds. Catalog refresh uses
+the existing bounded advisory-presence coalescer, never blocking transcript publication. A failed
+refresh remains requested for the next ordinary wake/keepalive, without an immediate retry loop.
+
+The viewer merges current-only state only with a valid catalog already accepted from the same explicit
+host incarnation and with `configureSession:true` still advertised. A new incarnation, removed
+capability, or malformed payload cannot inherit that catalog. Initial discovery reads only the last
+64 bus frames; selecting a session or reloading requests authenticated `catch_up`, which supplies a
+fresh full snapshot even if the initial catalog is outside that window. This does not require full
+bus replay or a new catalog RPC/store.
+
+Resume may supply model/effort but does not establish collaboration mode;
 missing values remain `null`/Unknown. Exact-thread `thread/settings/updated` notifications replace
 current state. Values absent from the catalog remain readable but never become extra picker options.
 
@@ -894,10 +909,12 @@ from general API documentation.
 
 ### Catch-up requests
 
-`catch_up` is a separate replay request, not a native control verb. The viewer currently stamps it
-with an expiry, but the host's replay branch does not enforce that expiry. Stable sequence and message
-IDs keep the resulting transcript replay idempotent; a withheld request can still cause redundant
-non-durable replay later.
+`catch_up` is a separate transcript-replay/settings-discovery request, not a native control verb. It
+refreshes an available settings catalog through advisory presence on durable and non-durable
+backends; only the latter also replays transcript content. The viewer currently stamps it with an
+expiry, but this host branch does not enforce that expiry. Stable sequence and message IDs keep the
+resulting transcript replay idempotent; a withheld request can still cause redundant non-durable
+replay or catalog refresh later.
 
 ## 12. Failure boundaries
 

@@ -112,7 +112,10 @@ disabled. Native resume/`thread/settings/updated` state owns displayed values, n
 Mode-only updates preserve the current native model and explicit supported effort; no permission,
 sandbox, or persistent configuration fields are sent. Settings share the bounded browser-input FIFO,
 recheck expiry/catalog before one native RPC, and never retry an uncertain update. Catalog failure
-leaves settings native-only without failing a healthy conversation. See the
+leaves settings native-only without failing a healthy conversation. Encrypted presence includes the
+full catalog only initially, on catalog change, or on authenticated catch-up; other announces carry
+current values only. Session selection/reload refreshes catalogs beyond the bounded 64-frame discovery
+window, and viewers never inherit a catalog across host incarnations or removed capabilities. See the
 [settings boundary](docs/protocol.md#codex-native-session-settings) and
 [separate acceptance](docs/release-finish-line.md#codex-native-session-settings).
 Other controls, streaming partials, file
