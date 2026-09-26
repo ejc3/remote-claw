@@ -403,6 +403,10 @@ validates supported completed shapes before counting the shared 10,000 native-it
 families, reasoning, and unfinished commands are not projected. Projected identity is the immutable
 `(turnId,itemId)` pair: replay of the same pair and bytes deduplicates, while changed projected bytes
 at the same pair fence the companion.
+Historical assistant text from active/unknown turns is deferred until native completion, with one
+bounded read repair for earlier completed text; it cannot occupy a final item identity with partial
+bytes. Recovered rows append rather than reorder the transcript. See
+[active-turn attachment](docs/release-finish-line.md#codex-active-turn-attachment--2026-09-26).
 The current-version/activity/interrupt/image acceptance is tracked in the [release roadmap](docs/release-finish-line.md),
 separately from the historical 0.151.0 results below.
 

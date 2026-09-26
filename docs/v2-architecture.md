@@ -483,6 +483,11 @@ buffered notifications before readiness. Projected items are keyed by immutable
 projected bytes at the same coordinate fence the projection. Completed commands emit read-only
 <code>Shell</code> calls and bounded results, including failed/declined/nonzero-exit outcomes. Unfinished
 commands, other tool families, streaming partials, file changes, and task lifecycle are not projected.
+Historical assistant text requires native terminal-turn evidence read before paginated item history,
+or retained on a legacy full-turn page. Active/unknown turn text is deferred; one terminal-triggered
+read repair recovers earlier completed text without blocking approvals, releasing idle, or weakening
+changed-final-byte fencing. Recovered rows append when observed. The
+[active-turn history boundary](protocol.md#active-turn-history) specifies its bounds and ordering limit.
 Browser text first
 gets seq-less pending admission; its final acknowledgement waits for the exact native user item carrying
 the host client ID and text. A 15-second correlation deadline and bounded history/dedup fence ambiguous

@@ -23,6 +23,7 @@ import {
   type CodexThreadStatus,
   codexAppServerVersion,
   isCodexThreadId,
+  isCodexTurnStatus,
   parseCodexStatus,
 } from "./client.js";
 import { CodexUserQuestions } from "./questions.js";
@@ -202,6 +203,34 @@ class BrowserTurnQueue {
   }
 }
 
+/** Only turns deferred during startup may request one repair, after a native terminal signal. */
+class HistoryRepairQueue {
+  readonly #deferred = new Set<string>();
+  readonly #ready: string[] = [];
+  #wake = Promise.withResolvers<void>();
+
+  defer(turnId: string): void {
+    if (this.#deferred.has(turnId)) return;
+    if (turnId === "" || turnId.length > 256 || this.#deferred.size >= HISTORY_PAGE_LIMIT)
+      throw new CodexProjectionError("Codex deferred history exceeded its bound");
+    this.#deferred.add(turnId);
+  }
+
+  complete(turnId: string): void {
+    if (!this.#deferred.delete(turnId)) return;
+    this.#ready.push(turnId);
+    const wake = this.#wake;
+    this.#wake = Promise.withResolvers<void>();
+    wake.resolve();
+  }
+
+  async shift(signal: AbortSignal): Promise<string | undefined> {
+    while (this.#ready.length === 0) await withAbort(this.#wake.promise, signal);
+    throwIfAborted(signal);
+    return this.#ready.shift();
+  }
+}
+
 class CodexReconciler {
   readonly #session: Session;
   readonly #mutations: Map<string, BrowserMutation>;
@@ -360,6 +389,7 @@ export class CodexDriver implements Driver {
   #approvals: CodexCommandApprovals | null = null;
   #questions: CodexUserQuestions | null = null;
   readonly #uploads: NativeUploadStore;
+  readonly #historyRepairs = new HistoryRepairQueue();
   #filesSupported = false;
 
   constructor(ctx: DriverContext, options: CodexDriverOptions) {
@@ -393,6 +423,7 @@ export class CodexDriver implements Driver {
     });
     const signal = bridge.signal;
     let exitCode = 0;
+    let historyRepair: Promise<void> | undefined;
     try {
       const initialized = await this.#client.initialize(signal);
       assertCodexCompatibility(initialized, this.#options.runtime);
@@ -435,12 +466,19 @@ export class CodexDriver implements Driver {
         harness: CODEX_HARNESS,
       });
       this.#trace.info("Codex thread attached");
+      historyRepair = this.#historyRepairPump(
+        session,
+        reconciler,
+        resumed.thread.historyMode,
+        signal,
+      );
 
       await withAbort(
         Promise.race([
           this.#capturePump(session, reconciler, gate, signal),
           this.#injectPump(session, signal),
           this.#browserTurnPump(session, gate, signal),
+          historyRepair,
           handle.served,
         ]),
         signal,
@@ -459,7 +497,7 @@ export class CodexDriver implements Driver {
     } finally {
       this.#client.close();
       await bridge.close("Codex companion exited");
-      await Promise.allSettled([...terminalTasks]);
+      await Promise.allSettled([...terminalTasks, ...(historyRepair ? [historyRepair] : [])]);
     }
     return exitCode;
   }
@@ -468,15 +506,44 @@ export class CodexDriver implements Driver {
     reconciler: CodexReconciler,
     historyMode: "legacy" | "paginated",
     signal: AbortSignal,
+    repairTurnId?: string,
   ): Promise<void> {
+    // Metadata must precede item reads: a later terminal observation cannot make earlier partial
+    // bytes final. Legacy full-turn pages already carry their own turn status.
+    const terminalTurns =
+      historyMode === "paginated" && repairTurnId === undefined
+        ? await this.#terminalHistoryTurns(signal)
+        : null;
     const cursors = new Set<string>();
     let cursor: string | undefined;
     for (let pageNo = 0; pageNo < HISTORY_PAGE_LIMIT; pageNo += 1) {
-      const page =
+      const page = await withAbort(
         historyMode === "legacy"
-          ? await this.#client.listTurnItems(this.#options.threadId, cursor, signal)
-          : await this.#client.listItems(this.#options.threadId, cursor, signal);
+          ? this.#client.listTurnItems(this.#options.threadId, cursor, signal)
+          : this.#client.listItems(this.#options.threadId, cursor, signal, repairTurnId),
+        signal,
+      );
+      throwIfAborted(signal);
       for (const entry of page.data) {
+        if (repairTurnId !== undefined && entry.turnId !== repairTurnId) {
+          if (historyMode === "paginated")
+            throw new CodexProjectionError("Codex returned a different turn's repair history");
+          continue; // Legacy has no turn-filtered pager; never project other turns during repair.
+        }
+        if (entry.item.type === "agentMessage") {
+          if (historyMode === "legacy" && !isCodexTurnStatus(entry.turnStatus))
+            throw new CodexProjectionError("Codex history has invalid turn status");
+          const final =
+            historyMode === "legacy"
+              ? entry.turnStatus !== "inProgress"
+              : repairTurnId !== undefined || terminalTurns?.has(entry.turnId) === true;
+          if (!final) {
+            if (repairTurnId !== undefined)
+              throw new CodexProjectionError("Codex repaired turn is not terminal");
+            this.#historyRepairs.defer(entry.turnId);
+            continue;
+          }
+        }
         reconciler.accept(entry.turnId, entry.item);
       }
       if (page.nextCursor === null) return;
@@ -487,6 +554,47 @@ export class CodexDriver implements Driver {
       cursor = page.nextCursor;
     }
     throw new CodexProjectionError("Codex history exceeded its page limit");
+  }
+
+  async #terminalHistoryTurns(signal: AbortSignal): Promise<Set<string>> {
+    const terminal = new Set<string>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    let count = 0;
+    for (let pageNo = 0; pageNo < HISTORY_PAGE_LIMIT; pageNo++) {
+      const page = await withAbort(
+        this.#client.listTurnMetadata(this.#options.threadId, cursor, signal),
+        signal,
+      );
+      throwIfAborted(signal);
+      count += page.data.length;
+      if (count > HISTORY_PAGE_LIMIT)
+        throw new CodexProjectionError("Codex turn metadata exceeded its bound");
+      for (const turn of page.data) {
+        if (!isCodexTurnStatus(turn.status) || turn.id === "" || turn.id.length > 256)
+          throw new CodexProjectionError("Codex history has invalid turn metadata");
+        if (turn.status !== "inProgress") terminal.add(turn.id);
+      }
+      if (page.nextCursor === null) return terminal;
+      if (page.nextCursor === "" || cursors.has(page.nextCursor))
+        throw new CodexProjectionError("Codex turn metadata cursor cycled");
+      cursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+    }
+    throw new CodexProjectionError("Codex turn metadata exceeded its page limit");
+  }
+
+  async #historyRepairPump(
+    session: Session,
+    reconciler: CodexReconciler,
+    historyMode: "legacy" | "paginated",
+    signal: AbortSignal,
+  ): Promise<void> {
+    while (!signal.aborted && !session.closed) {
+      const turnId = await this.#historyRepairs.shift(signal);
+      if (turnId === undefined || signal.aborted || session.closed) return;
+      await this.#reconcileHistory(reconciler, historyMode, signal, turnId);
+    }
   }
 
   async #capturePump(
@@ -514,6 +622,19 @@ export class CodexDriver implements Driver {
     }
     const { method, params } = inbound.value;
     if (params.threadId !== this.#options.threadId) return;
+    if (method === "turn/completed") {
+      const turn = record(params.turn);
+      if (
+        typeof turn?.id !== "string" ||
+        turn.id === "" ||
+        turn.id.length > 256 ||
+        !isCodexTurnStatus(turn.status) ||
+        turn.status === "inProgress"
+      )
+        throw new CodexProjectionError("Codex emitted invalid terminal turn metadata");
+      this.#historyRepairs.complete(turn.id);
+      return; // A terminal turn is not native idle and does not complete child/background work.
+    }
     if (method === "serverRequest/resolved") {
       this.#approvals?.resolve(params);
       this.#questions?.resolve(params);

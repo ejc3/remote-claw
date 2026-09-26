@@ -298,6 +298,23 @@ history before readiness. Page count and cursor-cycle bounds still fail closed. 
 broker cursor pair fails the projection before it serves the
 session.
 
+#### Active-turn history
+
+Historical assistant text is not final merely because it is nonempty. Before paginated item
+history, the adapter reads `thread/turns/list` with `itemsView:"notLoaded"` in bounded 100-turn
+pages (at most 100,000 turns) and admits assistant text only from turns already observed terminal.
+Legacy full-turn pages retain their native turn status and apply the same rule. Text from active or
+not-yet-known turns consumes no canonical item identity or projected-item budget; user receipts and
+terminal command handling are unchanged. Live `item/completed` remains authoritative.
+
+For turns deferred at startup, one matching terminal `turn/completed` schedules one bounded history
+repair. Paginated repair uses the exact `turnId` filter; legacy repair scans its supported full-turn
+reader and selects only that turn. A separate read pump leaves approval capture responsive, aborts
+with the companion, and never releases the native-idle gate. It does not retry or resend a prompt.
+Duplicate finals deduplicate; changed final bytes still fence. Earlier completed text recovered by
+this repair is appended when observed, not inserted ahead of already published transcript rows.
+This is active-attach recovery, not streaming partials or a new transcript ordering scheme.
+
 Completed native `userMessage` items (text and supported image input) and non-empty `agentMessage` items publish at their immutable
 `(turnId,itemId)` coordinates; an item ID alone is only turn-scoped. Exact history/live replay at one
 coordinate deduplicates, while changed projected bytes at the same coordinate fence the projection.
