@@ -35,13 +35,15 @@ test("renders a full RC turn: honest activity rollups, nested work, errors, and 
   await expect(row.locator(".git-chip")).toContainText("↑2");
   await row.click();
 
-  // (1) Two routine contiguous runs collapse; exact event counts are the only summary semantics.
+  // (1) Routine runs keep exact counts and observed topics; neither claims execution success/status.
   const rollups = page.getByRole("button", { name: /^Activity:/ });
   await expect(rollups).toHaveCount(2);
   await expect(rollups.nth(0)).toHaveAccessibleName(
-    "Activity: 2 tool calls · 1 tool result · 1 task event",
+    "Activity: 2 tool calls · 1 tool result · 1 task event — Commands · Agent tasks",
   );
-  await expect(rollups.nth(1)).toHaveAccessibleName("Activity: 1 tool call · 1 tool result");
+  await expect(rollups.nth(1)).toHaveAccessibleName(
+    "Activity: 1 tool call · 1 tool result — Commands",
+  );
 
   // (2) Opening the first rollup preserves all four captured events in exact transcript order.
   await rollups.nth(0).click();

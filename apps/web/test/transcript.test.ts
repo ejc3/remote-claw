@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activityTitle,
   basename,
   diffOf,
   dirname,
@@ -92,6 +93,64 @@ describe("groupTranscriptActivity", () => {
         message("task", "k", 4),
       ]),
     ).toBe("2 tool calls · 1 tool result · 1 task event");
+  });
+});
+
+describe("activityTitle", () => {
+  const toolUse = (name: unknown, msgId: string, seq: number) =>
+    message("tool_use", msgId, seq, JSON.stringify({ name }));
+
+  it("labels meaningful observed tool categories and deduplicates them", () => {
+    expect(
+      activityTitle([
+        toolUse("Bash", "b", 1),
+        toolUse("Shell", "s", 2),
+        toolUse("Read", "r", 3),
+        toolUse("MultiEdit", "e", 4),
+      ]),
+    ).toBe("Commands · File reads · File edits");
+  });
+
+  it("normalizes and bounds unknown names, with safe fallbacks for malformed activity", () => {
+    expect(activityTitle([toolUse(`  Custom   ${"x".repeat(80)}  `, "u", 1)])).toBe(
+      `Custom ${"x".repeat(41)}`,
+    );
+    expect(activityTitle([message("tool_use", "bad", 1, "{")])).toBe("Tool activity");
+    expect(activityTitle([toolUse("   ", "blank", 1)])).toBe("Tool activity");
+    expect(activityTitle([message("tool_result", "out", 1)])).toBe("Tool output");
+    expect(activityTitle([])).toBe("Activity");
+  });
+
+  it("treats Object prototype property names as literal unknown tools", () => {
+    expect(
+      activityTitle([
+        toolUse("constructor", "constructor", 1),
+        toolUse("__proto__", "proto", 2),
+        toolUse("toString", "to-string", 3),
+      ]),
+    ).toBe("constructor · __proto__ · toString");
+  });
+
+  it("keeps first-seen category order and caps the displayed categories", () => {
+    expect(
+      activityTitle([
+        toolUse("Glob", "g", 1),
+        toolUse("Read", "r", 2),
+        toolUse("Bash", "b", 3),
+        toolUse("Write", "w", 4),
+        toolUse("Custom tool", "c", 5),
+      ]),
+    ).toBe("Searches · File reads · Commands · +2 more");
+  });
+
+  it("reports task topics without inventing execution status or outcomes", () => {
+    const title = activityTitle([
+      toolUse("Bash", "b", 1),
+      message("task", "task", 2),
+      message("tool_result", "out", 3, JSON.stringify({ output: "done" })),
+    ]);
+    expect(title).toBe("Commands · Agent tasks");
+    expect(title).not.toMatch(/running|complete|success|duration/i);
   });
 });
 

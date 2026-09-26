@@ -42,6 +42,59 @@ function activityCount(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
+const ACTIVITY_TOOL_LABELS: Readonly<Record<string, string>> = {
+  bash: "Commands",
+  shell: "Commands",
+  read: "File reads",
+  edit: "File edits",
+  write: "File edits",
+  multiedit: "File edits",
+  grep: "Searches",
+  glob: "Searches",
+  task: "Agent tasks",
+  agent: "Agent tasks",
+};
+const MAX_ACTIVITY_TOOL_NAME = 48;
+
+function activityToolLabel(text: string): string {
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (typeof value !== "object" || value === null) return "Tool activity";
+    const name = (value as Record<string, unknown>).name;
+    if (typeof name !== "string") return "Tool activity";
+    const normalized = name.replace(/\s+/gu, " ").trim();
+    if (normalized === "") return "Tool activity";
+    const key = normalized.toLowerCase();
+    const known = Object.hasOwn(ACTIVITY_TOOL_LABELS, key) ? ACTIVITY_TOOL_LABELS[key] : undefined;
+    return known ?? normalized.slice(0, MAX_ACTIVITY_TOOL_NAME);
+  } catch {
+    return "Tool activity";
+  }
+}
+
+/** Topics observed in activity frames. No execution state or outcome is inferred. */
+export function activityTitle(messages: readonly Message[]): string {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  let sawToolResult = false;
+
+  for (const message of messages) {
+    let label: string | undefined;
+    if (message.kind === "tool_use") label = activityToolLabel(message.text);
+    else if (message.kind === "task") label = "Agent tasks";
+    else if (message.kind === "tool_result") sawToolResult = true;
+    if (label !== undefined && !seen.has(label)) {
+      seen.add(label);
+      labels.push(label);
+    }
+  }
+
+  if (labels.length === 0) return sawToolResult ? "Tool output" : "Activity";
+  const visible = labels.slice(0, 3);
+  if (labels.length > visible.length) visible.push(`+${labels.length - visible.length} more`);
+  return visible.join(" · ");
+}
+
 /**
  * Project the raw transcript into render items without changing its chronology. Only maximal,
  * contiguous runs of routine, visible tool/task activity can roll up. Every other frame — including

@@ -1,7 +1,32 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SessionSheet } from "../app/page.js";
+import { SessionSheet, sessionDisplayTitle } from "../app/page.js";
+
+describe("sessionDisplayTitle", () => {
+  const native = {
+    title: "Claude cse_01RvWc1hvVrdSLxpZhXqbWVN",
+    cwd: "/workspaces/remote-claw/",
+    harness: { agent: "claude-code", mode: "native-rc" },
+  } as const;
+
+  it("uses the folder and a distinguishing native suffix without mutating identity", () => {
+    expect(sessionDisplayTitle(native)).toBe("remote-claw · XqbWVN");
+    expect(native.title).toBe("Claude cse_01RvWc1hvVrdSLxpZhXqbWVN");
+    expect(sessionDisplayTitle({ ...native, cwd: null })).toBe("Claude session · XqbWVN");
+    expect(sessionDisplayTitle({ ...native, cwd: "/" })).toBe("Claude session · XqbWVN");
+  });
+
+  it("preserves descriptive titles and other harnesses verbatim", () => {
+    expect(sessionDisplayTitle({ ...native, title: "Fix the sign-in screen" })).toBe(
+      "Fix the sign-in screen",
+    );
+    expect(
+      sessionDisplayTitle({ ...native, harness: { agent: "claude-code", mode: "tmux" } }),
+    ).toBe(native.title);
+    expect(sessionDisplayTitle({ title: native.title, cwd: native.cwd })).toBe(native.title);
+  });
+});
 
 // Session ⋯ sheet (#111): model switcher (set_model) + interrupt + copy-branch.
 const render = (

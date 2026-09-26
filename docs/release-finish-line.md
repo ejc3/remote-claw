@@ -875,7 +875,9 @@ and does not retroactively change, the 2026-08-30 M2 evidence.
 
 **UI-1 is complete.** The viewer projects each maximal contiguous run of routine, visible
 <code>tool_use</code>, non-error/non-empty <code>tool_result</code>, and <code>task</code> frames into a
-compact Activity row. Its label contains exact frame counts only. Every frame remains in original order
+compact Activity row. Its count summary contains exact frame counts only; the visible heading names
+observed tool categories such as Commands or File reads, without implying execution outcome.
+Every frame remains in original order
 inside the existing responsive sheet. The row exists from the first routine event so its identity and
 focus remain stable as a live run grows; any other retained transcript message breaks the run. Explicit
 errors remain first-class in the transcript. The projection does not rewrite durable history, pair

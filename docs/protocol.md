@@ -452,10 +452,12 @@ from legacy absence.
 Current native-companion titles are display metadata, never routing or selection authority. Codex
 uses `<native name> · <native thread ID>` from its exact-thread resume response (name trimmed and
 limited to 512 code units), falling back to `Codex <native thread ID>` if the name is absent or invalid.
-Claude-native uses `Claude <bound native session ID>` without a session-discovery request. The exact
-ID distinguishes even same-name sessions; compact rows may truncate the label, while Session actions
-→ Details shows it in full. Native renames are not followed within a running projection. The encrypted
-announcement and exact-ID attachment boundaries are unchanged.
+Claude-native announces `Claude <bound native session ID>` without a session-discovery request. The
+viewer presents that fallback as the working-directory basename (or `Claude session`) plus the last
+six native-ID characters. This short label is a convenience, not a uniqueness or routing guarantee;
+the full original title remains in the tooltip and Session actions → Details. Descriptive titles and
+other harnesses are unchanged. Native renames are not followed within a running projection. The
+encrypted announcement, selection/draft keys and exact-ID attachment boundaries are unchanged.
 
 Current supported drivers also declare optional `textInput:"plain"|"terminal"`. This input boundary
 is independent of feature booleans: enabling interrupt or attachments cannot admit slash commands or
