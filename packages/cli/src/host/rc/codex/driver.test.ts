@@ -182,6 +182,10 @@ class FakeCodexClient implements CodexClient {
     decision: "accept" | "decline" | "cancel";
   }> = [];
   approvalError: Error | null = null;
+  readonly fileApprovalCalls: Array<{
+    request: CodexServerRequest;
+    decision: "accept" | "decline";
+  }> = [];
   readonly questionCalls: Array<{
     request: CodexServerRequest;
     answers: Record<string, { answers: string[] }>;
@@ -335,6 +339,17 @@ class FakeCodexClient implements CodexClient {
 
   drainInbound(): CodexInbound[] {
     return this.buffered.splice(0);
+  }
+
+  respondFileApproval(
+    request: CodexServerRequest,
+    decision: "accept" | "decline",
+    signal: AbortSignal,
+  ): boolean {
+    if (signal.aborted) return false;
+    this.fileApprovalCalls.push({ request, decision });
+    if (this.approvalError !== null) throw this.approvalError;
+    return true;
   }
 
   respondUserInput(
@@ -2453,6 +2468,90 @@ describe("Codex M3a companion", () => {
     ]);
     expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("data:image");
     expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("/not-readable.png");
+    await stop(launched.ac, launched.run);
+  });
+
+  it.each([
+    { version: "0.154.0", source: "fresh", allowed: true },
+    { version: "0.153.4", source: "fresh", allowed: false },
+    { version: "0.154.0", source: "history", allowed: false },
+  ])("projects file approvals only for $version $source item/request pairs", async ({
+    version,
+    source,
+    allowed,
+  }) => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = version;
+    client.resumeResult.thread.status = { type: "active" };
+    const item = {
+      type: "fileChange",
+      id: "file-item",
+      status: "inProgress",
+      changes: [
+        {
+          path: "/scratch.txt",
+          kind: { type: "update", move_path: null },
+          diff: "@@ -1 +1 @@\n-before\n+after\n",
+        },
+      ],
+    };
+    const native: CodexServerRequest = {
+      id: 84,
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: THREAD_ID,
+        turnId: "file-turn",
+        itemId: item.id,
+        startedAtMs: 1001,
+        reason: null,
+        grantRoot: null,
+      },
+    };
+    if (source === "history")
+      client.pages = [{ data: [{ turnId: "file-turn", item }], nextCursor: null }];
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    if (source === "fresh")
+      client.emit({
+        kind: "notification",
+        value: {
+          method: "item/started",
+          params: { threadId: THREAD_ID, turnId: "file-turn", item, startedAtMs: 1000 },
+        },
+      });
+    client.emit({ kind: "request", value: native });
+    client.emit(completed(assistantItem("file-observation-barrier", "file observation processed")));
+    await waitFor(() => upstream(launched.session, "assistant").length === 1);
+    expect(upstream(launched.session, "control_request")).toHaveLength(allowed ? 1 : 0);
+    if (allowed) {
+      await waitFor(() =>
+        launched.broker.posts.some((post) => post.recordKind === "permission_request"),
+      );
+      const viewerId = approvalViewerId(launched.session);
+      launched.broker.pushInbound(
+        approvalFrame(launched.identityId, launched.broker.sessionId, viewerId, "allow"),
+      );
+      await waitFor(() => client.fileApprovalCalls.length === 1);
+      expect(client.fileApprovalCalls).toEqual([{ request: native, decision: "accept" }]);
+      expect(client.approvalCalls).toHaveLength(0);
+      expect(client.startCalls).toHaveLength(0);
+      expect(launched.session.workerStatus).toBe("running");
+      client.emit({
+        kind: "notification",
+        value: { method: "serverRequest/resolved", params: { threadId: THREAD_ID, requestId: 84 } },
+      });
+      await waitFor(() => upstream(launched.session, "control_cancel_request").length === 1);
+      launched.broker.pushInbound(
+        approvalFrame(
+          launched.identityId,
+          launched.broker.sessionId,
+          viewerId,
+          "deny",
+          "other-peer-file",
+        ),
+      );
+      expect(client.fileApprovalCalls).toHaveLength(1);
+    } else expect(client.fileApprovalCalls).toHaveLength(0);
     await stop(launched.ac, launched.run);
   });
 

@@ -63,6 +63,9 @@ Skip; [wider-form acceptance](release-finish-line.md#claude-native-wider-questio
 the historical single-choice result. The separate [Bash boundary](protocol.md#claude-native-bash-approvals) adds one-time
 Allow/Deny for the captured command/description shape, with no inferred cwd or policy changes;
 its [acceptance](release-finish-line.md#claude-native-bash-approvals) is tracked separately.
+The current [file boundary](protocol.md#claude-native-file-approvals) adds copied bounded
+Read/Write/Edit Allow once/Deny, preserving native ownership of other shapes and all folder/session
+grants. Its [acceptance](release-finish-line.md#native-file-approvals) is separate from Bash and forms.
 The [files/previews slice](release-finish-line.md#native-files-and-image-previews) tracks its own bounded
 native acceptance. Unsupported permissions and forms, modes, slash commands, end, and
 truthful status may graduate later one family at a time.
@@ -116,7 +119,10 @@ also adds bounded encrypted image previews and exact-0.154.0 general files as pr
 references; older versions remain image-only. Their [separate slice](release-finish-line.md#native-files-and-image-previews)
 tracks bounded native acceptance. A separate exact-0.153.4/0.154.0 implementation permits
 one-shot ordinary local-command approvals with native resolution; it excludes policy changes, session
-grants, stdin/file/network permissions, and questions. A separate 0.153.4/0.154.0 form adapter implements
+grants, stdin/file/network permissions, and questions. Exact 0.154.0 separately supports
+[bounded native patch approvals](protocol.md#codex-native-file-approvals) from fresh complete
+item/request pairs, preserving native ownership of unsupported shapes and all folder/session grants.
+A separate 0.153.4/0.154.0 form adapter implements
 complete non-secret blocking groups of 1–3 questions with 1–20 choices each, free text only when
 native `isOther` permits it, and native-confirmed resolution. These transparent forms may authorize
 tool actions; they are not planning-only and add no separate policy/session-grant API. Unsupported
@@ -128,8 +134,8 @@ tuple's tested journeys and exclusions.
 Exact 0.154.0 now conditionally offers [native model/effort/collaboration settings](protocol.md#codex-native-session-settings)
 after catalog discovery, without changing permissions or sandbox policy. The
 [separate settings slice](release-finish-line.md#codex-native-session-settings) tracks its current
-acceptance; Claude settings remain native/local. Other controls, streaming partials, file
-changes, reconstructed task tracking, and other versions/platforms remain outside this implementation.
+acceptance; Claude settings remain native/local. Other controls, streaming partials, general file-change
+activity, reconstructed task tracking, and other versions/platforms remain outside this implementation.
 Exact 0.154.0 now projects bounded native [sub-agent observations](protocol.md#codex-native-task-observations)
 through the existing task rows; child controls/output subscriptions remain native-owned.
 

@@ -236,7 +236,8 @@ The writer
 fences the projection after a rejected or outcome-unknown POST, before any successor. It also accepts
 the allowlisted session-scoped Interrupt described in [control verbs](#11-compatibility-control-verbs),
 and [bounded native question responses](#claude-native-questions) plus
-[bounded Bash decisions](#claude-native-bash-approvals), without enabling status or
+[bounded Bash decisions](#claude-native-bash-approvals) and
+[bounded file decisions](#claude-native-file-approvals), without enabling status or
 other control families. Accepted provider events and browser mutations share
 a fixed lifetime ceiling; exhausting it
 fails only the projection instead of growing companion state without bound. Projection or broker
@@ -327,8 +328,9 @@ Completed `commandExecution` items use the same coordinate/fingerprint fence and
 `Shell` call followed by its result. The call carries native command/cwd; result output uses the shared
 4,000-character cap plus a truncation marker when needed. Failed or declined status and nonzero exit
 codes are marked as errors, with a fallback explanation when native output is empty. Unfinished commands do not consume a projected
-identity. Apart from the exact-0.154.0 task observations below, other tool families, streaming partials,
-file changes, and reconstructed task tracking are not projected;
+identity. Apart from the exact-0.154.0 task observations below, other general tool activity, streaming partials,
+general file-change activity, and reconstructed task tracking are not projected;
+the separate [file approval path](#codex-native-file-approvals) displays only fresh bounded pending patches;
 these observations cannot acknowledge a pending browser prompt or execute a command.
 
 #### Codex native task observations
@@ -528,13 +530,13 @@ cannot bypass a disabled button:
 | Driver | Structured permissions | Status | Interrupt | Legacy set model | Permission mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable Claude RC (`mitm`) | no | yes | no | no | no | no | no |
-| Claude native companion | supported Bash decisions and bounded question forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
+| Claude native companion | supported Bash/Read/Write/Edit decisions and bounded question forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
 | tmux compatibility | no; posture is local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned OpenCode, default native/local permissions | no | yes | yes | no | no | no | no |
 | OpenCode experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | Codex 0.151.0 | no | yes | yes | no | no | no | yes; images only |
 | Codex 0.153.4 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
-| Codex 0.154.0 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
+| Codex 0.154.0 | ordinary local commands, bounded native patches and choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
 
 The model/mode columns above describe legacy `set_model` and permission `set_mode`, not the separate
 `controls.configureSession` capability. Only exact Codex 0.154.0 conditionally advertises
@@ -580,11 +582,12 @@ characters. Multiselect answers are a non-empty array of unique offered labels p
 bounded Other string. Commas and quotes remain within their original values; arrays are never joined
 or split for native submission. Unknown preview, annotation, secret, or other extension fields remain
 native-owned; Dismiss/deny is not a question answer. The separate
-[Bash boundary](#claude-native-bash-approvals) supports one captured command-input shape; other tools
+[Bash boundary](#claude-native-bash-approvals) supports one captured command-input shape, and the
+[file boundary](#claude-native-file-approvals) supports the bounded Read/Write/Edit subset. Other tools
 and unsupported approvals remain native-only.
 
 `structuredPermissions:true`, `structuredQuestions:true`, and `permissionResolution:"native"` advertise
-this bounded question surface and the Bash boundary below, not general Claude approvals. Fresh opaque
+these bounded question, Bash, and file boundaries, not general Claude approvals. Fresh opaque
 viewer request/question IDs bind the recorded native request/tool IDs and copied form. Every question
 must have one correctly typed answer. The native adapter rejects missing/extra answer keys,
 malformed values, and duplicate multiselect entries before attempting a native response.
@@ -647,13 +650,40 @@ and the fixed message `Denied by user`, without `updatedInput`. Both use only th
 request/tool IDs and `tool_name:"Bash"`; viewer-supplied IDs, command rewrites and policy fields cannot
 change the native response. No policy memory, session-wide grant, or sandbox change is sent.
 
-One shared `ClaudeNativeControls` lifecycle owns questions and Bash: consume before the single POST,
+One shared `ClaudeNativeControls` lifecycle owns questions, Bash, and supported file decisions: consume before the single POST,
 no 401/ambiguous retry, conservative peer consumption, and neutral closure only on the matching
 bound-worker top-level `user/tool_result`, including rejection. A successful turn `result` is not
 permission approval or execution evidence. History/hydration overlap never restores authority;
 losing the stream with an unresolved request or an ambiguous/rejected write retires only the
 companion. Native clients and the local TUI stay usable. The
 [Bash release record](release-finish-line.md#claude-native-bash-approvals) owns live acceptance.
+
+### Claude-native file approvals
+
+Exact Claude 2.1.237/Linux arm64 additionally admits fresh bound-worker `can_use_tool` requests for
+`Read`, `Write`, and `Edit`, with matching `tool_name`/`display_name`, bounded nonblank description,
+and captured bounded permission-suggestion metadata. Inputs are copied before publication and must
+have exactly these fields: Read `file_path`; Write `file_path,content`; Edit
+`file_path,old_string,new_string,replace_all:false`. Edit requires nonempty `old_string`; empty Write
+contents or Edit replacement are valid. Read offsets/pages and other fields, replace-all, unfamiliar
+tools, and malformed or oversized inputs stay native-owned.
+
+The serialized copied input is at most 32 KiB UTF-8; paths are nonblank, at most 4,096 characters,
+and contain no Unicode control/format characters. Write content and both Edit strings reject Unicode
+control/format characters except ordinary TAB/LF/CR; these unsupported requests stay native-owned.
+This bounds hidden-control consent risk, not all visually confusable text. No truncation creates an actionable request.
+The canonical card uses `nativeFile:true` and shows the full path plus complete Write contents or
+Edit before/after text. Write explicitly warns about creation/overwrite. Malformed file cards have
+no generic Allow fallback. Allow once echoes only the retained native input and tool identity;
+viewer rewrites are ignored. Deny sends only the retained request/tool-use identity, deny behavior,
+and fixed message, with no `updatedInput` or `tool_name` rewrite.
+
+The captured suggestions (1–4 entries, at most 8 KiB serialized UTF-8) may describe Read rules or
+Write/Edit `acceptEdits` and session directories. They are validated metadata only: never displayed
+as choices, echoed, or applied. No `updatedPermissions`, folder grant, permission-mode change, or
+session-wide authority is sent. The existing consume-before-POST, peer consumption, matching native
+tool-result resolution, history non-authority, and stream-loss rules above apply unchanged.
+The separate [file-approval release record](release-finish-line.md#native-file-approvals) owns acceptance.
 
 ### Codex command approvals
 
@@ -665,7 +695,8 @@ at 4,096. Requests carrying network context or additional permissions remain nat
 `availableDecisions` must advertise `accept` plus `decline` or `cancel`; Allow sends only `accept`,
 and Deny prefers `decline`, otherwise `cancel` with a visible turn-cancellation explanation. No input
 rewrite, policy amendment, session grant, stdin/file/network approval, or question answer is supported.
-Version 0.151.0 retains native-only approval ownership.
+Version 0.151.0 retains native-only approval ownership. Exact 0.154.0 has the separate
+[file-approval subset](#codex-native-file-approvals) below; this command path does not answer it.
 
 Each fresh opaque viewer ID maps to one exact connection-owned native callback, not merely its item ID.
 String and number callback IDs stay distinct; changed callback content fences the companion and the
@@ -681,6 +712,37 @@ decision. Matching native `serverRequest/resolved` removes response authority an
 cannot reopen a resolved card when a delayed pending record arrives. Interrupt admission alone cannot
 discard a live native approval. No new broker record kind, schema, or flag is required. The
 [release record](release-finish-line.md#codex-command-approvals) tracks final acceptance separately.
+
+### Codex-native file approvals
+
+Only exact Codex 0.154.0/Linux arm64 enables this separate path. A fresh native `item/started`
+with `type:"fileChange"`, `status:"inProgress"`, and complete changes must precede a matching
+`item/fileChange/requestApproval` on the selected thread/turn/item. History hydration does not
+establish approval authority. The request must have `grantRoot:null`; unknown fields, missing or
+conflicting item details, moved paths, and broader grants cannot become blind approval cards.
+Versions 0.151.0 and 0.153.4 keep all file approvals native-owned.
+
+The `nativePatch:true` card contains 1–20 distinct absolute paths and complete native add/delete/update
+diff bodies. Paths are at most 4,096 characters with no Unicode control/format characters; the full
+serialized patch body (`{changes}`, excluding the `nativePatch` marker) is at most 32 KiB UTF-8.
+Diff bodies reject Unicode control/format characters except ordinary TAB/LF/CR, leaving those requests
+native-owned rather than rendering hidden controls in consent UI. This is not general confusable-text detection.
+Update diffs must be nonempty; empty add/delete bodies display “(empty diff),” not a claim about
+file size. There is no truncation or move approval. Add/delete and
+multiple-file shapes are implemented and deterministic-test-covered, not implicitly live-qualified.
+
+One fresh opaque viewer ID binds the original connection-owned callback and copied patch. Allow once
+sends only `{decision:"accept"}`; Deny sends only `{decision:"decline"}`. Browser replacement edits,
+policy amendments, `acceptForSession`, and folder grants cannot enter the response. The local attempt
+is consumed before the socket write; ambiguous writes do not retry. Native peer resolution or the
+matching unchanged completed file item removes authority and closes the card neutrally; changed
+patch bytes fence only the companion. Closed projections and history cannot reopen callbacks.
+Retained pending patches are capped at 32, separately from the 10,000 lifetime identity bound.
+
+The [official API](https://learn.chatgpt.com/docs/app-server#approvals) documents the separate pending
+item and approval-request lifecycle. Exact admission fields and the one-shot response subset are
+pinned to the local 0.154.0 schema/capture, not inferred from broader current docs. The
+[file-approval release record](release-finish-line.md#native-file-approvals) records actual acceptance.
 
 ### Codex native choice forms
 

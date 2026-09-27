@@ -576,6 +576,23 @@ function nativeBash(): AnthropicRcEvent {
   return event;
 }
 
+function nativeWrite(): AnthropicRcEvent {
+  const event = nativeQuestion();
+  (event.payload as Record<string, unknown>).request = {
+    subtype: "can_use_tool",
+    tool_name: "Write",
+    display_name: "Write",
+    description: "/tmp/owned/file.txt",
+    tool_use_id: "native-tool",
+    input: { file_path: "/tmp/owned/file.txt", content: "sentinel\n" },
+    permission_suggestions: [
+      { type: "setMode", mode: "acceptEdits", destination: "session" },
+      { type: "addDirectories", directories: ["/tmp/owned"], destination: "session" },
+    ],
+  };
+  return event;
+}
+
 function nativeQuestionDone(sequence = "2", rejected = false): AnthropicRcEvent {
   const payload = {
     type: "user",
@@ -1828,11 +1845,14 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     "question",
     "allow",
     "deny",
+    "file",
   ] as const)("carries fresh native %s through the existing browser card and worker resolution", async (kind) => {
     const harness = await startHarness();
     try {
       await bindReady(harness, "cse_question");
-      harness.native.streams[0]?.push(kind === "question" ? nativeQuestion() : nativeBash());
+      harness.native.streams[0]?.push(
+        kind === "question" ? nativeQuestion() : kind === "file" ? nativeWrite() : nativeBash(),
+      );
       await waitFor(() =>
         harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
       );
@@ -1847,7 +1867,15 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
         input: {
           requestId: "native-question",
           toolUseId: "native-tool",
-          ...(kind === "question" ? { answers: ["Blue"] } : { behavior: kind }),
+          ...(kind === "question"
+            ? { answers: ["Blue"] }
+            : kind === "file"
+              ? {
+                  behavior: "allow",
+                  toolName: "Write",
+                  input: { file_path: "/tmp/owned/file.txt", content: "sentinel\n" },
+                }
+              : { behavior: kind }),
         },
       });
       expect(
@@ -1944,6 +1972,8 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     { kind: "question", submitted: false },
     { kind: "question", submitted: true },
     { kind: "bash", submitted: true },
+    { kind: "file", submitted: false },
+    { kind: "file", submitted: true },
   ])("fences only the companion on stream EOF with a submitted=$submitted $kind", async ({
     kind,
     submitted,
@@ -1951,7 +1981,9 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     const harness = await startHarness();
     try {
       await bindReady(harness, "cse_question");
-      harness.native.streams[0]?.push(kind === "question" ? nativeQuestion() : nativeBash());
+      harness.native.streams[0]?.push(
+        kind === "question" ? nativeQuestion() : kind === "file" ? nativeWrite() : nativeBash(),
+      );
       await waitFor(() =>
         harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
       );

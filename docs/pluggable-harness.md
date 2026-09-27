@@ -9,13 +9,14 @@ Five drivers exist:
 - `mitm` — the default Claude Code Remote Control adapter;
 - `claude-native` — the Linux/exact-2.1.237 structured companion for ordinary Anthropic Remote
   Control, with ordinary text, host-owned image/file uploads, bounded image previews, one-shot session-scoped Interrupt,
-  bounded fresh native question responses, bounded one-time Bash decisions, and read-only worker tool activity;
+  bounded fresh native question responses, bounded one-time Bash/Read/Write/Edit decisions, and read-only worker tool activity;
 - `tmux` — the maintained lower-fidelity plain-Claude compatibility adapter;
 - `opencode` — the pinned OpenCode 1.17.5/Linux arm64 text/interrupt/status companion; and
 - `codex` — the exact 0.151.0, 0.153.4, or 0.154.0/Linux arm64 app-server companion: text, images, and interrupt,
   native status, and read-only completed shell commands/results; exact 0.153.4 and 0.154.0 implement one-shot
   ordinary local-command approvals and bounded non-secret blocking choice forms; exact 0.154.0 also
-  conditionally offers native-confirmed model/effort/collaboration settings.
+  implements bounded native patch approvals and conditionally offers native-confirmed
+  model/effort/collaboration settings.
 
 The private MITM remains the supported Claude beta. The native companion has passed its structured
 API-path, local Graduate, literal official web UI coexistence, and separate exact-SHA
@@ -271,14 +272,16 @@ rejected/unknown outcome fences only the companion. Status remains false; see
 in the [release roadmap](release-finish-line.md).
 
 Fresh native forms of 1–4 distinct questions support single/multiple choices, bounded Other, and
-per-question Skip. They and captured-shape Bash approvals use existing native-resolution cards and
+per-question Skip. They and captured-shape Bash/Read/Write/Edit approvals use existing native-resolution cards and
 one shared control lifecycle/writer; unsupported permissions/forms remain native. Bash Allow
 copies the retained input; Deny carries no rewrite or policy grant. No working directory is inferred.
 History cannot grant authority, and a lost live stream
 with an unresolved form retires only the companion. The
 [protocol boundary](protocol.md#claude-native-questions) owns exact admission and
 resolution rules; the [Bash extension](protocol.md#claude-native-bash-approvals) owns its exact input
-shape and decision bodies. [Wider-form acceptance](release-finish-line.md#claude-native-wider-question-forms)
+shape and decision bodies. The [file extension](protocol.md#claude-native-file-approvals) displays
+complete copied Read/Write/Edit input within 32 KiB UTF-8, never truncated previews or permission
+suggestions as grant choices. [Wider-form acceptance](release-finish-line.md#claude-native-wider-question-forms)
 is separate from the historical single-choice result; both and
 [Bash acceptance](release-finish-line.md#claude-native-bash-approvals) remain separate from M1.
 
@@ -323,8 +326,9 @@ results, including failed/declined/nonzero-exit outcomes. It cannot correlate or
 browser prompt. Exact 0.154.0 also projects bounded parent-thread `subAgentActivity` observations
 through existing task rows, with the same coordinate fence and conservative terminal-history rule.
 No child controls, inferred success/idle, or reconstructed lifecycle tracker is added; see
-[the task boundary](protocol.md#codex-native-task-observations). Unfinished commands, other tool
-families, streaming partials, and file changes are not projected.
+[the task boundary](protocol.md#codex-native-task-observations). Unfinished commands, other general tool
+activity, streaming partials, and general file-change activity are not projected.
+Fresh pending patch approvals are a separate bounded surface.
 Exact 0.153.4 and 0.154.0 additionally admit ordinary local `commandExecution/requestApproval` records through
 `codex/approvals.ts`: complete bounded command/absolute cwd/optional reason, `kind:"command"`,
 `environmentId:"local"`, no network/additional-permission context, and advertised `accept` plus
@@ -338,6 +342,14 @@ local TUI attached. The [release roadmap](release-finish-line.md#codex-command-a
 native probe and passed 0.153.4 phone/desktop acceptance without claiming official Remote approval
 coverage. The separate [0.154.0 result](release-finish-line.md#codex-current-version-acceptance)
 records that tuple's tested journeys and exclusions.
+
+The exact-0.154.0 `codex/file-approvals.ts` path joins a fresh complete `fileChange` start to its
+matching connection-owned approval callback. It displays every path/diff within 20 files and
+32 KiB UTF-8; no moves, hidden/truncated input, or folder/session grant is accepted. Allow once/Deny
+send only native accept/decline, and native peer resolution or matching completion closes the card.
+History cannot restore authority. Older versions and unsupported shapes remain native-owned. See
+the [file boundary](protocol.md#codex-native-file-approvals) and separate
+[file-approval acceptance](release-finish-line.md#native-file-approvals).
 
 The separate `codex/questions.ts` adapter admits complete non-secret blocking native choice forms
 on exact 0.153.4 and 0.154.0: 1–3 questions, 1–20 choices each, and free text only when native `isOther` allows it.
@@ -396,7 +408,7 @@ attached for the projection lifetime.
 | Capture | authenticated RC event batches | subscribe-before-history provider reconciliation | tail main and sub-agent JSONL | history plus coalesced SSE parts | resume subscription, `historyMode`-selected bounded text/completed-command history, then buffered/live notifications |
 | Remote text | Claude downstream SSE | serialized provider event POST | non-empty non-slash private-buffer text; helper/flock gates pane paste + Enter against active native turns | `prompt_async` | serialized `turn/start`, correlated to completed native user item |
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
-| Permission behavior | stable surface disabled | supported Bash decisions and bounded question forms with native resolution; unsupported permissions/forms remain native/local | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4/0.154.0: one-shot ordinary local-command decisions and bounded native choice forms with native resolution; 0.151.0 and unsupported permissions/questions remain native-owned |
+| Permission behavior | stable surface disabled | supported Bash/Read/Write/Edit decisions and bounded question forms with native resolution; unsupported permissions/forms remain native/local | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4/0.154.0: one-shot ordinary local-command decisions and bounded native choice forms; 0.154.0 also bounded patch decisions, all with native resolution; 0.151.0 and unsupported permissions/questions remain native-owned |
 | Status advertised | yes | no | no | yes | yes |
 | Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Legacy-history and mobile network-loss/deep-sleep recovery and automatic stable-ID reconnect remain unqualified |
 
@@ -405,13 +417,13 @@ The exact advertised viewer capabilities are:
 | Driver | Permissions | Status | Interrupt | Legacy model | Permission mode | End | Attachments |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Stable `mitm` | no | yes | no | no | no | no | no |
-| `claude-native` | supported Bash decisions and bounded question forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
+| `claude-native` | supported Bash/Read/Write/Edit decisions and bounded question forms; native resolution | no | yes; session-scoped | no | no | no | yes; images and files |
 | `tmux` | no; posture says native/local, bypassed, or initially unknown | no | no | no | no | no | yes |
 | Pinned `opencode`, default native/local permissions | no | yes | yes | no | no | no | no |
 | `opencode`, experimental permission opt-in | yes | yes | yes | no | no | no | no |
 | `codex` 0.151.0 | no | yes | yes | no | no | no | yes; images only |
 | `codex` 0.153.4 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images only |
-| `codex` 0.154.0 | ordinary local commands and bounded native choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
+| `codex` 0.154.0 | ordinary local commands, bounded native patches and choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
 
 The model/mode columns describe legacy controls. Optional native settings are a separate
 `controls.configureSession` capability, currently implemented only for exact Codex 0.154.0 after
