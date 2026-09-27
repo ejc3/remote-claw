@@ -39,6 +39,9 @@ and per-question Skip), and
 native ownership of unsupported permissions/forms; history never grants response authority. The separate
 [wider-form acceptance](docs/release-finish-line.md#claude-native-wider-question-forms) does not rewrite
 the historical single-choice result or M1.
+Current read-only [task observations](docs/protocol.md#claude-native-task-observations) copy bounded
+worker task-start descriptions and reported task statuses into existing activity rows. They add no
+child controls, prompt/output forwarding, task tracker, or inferred success/idle state.
 Images/files become private host-owned uploads referenced by ordinary native text; only the exact
 generated reference-group form is stripped for display, leaving sanitized names/caption and bounded
 available image previews. Prepared attachment bytes are released; attempted uploads remain available

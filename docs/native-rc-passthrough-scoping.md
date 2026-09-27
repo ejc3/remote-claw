@@ -67,6 +67,10 @@ unchanged. Upload references deliberately supply those bytes to native Claude, w
 persistent permission rules or sandbox settings. Canonical previews share a 32 MiB decoded budget per
 reconciler across history/live; budget-excluded previews retain labels.
 
+Current read-only [task observations](protocol.md#claude-native-task-observations) reuse the existing
+activity rows for bounded worker start descriptions and reported status labels. They do not add child
+controls, prompt/output forwarding, a task tracker, or native-idle inference; historical M1 is unchanged.
+
 | Piece | What exists now | What is missing |
 | --- | --- | --- |
 | `--rc-app` / `runRcLaunch` | A synthetic RC backend bridged to the encrypted broker; durable, text-only, fail-stop supported path | Anthropic registration and official-client coexistence |
