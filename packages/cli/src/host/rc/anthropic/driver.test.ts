@@ -505,6 +505,25 @@ function assistant(
   };
 }
 
+function taskEvent(sequence: number, fields: Record<string, unknown> = {}): AnthropicRcEvent {
+  const eventId = `task-event-${sequence}`;
+  const payload = {
+    type: "system",
+    session_id: "cse_tasks",
+    subtype: "task_started",
+    task_id: "native-task",
+    tool_use_id: "toolu_task",
+    description: "Native task description",
+    ...fields,
+  };
+  return {
+    ...assistant(eventId, String(sequence), ""),
+    eventType: "system",
+    payload,
+    raw: { event_id: eventId, event_type: "system", sequence_num: String(sequence), payload },
+  };
+}
+
 function interruptResponse(
   sequence: string,
   requestId: string,
@@ -1065,6 +1084,128 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
       });
       expect(harness.native.postCalls).toEqual([]);
       expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("projects copied task observations once across history/live without child state or authority", async () => {
+    const harness = await startHarness();
+    const start = taskEvent(1, { prompt: "PRIVATE_PROMPT", subagent_type: "do not copy" });
+    const completion = taskEvent(2, {
+      subtype: "task_notification",
+      status: "completed",
+      description: undefined,
+      summary: "PRIVATE_SUMMARY",
+      output_file: "/PRIVATE_OUTPUT",
+      usage: { secret: "PRIVATE_USAGE" },
+    });
+    harness.native.historyImpl = async () => ({ data: [start, completion], nextCursor: null });
+    try {
+      await bindReady(harness, "cse_tasks");
+      harness.native.streams[0]?.push(start);
+      harness.native.streams[0]?.push(completion);
+      harness.native.streams[0]?.push(
+        taskEvent(3, { subtype: "task_notification", status: "native-label" }),
+      );
+      harness.native.streams[0]?.push(assistant("task-barrier", "4", "Done"));
+      await waitFor(() => harness.broker.content.length === 4);
+      expect(
+        harness.broker.content
+          .slice(0, 3)
+          .map(({ header, text }) => [header.recordKind, JSON.parse(text)]),
+      ).toEqual([
+        [
+          "task",
+          {
+            subtype: "task_started",
+            task_id: "native-task",
+            description: "Native task description",
+            tool_use_id: "toolu_task",
+          },
+        ],
+        [
+          "task",
+          {
+            subtype: "task_notification",
+            task_id: "native-task",
+            description: "native-task — reported completed",
+            tool_use_id: "toolu_task",
+          },
+        ],
+        [
+          "task",
+          {
+            subtype: "task_notification",
+            task_id: "native-task",
+            description: "native-task — reported native-label",
+            tool_use_id: "toolu_task",
+          },
+        ],
+      ]);
+      expect(JSON.stringify(harness.session.snapshotUpstream())).not.toContain("PRIVATE_");
+      expect(harness.native.postCalls).toEqual([]);
+      expect(harness.native.interruptCalls).toEqual([]);
+      expect(harness.native.commandCalls).toEqual([]);
+      expect(harness.native.questionCalls).toEqual([]);
+      expect(harness.broker.announcements[0]?.capabilities).toMatchObject({ status: false });
+      expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("ignores foreign, missing, oversized or hidden task labels and frequent task counters", async () => {
+    const harness = await startHarness();
+    const variants: Record<string, unknown>[] = [
+      { type: "other" },
+      { session_id: "cse_other" },
+      { session_id: undefined },
+      { task_id: "" },
+      { task_id: "x".repeat(257) },
+      { task_id: "hidden\u200b" },
+      { tool_use_id: undefined },
+      { tool_use_id: "x".repeat(257) },
+      { tool_use_id: "hidden\u202e" },
+      { description: " " },
+      { description: "x".repeat(4097) },
+      { description: "hidden\u202e" },
+      { subtype: "task_notification" },
+      { subtype: "task_notification", status: " " },
+      { subtype: "task_notification", status: "x".repeat(129) },
+      { subtype: "task_notification", status: "hidden\nlabel" },
+      { subtype: "task_updated", patch: { status: "completed", thinking_tokens: 50 } },
+      { subtype: "background_tasks_changed", status: "completed" },
+    ];
+    try {
+      await bindReady(harness, "cse_tasks");
+      variants.forEach((fields, i) => {
+        harness.native.streams[0]?.push(taskEvent(i + 1, fields));
+      });
+      harness.native.streams[0]?.push({ ...taskEvent(variants.length + 1), source: "client" });
+      harness.native.streams[0]?.push(
+        assistant("task-barrier", String(variants.length + 2), "Still usable"),
+      );
+      await waitFor(() => harness.broker.content.length === 1);
+      expect(harness.broker.content.map(({ text }) => text)).toEqual(["Still usable"]);
+      expect(harness.native.postCalls).toEqual([]);
+      expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("retains the existing changed-event fence for task observations", async () => {
+    const harness = await startHarness();
+    const start = taskEvent(1);
+    harness.native.historyImpl = async () => ({ data: [start], nextCursor: null });
+    try {
+      await bindReady(harness, "cse_tasks");
+      await waitFor(() => harness.broker.content.length === 1);
+      harness.native.streams[0]?.push(taskEvent(1, { description: "changed bytes" }));
+      await waitFor(() => harness.session.closed);
+      expect(harness.broker.content).toHaveLength(1);
+      expect(harness.isRunSettled()).toBe(false);
     } finally {
       await harness.stop();
     }

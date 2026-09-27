@@ -158,6 +158,10 @@ credentials explicitly instead of using “accountless” as “no accounts or c
 
 ## Shared follow-ups
 
+Current Claude-native [task observations](protocol.md#claude-native-task-observations) now expose
+bounded worker start descriptions and reported statuses. This does not graduate task phases,
+reconstructed child state, output subscriptions, or child controls.
+
 - Viewer UI-1 activity rollup is complete. Richer Claude-native commands, task phases, media, and
   composer states graduate only after trace evidence defines their real semantics; visual resemblance
   alone is not a capability claim and does not reopen M1.

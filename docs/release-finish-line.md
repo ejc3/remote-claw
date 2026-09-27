@@ -191,7 +191,7 @@ home-folder UI artifacts, outside Git.
 
 | Follow-on | Status | Bounded user outcome |
 | --- | --- | --- |
-| Native work visibility, Claude first | Claude tools, Codex completed commands, and [0.154.0 task observations](#codex-native-task-observations) implemented and live-accepted | Real observations reach the existing activity/details UI; no invented child state or task controls |
+| Native work visibility, Claude first | Claude tools, Codex completed commands, [Codex task observations](#codex-native-task-observations), and [Claude task observations](#claude-native-task-observations) implemented; each bounded acceptance is recorded separately | Real observations reach the existing activity/details UI; no invented child state or task controls |
 | Desktop/mobile daily-use finish | Current: recovery warning scoped; [draft navigation and credential restoration](#viewer-daily-use--2026-09-25) implemented | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | [Complete for exact 0.154.0/Linux arm64/managed Unix/paginated](#codex-official-remote-recovery--complete) | Existing TUI and actual Mac desktop app keep the same native thread across companion restart/broker loss; reopened viewers select a fresh projection, recover history once, and complete later browser work |
@@ -625,6 +625,29 @@ pause, so this does not qualify uninterrupted survival or mobile-app/native-proc
 seed's preexisting full-access policy was unchanged; no tool, approval, or question acceptance is
 claimed by this text-only follow-up. Private evidence:
 `/home/ubuntu/remote-claw-ui-artifacts/native-final-2026-09-26.rDZlFW/README.md`.
+
+### Claude native task observations
+
+**Current: implemented; bounded native-history/two-viewer acceptance passed 2026-09-27.** Exact Claude
+2.1.237/Linux arm64 worker task-start descriptions and task-ID/reported-status notifications now reach
+existing activity rows. [The protocol boundary](protocol.md#claude-native-task-observations) owns
+required fields and bounds. This is an event log, not a task tracker: no child controls, prompt/output
+forwarding, success/idle inference, frequent counters, or permission changes are added.
+
+An owned Manual/Sonnet 4.6 fixture with only Agent/TaskOutput enabled captured one actual background
+child's `task_started` and `task_notification` (`completed`), plus the canonical parent final. A fresh
+companion then recovered that exact native session into independent Chromium phone-layout (390×844)
+and desktop (1280×900) viewers. Each showed one start, one reported-completed row, and one parent final;
+both reloads retained those counts. Four light/dark screenshots were opened and needed no UI/CSS change.
+The acceptance sent no additional native prompt; temporary viewers/companion/broker closed while the
+native TUI remained intact. Private artifacts are under
+`~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/native-claude-tasks.iJW64h/`, with the
+native wire qualification in the adjacent `claude-task-fixture.LAi94l/` directory.
+
+History/live overlap and other bounded status labels have deterministic coverage, not a claim that a
+new live child ran through the companion during this viewer acceptance. Failed/cancelled native task
+examples, physical-phone browser/WebKit, child control/output, true network-loss recovery, and task
+success semantics remain outside this slice. Historical M1 and the Codex acceptance remain unchanged.
 
 ### Codex native task observations
 

@@ -391,6 +391,10 @@ ordering owner reconciles history and live events by provider coordinates. It pr
 and validated worker tool calls/textual results to a fresh random remote-claw session ID distinct from
 the native <code>cse_*</code>. Tool activity is read-only observation through the existing bounded
 renderers, including failures and nested parent classification; it grants no mutation or status capability.
+Bounded [worker task observations](protocol.md#claude-native-task-observations) also reuse existing
+task rows: native start descriptions and task-ID/reported-status labels only, without child controls,
+prompt/output forwarding, reconstructed task state, or inferred success/idle. They use the same
+provider event/sequence fences with no new state.
 
 <code>--rc-app &lt;origin&gt; --rc-driver=claude-native --rc-native-session &lt;cse_…&gt;</code> is the
 attach-only restart form. It requires one explicit canonical native ID, accepts no forwarded Claude
