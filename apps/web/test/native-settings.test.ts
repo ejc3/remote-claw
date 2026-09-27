@@ -109,6 +109,24 @@ describe("native session settings", () => {
     expect(render(null)).toContain("Native settings are not available yet.");
   });
 
+  it("labels qualified model-only choices honestly and hides absent controls", () => {
+    const qualified: SessionSettings = {
+      modelChoicesSource: "qualified",
+      models: [{ id: "verified", label: "Verified model", defaultEffort: null, efforts: [] }],
+      collaborationModes: [],
+      current: { model: "native-other", effort: null, collaborationMode: null },
+    };
+    const html = render(qualified);
+    expect(html).toContain("Verified choices (not the full native catalog)");
+    expect(html).toContain("Last confirmed model: native-other");
+    expect(html).not.toContain("Reasoning effort");
+    expect(html).not.toContain("Collaboration mode");
+    expect(html).not.toContain('aria-pressed="true"');
+    expect(canChooseNativeSetting(qualified, { model: "verified" })).toBe(true);
+    expect(canChooseNativeSetting(qualified, { effort: "high" })).toBe(false);
+    expect(canChooseNativeSetting(qualified, { collaborationMode: "plan" })).toBe(false);
+  });
+
   it("exposes unconfirmed feedback as a status without changing selections", () => {
     const html = render(settings, {
       notice: "Change unconfirmed. Check the current native settings before trying again.",

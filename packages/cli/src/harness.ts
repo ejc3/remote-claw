@@ -127,10 +127,12 @@ export interface ControlCapabilities {
 }
 
 export interface SessionSettings {
+  /** Omission preserves older native-catalog hosts; qualified choices are not a complete catalog. */
+  modelChoicesSource?: "native" | "qualified";
   models: readonly {
     id: string;
     label: string;
-    defaultEffort: string;
+    defaultEffort: string | null;
     efforts: readonly { id: string; description: string }[];
   }[];
   collaborationModes: readonly { id: string; label: string }[];
@@ -174,6 +176,9 @@ export function parseSessionSettings(raw: unknown): SessionSettings | null {
   if (
     !data ||
     !current ||
+    (data.modelChoicesSource !== undefined &&
+      data.modelChoicesSource !== "native" &&
+      data.modelChoicesSource !== "qualified") ||
     !Array.isArray(data.models) ||
     data.models.length < 1 ||
     data.models.length > 32 ||
@@ -191,9 +196,8 @@ export function parseSessionSettings(raw: unknown): SessionSettings | null {
       !model ||
       !text(model.id) ||
       !text(model.label) ||
-      !text(model.defaultEffort) ||
+      (model.defaultEffort !== null && !text(model.defaultEffort)) ||
       !Array.isArray(model.efforts) ||
-      model.efforts.length < 1 ||
       model.efforts.length > 12 ||
       models.some((entry) => entry.id === model.id)
     )
@@ -210,7 +214,12 @@ export function parseSessionSettings(raw: unknown): SessionSettings | null {
         return null;
       efforts.push({ id: effort.id, description: effort.description });
     }
-    if (!efforts.some((entry) => entry.id === model.defaultEffort)) return null;
+    if (
+      efforts.length === 0
+        ? model.defaultEffort !== null
+        : !efforts.some((entry) => entry.id === model.defaultEffort)
+    )
+      return null;
     models.push({ id: model.id, label: model.label, defaultEffort: model.defaultEffort, efforts });
   }
   const collaborationModes: { id: string; label: string }[] = [];
@@ -226,6 +235,9 @@ export function parseSessionSettings(raw: unknown): SessionSettings | null {
     collaborationModes.push({ id: mode.id, label: mode.label });
   }
   const result: SessionSettings = {
+    ...(data.modelChoicesSource === undefined
+      ? {}
+      : { modelChoicesSource: data.modelChoicesSource }),
     models,
     collaborationModes,
     current: {

@@ -612,9 +612,11 @@ cannot bypass a disabled button:
 | Codex 0.154.0 | ordinary local commands, bounded native patches and choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
 
 The model/mode columns above describe legacy `set_model` and permission `set_mode`, not the separate
-`controls.configureSession` capability. Only exact Codex 0.154.0 conditionally advertises
-[native session settings](#codex-native-session-settings) after successful catalog discovery.
-Its separate optional `liveAssistant` capability advertises native preview support before broker
+`controls.configureSession` capability. Exact Codex 0.154.0 conditionally advertises
+[native session settings](#codex-native-session-settings) after successful catalog discovery;
+exact Claude 2.1.237 advertises the [qualified model-only seam](#claude-native-model-settings),
+with settings unavailable until a fresh native initialization confirms the current model.
+Codex's separate optional `liveAssistant` capability advertises native preview support before broker
 support is known. [Bounded parent text previews](#codex-live-assistant-preview) require the SQLite
 latest-value route; HTTP 404/501 falls back to final-only. No other driver advertises this capability.
 
@@ -970,7 +972,7 @@ expiry. The relay drops those actions when stale and maps supported controls to 
 
 - `interrupt` → Claude `interrupt`, OpenCode abort, or Codex exact-turn `turn/interrupt`;
 - `set_model` → Claude `set_model`;
-- `set_session_settings` → the separately advertised Codex settings path below; and
+- `set_session_settings` → the separately advertised Claude/Codex settings paths below; and
 - `set_mode` → Claude `set_permission_mode` only where advertised.
 
 The Claude-native companion sends one session-scoped `control_request` containing the existing
@@ -1030,6 +1032,51 @@ by Claude too. The current `end` action therefore only clears abandoned permissi
 advertised false by every driver. Slash commands use ordinary `user` input, but the stable Claude,
 pinned OpenCode M2, pinned Codex M3a, and maintained tmux surfaces reject slash-leading text.
 
+### Claude native model settings
+
+Exact Claude Code 2.1.237/Linux arm64 advertises `controls.configureSession:true`, separately from
+legacy `set_model` and permission `set_mode`, which stay false. A fresh exact-session worker
+`initialize` response supplies `current_model`; settings remain unavailable until that response is
+valid. Optional initialization does not delay presence/text or retire a healthy conversation.
+Claude returns `models:[]` on the qualified native fixture, not a usable native catalog. The shared
+snapshot therefore explicitly labels `modelChoicesSource:"qualified"` and offers only the two
+session-only IDs actually qualified: `claude-sonnet-4-6` and `claude-haiku-4-5-20251001`.
+An unknown bounded native model stays visible but is never added as a selectable option.
+
+Each choice has `defaultEffort:null, efforts:[]`; `collaborationModes:[]` and current effort/mode
+are null. The UI says **Verified choices (not the full native catalog)** and **Last confirmed model**,
+hides effort/mode controls, and explains that changes made elsewhere refresh when the host reconnects
+to the native session. Generic initialization records from other clients are not a live model feed.
+Shared parsing accepts empty efforts only with a null default, or nonempty efforts with an advertised
+string default. Codex's native catalog parser independently still requires its real effort choices.
+Omitted `modelChoicesSource` preserves older native-catalog hosts; invalid source values fail parsing.
+
+The viewer uses existing `set_session_settings {change:{model},expiry}`. The adapter checks the exact
+two-ID allowlist and expiry at the serial writer, consumes already-confirmed targets as no-ops, and
+sends one fixed `control_request/set_model` body to the bound native session. No arbitrary alias,
+effort, mode, default/global configuration, sandbox, or permission fields are forwarded. The expected
+model/request guard is registered before POST; stale pre-write initialize responses are invalidated.
+Neither HTTP admission nor the state-free native setter ACK changes the displayed model.
+
+An exact bound-worker/session/request success ACK starts one fresh initialize read outside the serial
+writer and capture loop. Only that read's valid canonical response publishes the actual model and
+clears the guard when it matches the requested target. Mismatching native state remains visible but
+does not allow dependent writes. Native reconnect performs one fresh observation, which may also
+reconcile an uncertain setter without resending it. One bounded owned HTTP read plus a coalesced
+refresh flag prevents accumulating read tasks; shutdown aborts/drains it without stopping native work.
+
+While unconfirmed, later model choices are consumed with a trace warning, never automatically retried.
+Text, interrupt, and approval/question responses do not wait for canonical model confirmation; only
+the setter's ordinary bounded HTTP request occupies their existing serial writer. The viewer retains
+its native-confirmed tick and reports an unconfirmed result after the existing 60-second wait.
+Further model writes require matching native reconciliation or a fresh companion; browser reload
+alone does not clear the host guard. This does not qualify native status, tasks, or effort controls.
+
+The full/current-only encrypted announcement and authenticated catch-up rules below also apply to
+this snapshot, including the choices-source field in catalog identity and same-incarnation reuse.
+The [separate acceptance](release-finish-line.md#claude-native-model-settings) records the exact
+browser/native outcome, not a broader model or provider matrix.
+
 ### Codex native session settings
 
 Exact Codex 0.154.0/Linux arm64 conditionally advertises `controls.configureSession:true` after
@@ -1042,7 +1089,8 @@ conversation continues. Older Codex versions and other drivers do not acquire it
 
 Encrypted announces always carry native `current` model, effort, and collaboration mode when settings
 are available. The initial announce, a catalog change, or authenticated `catch_up` includes the full
-`session_settings:{models,collaborationModes,current}` snapshot. Other announces, including keepalives
+`session_settings:{models,collaborationModes,current}` snapshot (plus `modelChoicesSource` when
+supplied). Other announces, including keepalives
 and current-value changes, send only `session_settings:{current}`: unordered presence still occupies
 durable broker storage, so unchanged catalogs must not repeat every 20 seconds. Catalog refresh uses
 the existing bounded advisory-presence coalescer, never blocking transcript publication. A failed

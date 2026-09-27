@@ -41,6 +41,7 @@ describe("web client Viewer (browser-safe, against the real broker)", () => {
     const host = fakeHost(id);
     const sid = "native-settings";
     const settings = {
+      modelChoicesSource: "qualified",
       models: [
         {
           id: "m",

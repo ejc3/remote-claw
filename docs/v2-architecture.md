@@ -425,7 +425,8 @@ reconciler across history/live; exhausted previews retain labels. See
 The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text, images/files, Interrupt,
 [bounded native question responses](protocol.md#claude-native-questions), and
 [bounded one-time Bash decisions](protocol.md#claude-native-bash-approvals), plus
-[bounded Read/Write/Edit decisions](protocol.md#claude-native-file-approvals). Unsupported permissions
+[bounded Read/Write/Edit decisions](protocol.md#claude-native-file-approvals), and
+[qualified session-only model choices](protocol.md#claude-native-model-settings). Unsupported permissions
 and forms, status, and other controls remain disabled. This surface is Linux-only and
 pins exact Claude 2.1.237. The [release roadmap](release-finish-line.md) owns current Interrupt acceptance,
 separately from historical M1. [Image acceptance](release-finish-line.md#claude-native-images--complete)
@@ -438,6 +439,14 @@ per-question Skip. Single answers remain strings and multi answers arrays. The s
 without widening the historical single-choice result; [Bash acceptance](release-finish-line.md#claude-native-bash-approvals)
 is separate. Both use one `ClaudeNativeControls` lifecycle. History grants no response authority;
 losing the live stream with an unresolved request retires only the companion, not native Claude.
+
+The optional model-only settings slice explicitly labels verified Sonnet 4.6/Haiku 4.5 choices as a
+qualified subset, not the empty native model catalog. A fresh matching initialize owns the current
+model; success ACK alone does not. One expected-target guard plus a bounded asynchronous fresh read
+lets conversation/approvals continue when confirmation is missing. Startup failure leaves settings
+unavailable, and native reconnect refreshes last-confirmed state without mutation retries. Shared
+current-only announces preserve catalog provenance through authenticated catch-up. Effort, mode,
+global defaults, permissions, native status and task lifecycle are not added by this slice.
 
 ### 10.5 Pinned OpenCode text/interrupt/status companion
 
@@ -586,7 +595,7 @@ have narrower, truthfully labeled guarantees.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
-| Claude native companion | Structured text projection, host-owned image/file uploads and bounded previews, read-only tool activity, one-shot session-scoped Interrupt, [bounded native question responses](protocol.md#claude-native-questions), [bounded Bash decisions](protocol.md#claude-native-bash-approvals), and [bounded Read/Write/Edit decisions](protocol.md#claude-native-file-approvals) over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; unsupported permissions/forms, other controls, and status remain native/disabled; files/previews and file-approval native acceptance are separate |
+| Claude native companion | Structured text projection, host-owned image/file uploads and bounded previews, read-only tool activity, one-shot session-scoped Interrupt, [bounded native question responses](protocol.md#claude-native-questions), [bounded Bash decisions](protocol.md#claude-native-bash-approvals), [bounded Read/Write/Edit decisions](protocol.md#claude-native-file-approvals), and [qualified session-only model choices](protocol.md#claude-native-model-settings) over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; unsupported permissions/forms, other controls, and status remain native/disabled; files/previews, file-approval and model native acceptance are separate |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
 | Codex | Current code accepts exact 0.151.0, 0.153.4, and 0.154.0/Linux arm64 with text/images/interrupt/status, bounded image previews, and read-only completed command activity; exact 0.153.4 and 0.154.0 implement one-shot ordinary local-command approvals and bounded native choice forms; general files, bounded native patch approvals, and optional [native model/effort/collaboration settings](protocol.md#codex-native-session-settings) require exact 0.154.0. Historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0; separate 0.153.4 managed recovery and [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) also passed | One explicit thread and attached local-TUI precondition; files/previews, file-approval, and other current acceptance are tracked in the release roadmap; unsupported permissions/questions, legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect, per-device unsubscribe, and other browser controls remain unclaimed |

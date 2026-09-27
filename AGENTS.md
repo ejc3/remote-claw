@@ -55,10 +55,18 @@ ordinary emails/path prose and native/provider history are unaffected. Canonical
 See historical
 [image acceptance](docs/release-finish-line.md#claude-native-images--complete) and the separate
 [files/previews slice](docs/release-finish-line.md#native-files-and-image-previews).
+The separate [Claude model seam](docs/protocol.md#claude-native-model-settings) offers only qualified
+session-only Sonnet 4.6/Haiku 4.5 choices through `configureSession`, explicitly not a native catalog.
+Fresh owned initialize responses publish the last-confirmed model; native ACKs never imply application.
+One pending model guard leaves text/interrupt/approvals usable, and native reconnect refreshes state
+without retrying mutations. No effort/mode/default/permission writes are added; optional initialization
+cannot delay presence or fail a healthy conversation. No native status or additional task semantics
+are added by this slice. The shared settings shape permits null default effort only with empty effort choices;
+Codex's native parser remains independently strict.
 Interrupt has no native turn ID: a delayed Stop
 may affect newer peer work. The serial writer waits for the matching canonical worker success before
 later browser text; HTTP admission and generic results are not idle. Status, other permissions,
-other controls stay unsupported. Current Interrupt acceptance belongs to the
+controls beyond the qualified session-only model seam stay unsupported. Current Interrupt acceptance belongs to the
 [release roadmap](docs/release-finish-line.md), not the historical M1 text result. Its packed-install restart, broker-loss, and
 credential/log checks passed. The literal logged-in official Claude web UI on the user's phone, the
 local TUI, and two remote-claw browsers then completed the bounded coexistence run, including liveness
@@ -183,9 +191,10 @@ Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-
   read-only worker tool activity through our encrypted broker. Browser mutations are ordinary text,
   host-owned image/file uploads with bounded image previews, one-shot session-scoped Interrupt,
   bounded native question responses,
-  and bounded one-time Bash and Read/Write/Edit decisions;
+  bounded one-time Bash and Read/Write/Edit decisions, and
+  [qualified session-only model choices](docs/protocol.md#claude-native-model-settings);
   a delayed Stop can affect newer native/peer work. The local TUI and provider RC API remain live;
-  other permissions, unsupported question forms, other controls,
+  other permissions, unsupported question forms, controls beyond that model seam,
   and status are disabled. Linux and exact Claude 2.1.237 only.
 - **`--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>`** — attaches a fresh
   remote-claw projection to that exact already-running native session. Apart from the required pinned-

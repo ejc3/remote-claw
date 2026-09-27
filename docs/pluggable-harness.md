@@ -136,6 +136,7 @@ controls.interrupt
 controls.setModel
 controls.setMode
 controls.end
+controls.configureSession? = true | false
 attachments
 files? = true | false
 textInput? = plain | terminal
@@ -249,7 +250,7 @@ replay but are not durable exactly-once claims.
 
 The Claude-native companion sends non-empty, non-slash text through one serialized provider writer with
 a stable UUID. It waits for the canonical provider history/SSE event before publishing the ordered user
-row. Any rejected or outcome-unknown POST permanently fences the projection and is not retried.
+row. A rejected or outcome-unknown text POST permanently fences the projection and is not retried.
 Bounded [worker task observations](protocol.md#claude-native-task-observations) reuse existing task
 rows and provider identity/sequence fences, without child controls, task state, or idle inference.
 Image/file groups are prepared as private, exclusive upload files and submitted as references in that same
@@ -272,6 +273,16 @@ work; it never retries, even after a 401. Missing confirmation after 30 seconds 
 rejected/unknown outcome fences only the companion. Status remains false; see
 [control semantics](protocol.md#11-compatibility-control-verbs) and the separate current acceptance
 in the [release roadmap](release-finish-line.md).
+
+Claude-native additionally exposes [qualified session-only model choices](protocol.md#claude-native-model-settings)
+through `configureSession`, with no effort/mode/default/permission writes. A fresh owned initialize
+response supplies the last-confirmed model; the wire's empty model list is not fabricated into a
+native catalog. Only verified Sonnet 4.6 and Haiku 4.5 IDs are selectable, explicitly labeled a
+qualified subset. One expected-model guard and a bounded asynchronous confirmation read keep
+state-free ACKs from becoming selected ticks; uncertain settings block only further model changes,
+not text/interrupt/approval capture. Startup failure leaves settings unavailable. Native reconnect
+refreshes the observation without resending a model write. The shared current-only presence/catch-up
+path retains choices provenance and hides absent effort/mode controls.
 
 Fresh native forms of 1–4 distinct questions support single/multiple choices, bounded Other, and
 per-question Skip. They and captured-shape Bash/Read/Write/Edit approvals use existing native-resolution cards and
@@ -433,8 +444,9 @@ The exact advertised viewer capabilities are:
 | `codex` 0.154.0 | ordinary local commands, bounded native patches and choice forms; native resolution | yes | yes | no | no | no | yes; images and files |
 
 The model/mode columns describe legacy controls. Optional native settings are a separate
-`controls.configureSession` capability, currently implemented only for exact Codex 0.154.0 after
-valid catalog discovery; they do not change those legacy or permission-mode flags.
+`controls.configureSession` capability: exact Codex 0.154.0 uses valid native catalog discovery;
+exact Claude 2.1.237 has explicitly qualified model-only choices after fresh initialization.
+Neither path changes those legacy or permission-mode flags.
 
 See [tmux-driver.md](tmux-driver.md) and [opencode-driver.md](opencode-driver.md) for adapter-specific
 limitations.

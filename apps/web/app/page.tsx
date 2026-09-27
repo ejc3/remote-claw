@@ -2879,6 +2879,7 @@ export function NativeSettingsSection({
   const { current } = settings;
   const model = settings.models.find((entry) => entry.id === current.model);
   const mode = settings.collaborationModes.find((entry) => entry.id === current.collaborationMode);
+  const qualifiedChoices = settings.modelChoicesSource === "qualified";
   const effortKnown = model?.efforts.some((entry) => entry.id === current.effort) === true;
   const row = (
     label: string,
@@ -2929,7 +2930,16 @@ export function NativeSettingsSection({
       {!connected && <p className="sheet-note">Reconnect to the host before changing settings.</p>}
       <fieldset className="native-settings-group">
         <legend className="sheet-title">Model</legend>
-        <p className="sheet-note">Current: {model?.label ?? current.model ?? "Unknown"}</p>
+        <p className="sheet-note">
+          {qualifiedChoices ? "Last confirmed model" : "Current"}:{" "}
+          {model?.label ?? current.model ?? "Unknown"}
+        </p>
+        {qualifiedChoices && (
+          <p className="sheet-note">
+            Verified choices (not the full native catalog). Changes made elsewhere refresh when the
+            host reconnects to the native session.
+          </p>
+        )}
         {settings.models.map((entry) =>
           row(
             entry.label,
@@ -2940,23 +2950,25 @@ export function NativeSettingsSection({
           ),
         )}
       </fieldset>
-      <fieldset className="native-settings-group">
-        <legend className="sheet-title">Reasoning effort</legend>
-        <p className="sheet-note">Current: {current.effort ?? "Unknown"}</p>
-        {model ? (
-          model.efforts.map((entry) =>
-            row(
-              entry.id,
-              entry.id,
-              entry.description,
-              { effort: entry.id },
-              entry.id === current.effort,
-            ),
-          )
-        ) : (
-          <p className="sheet-note">Choose a known model to see its effort options.</p>
-        )}
-      </fieldset>
+      {settings.models.some((entry) => entry.efforts.length > 0) && (
+        <fieldset className="native-settings-group">
+          <legend className="sheet-title">Reasoning effort</legend>
+          <p className="sheet-note">Current: {current.effort ?? "Unknown"}</p>
+          {model ? (
+            model.efforts.map((entry) =>
+              row(
+                entry.id,
+                entry.id,
+                entry.description,
+                { effort: entry.id },
+                entry.id === current.effort,
+              ),
+            )
+          ) : (
+            <p className="sheet-note">Choose a known model to see its effort options.</p>
+          )}
+        </fieldset>
+      )}
       {settings.collaborationModes.length > 0 && (
         <fieldset className="native-settings-group">
           <legend className="sheet-title">Collaboration mode</legend>

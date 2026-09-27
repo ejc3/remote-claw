@@ -1,6 +1,7 @@
 import { parseNativeFileInput } from "../../../harness.js";
 import { ClaudeOAuthFileCredentialSource } from "./credentials.js";
 import { AnthropicRcError } from "./errors.js";
+import { type ClaudeSessionModel, isClaudeSessionModel } from "./settings.js";
 import {
   type AnthropicRcTransport,
   OAuthAnthropicRcTransport,
@@ -63,6 +64,12 @@ export interface RcUserEventInput {
 export interface RcInterruptEventInput {
   uuid: string;
   requestId: string;
+}
+
+export type RcInitializeEventInput = RcInterruptEventInput;
+
+export interface RcModelEventInput extends RcInterruptEventInput {
+  model: ClaudeSessionModel;
 }
 
 export interface RcQuestion {
@@ -428,6 +435,71 @@ export class AnthropicRcClient {
             request_id: validatedEvent.requestId,
             request: { subtype: "interrupt" },
             uuid: validatedEvent.uuid,
+          },
+        },
+      ],
+    });
+    const raw = await this.#json(
+      operation,
+      "POST",
+      `/v1/code/sessions/${encodedSession}/events`,
+      options.signal,
+      body,
+      { retryAfter401: false },
+    );
+    return parsePostAck(raw, operation);
+  }
+
+  /** Fresh state observation; its worker response, not HTTP admission, owns the current model. */
+  postInitialize(
+    sessionId: string,
+    event: RcInitializeEventInput,
+    options: RcRequestOptions = {},
+  ): Promise<RcPostAck> {
+    return this.#postModelControl(
+      sessionId,
+      event,
+      { subtype: "initialize", promptSuggestions: true },
+      "postInitialize",
+      options,
+    );
+  }
+
+  /** Only the exact qualified session-only choices; never aliases, defaults or permission fields. */
+  async postModel(
+    sessionId: string,
+    event: RcModelEventInput,
+    options: RcRequestOptions = {},
+  ): Promise<RcPostAck> {
+    const model = expectRecord(event, "postModel", "event").model;
+    if (!isClaudeSessionModel(model))
+      throw AnthropicRcError.protocol("postModel", "model is not a qualified session choice");
+    return this.#postModelControl(
+      sessionId,
+      event,
+      { subtype: "set_model", model },
+      "postModel",
+      options,
+    );
+  }
+
+  async #postModelControl(
+    sessionId: string,
+    event: RcInterruptEventInput,
+    request: Record<string, unknown>,
+    operation: string,
+    options: RcRequestOptions,
+  ): Promise<RcPostAck> {
+    const encodedSession = encodeSessionId(sessionId, operation);
+    const input = validateInterruptEvent(event, operation);
+    const body = JSON.stringify({
+      events: [
+        {
+          payload: {
+            type: "control_request",
+            request_id: input.requestId,
+            request,
+            uuid: input.uuid,
           },
         },
       ],

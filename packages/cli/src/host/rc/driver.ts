@@ -65,14 +65,21 @@ export const STABLE_MITM_CAPABILITIES: DriverCapabilities = {
  * Mutations are ordinary text, host-owned images/files, and one-shot native session Interrupt. The
  * client-side RC seam does not currently prove worker phase transitions, so `status` is deliberately
  * false rather than inferred from transcript traffic. Fresh bounded AskUserQuestion forms and captured one-shot Bash
- * approvals are browser-answerable; other permissions and controls remain native/local. */
+ * approvals are browser-answerable, with qualified session-only model choices confirmed by fresh
+ * native initialization. Other permissions and controls remain native/local. */
 export const CLAUDE_NATIVE_CAPABILITIES: DriverCapabilities = {
   textInput: "plain",
   structuredPermissions: true,
   permissionResolution: "native",
   structuredQuestions: true,
   status: false,
-  controls: { interrupt: true, setModel: false, setMode: false, end: false },
+  controls: {
+    interrupt: true,
+    setModel: false,
+    setMode: false,
+    end: false,
+    configureSession: true,
+  },
   attachments: true,
   files: true,
 };

@@ -71,14 +71,21 @@ Current read-only [task observations](protocol.md#claude-native-task-observation
 activity rows for bounded worker start descriptions and reported status labels. They do not add child
 controls, prompt/output forwarding, a task tracker, or native-idle inference; historical M1 is unchanged.
 
+Current [model-only settings](protocol.md#claude-native-model-settings) add verified session-only
+Sonnet 4.6/Haiku 4.5 choices, explicitly not a discovered native catalog. Fresh owned initialize
+responses supply last-confirmed state; ACKs alone never select a model. One expected-target guard
+and an optional bounded fresh read leave conversation/approvals usable if confirmation is missing.
+Effort, mode, defaults, permissions and sandbox changes remain native/local. This is separate from
+M1 and does not add native status or further task semantics.
+
 | Piece | What exists now | What is missing |
 | --- | --- | --- |
 | `--rc-app` / `runRcLaunch` | A synthetic RC backend bridged to the encrypted broker; durable, text-only, fail-stop supported path | Anthropic registration and official-client coexistence |
 | `--rc-trace` / `runRcTrace` | Transparent pass-through to Anthropic with redacted protocol tracing | Projection to the broker and remote mutation |
-| `--rc-app … --rc-driver=claude-native --remote-control` | Launch ordinary Claude, bind its exact successful bridge request, reconcile live SSE/history, and project provider-ordered text plus read-only worker tool activity; current code also supports one-shot session Interrupt, private image/file references through ordinary text with bounded encrypted image previews, [bounded native question responses](protocol.md#claude-native-questions), [bounded Bash decisions](protocol.md#claude-native-bash-approvals), and [bounded Read/Write/Edit decisions](protocol.md#claude-native-file-approvals) | Historical M1 accepted literal official-client coexistence; current image/Interrupt, question, Bash, file-approval, and files/previews acceptance live in the release roadmap; other controls, platforms, and versions remain separate |
+| `--rc-app … --rc-driver=claude-native --remote-control` | Launch ordinary Claude, bind its exact successful bridge request, reconcile live SSE/history, and project provider-ordered text plus read-only worker tool activity; current code also supports one-shot session Interrupt, private image/file references through ordinary text with bounded encrypted image previews, [bounded native question responses](protocol.md#claude-native-questions), [bounded Bash decisions](protocol.md#claude-native-bash-approvals), [bounded Read/Write/Edit decisions](protocol.md#claude-native-file-approvals), and [qualified session-only model choices](protocol.md#claude-native-model-settings) | Historical M1 accepted literal official-client coexistence; current image/Interrupt, question, Bash, file-approval, files/previews, and model-control acceptance live in the release roadmap; controls beyond those qualified seams, platforms, and versions remain separate |
 | `--rc-app … --rc-driver=claude-native --rc-native-session <cse_…>` | Attach a fresh projection to one explicitly named, already-running native session without starting an interactive Claude session or proxy, forwarding Claude arguments, or discovering a session; the pinned-version probe still runs | Stable same-row identity; the caller must supply the exact native ID |
 | `--rc-driver=tmux` plus Claude's `--remote-control` | One bounded lower-fidelity run preserved the provider session while a local pane, Anthropic API client, and two browsers exchanged text | Structured event semantics, independent peer ordering, supported-version matrix, and official Claude app UI acceptance |
-| `AnthropicRcClient` | Typed session listing, bounded history with `next_cursor`/`resume_cursor`, client-side SSE readiness, one-user-event POST, and current one-shot Interrupt/bounded-question-form/Bash-and-file-decision POSTs | Cross-platform credential sources and other control semantics |
+| `AnthropicRcClient` | Typed session listing, bounded history with `next_cursor`/`resume_cursor`, client-side SSE readiness, one-user-event POST, current one-shot Interrupt/bounded-question-form/Bash-and-file-decision POSTs, and fixed session-only model/initialize requests | Cross-platform credential sources and other control semantics |
 | OAuth source | Secure Linux read-only access to Claude's existing credential file; native Claude owns refresh | A supported cross-platform credential source |
 
 The client preserves unknown SSE records rather than inventing semantics, bounds response and event
