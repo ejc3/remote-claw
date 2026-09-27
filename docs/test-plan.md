@@ -641,6 +641,16 @@ The later milestones use the same shared security checks but keep product-specif
 | tmux | Complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: packed install, recoverable local pane, two browsers, reload, active-turn isolation at a focused native permission modal, queued browser completion after both browsers depart, and broker-loss isolation; idle-editor concurrency, independent peer ordering, and provider-native/official-client coexistence are explicitly not advertised |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 
+Claude's separate [model-only acceptance](release-finish-line.md#claude-native-model-settings) uses
+exact 2.1.237/Linux arm64, two verified IDs (not a native catalog), desktop Chromium and phone-sized
+WebKit. One Haiku switch, Sonnet restore, native initialize confirmations and reload establish the
+user outcome without an inference turn. Detailed tests stay at the client/adapter boundary: exact
+allowlist/body, missing or foreign replies, early response races, stale pre-write reads, mismatching
+current state, native reconnect, no-op/expiry, no mutation retries, and continued text/Stop/questions
+while confirmation is missing. Shared tests own null+empty effort semantics, unchanged Codex native
+strictness, source-label retention through current-only announcements, and absence of phantom controls.
+The helper's TLS front-end addresses WebKit production-CSP behavior on loopback, not a product bypass.
+
 For native settings, focused adapter tests own the expected-confirmation guard: RPC-before-notice,
 ambiguous timeout, unrelated/mismatched notices, notice-before-response, preserved model/effort on
 mode confirmation, confirmed no-ops, and text/interrupt remaining usable. Later settings must not

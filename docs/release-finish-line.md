@@ -182,7 +182,7 @@ Cartesian-product marathon, and the viewer-parity lane may continue without reop
 
 ### Approved follow-on queue — 2026-09-07
 
-The user approved working through all seven candidates below. Each closes independently through a
+The user approved working through the follow-ons below. Each closes independently through a
 reviewed, green PR; completing one is not completion of the whole queue. Desktop and mobile must expose
 the same supported actions, content, and honest states, with responsive presentation rather than
 pixel-identical layout. Browser changes are checked on both sizes, in light and dark, with Chromium
@@ -197,7 +197,7 @@ home-folder UI artifacts, outside Git.
 | Codex official-Remote recovery | [Complete for exact 0.154.0/Linux arm64/managed Unix/paginated](#codex-official-remote-recovery--complete) | Existing TUI and actual Mac desktop app keep the same native thread across companion restart/broker loss; reopened viewers select a fresh projection, recover history once, and complete later browser work |
 | Screenshot/file input | Historical Codex and Claude-native images live-accepted; [files and bounded previews implemented, bounded native acceptance passed](#native-files-and-image-previews) for Claude-native and exact Codex 0.154.0 | Phone/desktop send encrypted mixed groups with native-confirmed delivery and bounded canonical previews; uploads deliberately share bytes without changing persistent permission/sandbox settings |
 | Native-phone foreground recovery | [Short Android background/resume](#native-phone-backgroundresume--2026-09-26) passed for both agents; separate [OS lifecycle outcomes](#native-phone-os-lifecycle--2026-09-26) also passed | Native Claude thaw and ChatGPT app-process reopen restore usable sessions; true network-loss/deep-sleep recovery remains unverified |
-| Native session settings | Exact Codex 0.154.0 [implemented; bounded native/browser acceptance passed](#codex-native-session-settings) | Phone/desktop pick native models, efforts, and collaboration modes; selections require native confirmation and never change permission/sandbox policy |
+| Native session settings | Exact Codex 0.154.0 [native settings](#codex-native-session-settings) and exact Claude 2.1.237 [qualified model-only choices](#claude-native-model-settings) implemented; bounded native/browser acceptance passed | Phone/desktop pick each adapter's supported settings; selections require native confirmation and never change permission/sandbox policy |
 | Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance). Claude [single-choice acceptance](#claude-native-single-choice-questions), [bounded Bash acceptance](#claude-native-bash-approvals), and [wider-form acceptance](#claude-native-wider-question-forms) passed | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted; 0.154.0 native-app text and browser/TUI mutation [acceptance passed](#codex-current-version-acceptance) | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
 
@@ -718,8 +718,9 @@ stays at the adapter boundary; existing browser coverage already owns activity-s
 
 **Current: implemented; bounded native/browser acceptance passed 2026-09-26.** This slice
 uses exact Codex 0.154.0/Linux arm64 and keeps the historical 0.151.0/0.153.4 and prior 0.154.0
-acceptance scopes unchanged. Claude model/mode settings and all other unadvertised controls remain
-native/local; no broader approval, streaming, or task-lifecycle claim is added.
+acceptance scopes unchanged. Claude's separate model-only acceptance is recorded below; its
+effort/mode and all other unadvertised controls remain native/local. No broader approval, streaming,
+or task-lifecycle claim is added.
 
 The existing session sheet now offers native model catalogs, the current model's effort choices and
 descriptions, and native collaboration modes. Catalog IDs are not hardcoded in the viewer. Unknown
@@ -776,6 +777,45 @@ Private browser evidence is under
 Actual native settings notifications, turn contexts, two-viewer actions, and TUI evidence are under
 the sibling `native-settings.ZNvEGo/` directory; Android corroboration is in
 `~/remote-claw-ui-artifacts/claude-finish-2026-09-26.nM0JIC/settings-codex-native-2245.{png,xml}`.
+
+### Claude native model settings
+
+**Current: implemented; bounded native/browser acceptance passed 2026-09-27.** Exact Claude Code
+2.1.237/Linux arm64 exposes two verified session-only IDs, Sonnet 4.6 and Haiku 4.5. Native
+`initialize` returns `models:[]`, so the picker explicitly says this is a verified subset, not the
+native catalog. No effort, mode, global/default, permission, or sandbox writes are enabled.
+Unknown native current models stay readable without becoming choices. Native status/tasks and
+other controls remain outside this slice; earlier acceptances retain their exact scope.
+
+The shared settings sheet publishes only fresh matching native `current_model`, not HTTP admission
+or the setter's state-free ACK. It says **Last confirmed model** and explains that external changes
+refresh on native host reconnect. One expected-model guard consumes dependent model changes without
+retrying; a bounded fresh read runs outside the conversation writer. Missing confirmation therefore
+does not block text, Interrupt, or approval/question responses. Fresh native reconciliation or a
+fresh companion is required if confirmation never arrives; browser reload does not reset the guard.
+The [protocol boundary](protocol.md#claude-native-model-settings) owns exact correlation and bounds.
+
+Actual acceptance used the retained native session/process plus independent desktop Chromium and
+390×844 phone-sized WebKit viewers against a fresh encrypted SQLite broker. Phone selected Haiku;
+both viewers showed it only after the exact fresh initialize confirmed the native value. An ordinary
+current-only keepalive and reload/catch-up preserved the verified-subset label and selection. Desktop
+then restored Sonnet, confirmed natively and in both viewers. Three native initialize responses kept
+the same PID and `current_permission_mode:"default"`; the only mutations were those two literal
+`set_model` requests. No prompt/inference turn or TUI/default/permission write was needed. The native
+process remained running after only owned observer/companion/broker helpers were stopped.
+
+Phone/desktop screenshots in light/dark were opened and inspected: selected state, complete model
+IDs, provenance, and unsupported-control absence remained legible. The first helper attempt stopped
+before a model write because production CSP upgrades WebKit's HTTP-loopback assets to HTTPS. An
+artifact-only TLS front-end and test certificate fixed that environment mismatch; no production CSP
+change or application bypass was added. This is WebKit phone-layout acceptance, not a physical-phone
+or official-app settings-picker claim, nor a broader model/provider/version qualification.
+
+Evidence and helpers live outside Git under
+`~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/claude-model-viewers.rKEJbo/`;
+the preceding direct RC qualification is in sibling `claude-model-control.MUTSdw/`. Detailed
+confirmation/race/failure regressions remain in the adapter/client tests, with cheap shared-parser,
+provenance-retention, and UI tests rather than additional expensive native scenarios.
 
 ### Daily-use recovery warning
 
