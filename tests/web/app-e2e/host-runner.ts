@@ -73,6 +73,7 @@ function presetCaps(p: string | undefined): DriverCapabilities {
   if (p === "claude-questions") return CLAUDE_NATIVE_CAPABILITIES;
   if (p === "codex") return CODEX_CAPABILITIES;
   if (p === "codex-files") return { ...CODEX_CAPABILITIES, files: true };
+  if (p === "codex-live") return { ...CODEX_CAPABILITIES, liveAssistant: true };
   if (p === "codex-settings")
     return {
       ...CODEX_CAPABILITIES,
@@ -125,6 +126,12 @@ const sessionConfig =
       ? { permissionMode: "bypassPermissions" }
       : {};
 const session = new Session(sessionId, title, sessionConfig);
+if (capsPreset === "codex-live")
+  session.setLiveOutput({
+    finalMsgId: `native-text-${"a".repeat(64)}`,
+    text: "I’m checking the **live reply** on phone and desktop.\n\n- Text stays readable as the reply grows.\n- The final answer replaces this preview.\n\nThe current file is `src/app.ts`.",
+    truncated: false,
+  });
 if (capsPreset === "codex-settings") {
   session.sessionSettings = {
     models: ["Model A", "Model B"].map((label, i) => ({

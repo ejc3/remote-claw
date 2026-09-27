@@ -115,6 +115,21 @@ test("assistant typography: code, diff highlights, and a table", async ({ page, 
   await prose.screenshot({ path: `${OUT()}/03b-rich-prose.png` });
 });
 
+test("live assistant preview: readable incomplete reply", async ({ page, seedHost }) => {
+  const { pass } = await seedHost({ harness: "codex", caps: "codex-live" });
+  await connect(page, pass);
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  const preview = page.getByRole("region", { name: "Live assistant preview" });
+  await expect(preview).toContainText("live reply");
+  const labelColor = await preview
+    .locator(".live-output-label")
+    .evaluate((el) => getComputedStyle(el).color);
+  const proseColor = await preview.locator(".prose").evaluate((el) => getComputedStyle(el).color);
+  expect(labelColor).not.toBe(proseColor);
+  await preview.scrollIntoViewIfNeeded();
+  await preview.screenshot({ path: `${OUT()}/03c-live-output.png` });
+});
+
 test("Codex: first-class badge, local-input disclosure, and native-only approvals/settings", async ({
   page,
   seedHost,

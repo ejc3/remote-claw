@@ -628,7 +628,7 @@ claimed by this text-only follow-up. Private evidence:
 
 ### Codex live assistant preview
 
-**Current: implemented; native/browser acceptance pending.** Exact Codex 0.154.0/Linux arm64 on
+**Current: implemented; bounded native/browser acceptance passed 2026-09-27.** Exact Codex 0.154.0/Linux arm64 on
 SQLite/libSQL can show one changing parent-assistant Live row before the canonical final. The
 row uses safe Markdown, a bounded text prefix with truncation disclosure, and no action controls.
 It is not a transcript message, delivery receipt, success/idle indication, or full token stream.
@@ -646,10 +646,16 @@ canonical work. Other backends and Codex versions remain final-only.
 The focused boundary tests cover hostile ordering, bounds, replay, generation, expiry, final-ID
 suppression, safe rendering, and blocked-preview/canonical-progress isolation. The existing native
 file-approval regression also caught the integration dispatch overlap on `item/started`; the
-single dispatch now feeds both independent observers. The bounded native sentinel will use one
-no-tools turn in the retained managed thread, two independent phone/desktop viewers, one mid-turn
-reload, final suppression/reload, and light/dark visual inspection. No new native chaos matrix is
-required for deterministic driver/storage cases.
+single dispatch now feeds both independent observers. One uniquely marked 180-line no-tools turn in
+the retained managed thread produced a visible preview in both independent phone-layout/desktop
+Chromium viewers before canonical completion. Desktop reload during generation recovered the growing
+preview (304 then 585 characters). Both viewers then showed exactly one 13,549-character final,
+no remaining preview, and the same final-once/no-preview state after independent reloads. The native
+session/TUI and existing policy were preserved; no tool/settings changes occurred. Private evidence:
+`~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/native-live-output.DJI27J/run-IkQ5BV/`.
+The screenshot-only fixture separately targets the actual Live row in phone/desktop light/dark;
+an intentionally unpinned history viewport is not counted as visual evidence of the preview. No new
+native chaos matrix is required for deterministic driver/storage cases.
 
 The first native attempt completed its final reply but showed no preview because the shared bridge
 capability snapshot omitted `liveAssistant`. The one-field copy is fixed with a deterministic

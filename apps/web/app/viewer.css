@@ -781,7 +781,7 @@ summary:focus-visible,
   margin: 12px 0;
 }
 .live-output-label {
-  color: var(--muted);
+  color: var(--text-dim);
   font-size: 12px;
   line-height: 1.5;
 }

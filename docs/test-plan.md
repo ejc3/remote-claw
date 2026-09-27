@@ -118,6 +118,8 @@ publication. The bridge's actual-announce regression guards preservation of the 
 capability; existing file-approval driver tests guard shared `item/started` dispatch. The
 small real-native two-viewer sentinel checks visible growth before final and reload recovery;
 driver/state hostile cases remain at the cheaper deterministic boundary, not a native chaos matrix.
+The optional existing screenshot harness has one scripted-worker Live row case in all four
+phone/desktop light/dark projects, including a label/body color distinction guard for the CSS token.
 
 The [native file-approval slice](release-finish-line.md#native-file-approvals) adds shared parser tests
 in `harness.test.ts`, Claude client/control tests, and Codex client/`file-approvals.test.ts`/driver tests.
