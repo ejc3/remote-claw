@@ -50,6 +50,7 @@ export const META_KINDS = new Set([
  * than guessing — an unrecognized kind must not be silently routed to the wrong key.
  */
 export function planeForKind(recordKind: string): Plane {
+  if (recordKind === "assistant_preview") return "session"; // replaceable, never transcript ordered
   if (CONTENT_KINDS.has(recordKind)) return "session";
   if (CONTROL_KINDS.has(recordKind)) return "control";
   if (META_KINDS.has(recordKind)) return "meta";

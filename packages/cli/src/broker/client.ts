@@ -15,6 +15,7 @@ import {
   toHex,
 } from "@remote-claw/clawsec";
 import type { SecurityProvider } from "../security/provider.js";
+import { isLiveHeader, LIVE_OUTPUT_PLAINTEXT_LIMIT, readLiveBody } from "./live-output.js";
 import { BrokerOriginError, isLoopbackBrokerOrigin, normalizeBrokerOrigin } from "./origin.js";
 import { planeForKind } from "./protocol.js";
 
@@ -222,6 +223,83 @@ export class BrokerClient {
     const plane = planeForKind(header.recordKind);
     const frame = await this.#provider.sealFrame(plane, header, plaintext);
     return this.#publish(frame, signal);
+  }
+
+  /** Optional replaceable cache; undefined means an older/unsupported broker, false an absent channel. */
+  async putLiveOutput(
+    header: FrameHeader,
+    plaintext: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<boolean | undefined> {
+    if (!isLiveHeader(header) || plaintext.length > LIVE_OUTPUT_PLAINTEXT_LIMIT)
+      throw new Error("invalid preview");
+    const frame = await this.#provider.sealFrame("session", header, plaintext);
+    const result = await this.#liveRequest(
+      header.sessionId,
+      signal,
+      JSON.stringify(encodeFrame(frame)),
+    );
+    if (result === undefined) return undefined;
+    if (!isObject(result) || typeof result.stored !== "boolean")
+      throw new BrokerError(502, "invalid preview response");
+    return result.stored;
+  }
+
+  async getLiveOutput(session: string, signal: AbortSignal): Promise<Frame | null | undefined> {
+    const result = await this.#liveRequest(session, signal);
+    if (result === undefined) return undefined;
+    if (!isObject(result) || !("frame" in result))
+      throw new BrokerError(502, "invalid preview response");
+    if (result.frame === null) return null;
+    try {
+      const frame = decodeFrame(result.frame);
+      if (!isLiveHeader(frame) || frame.ct.length > LIVE_OUTPUT_PLAINTEXT_LIMIT + 16)
+        throw new Error();
+      return frame;
+    } catch {
+      throw new BrokerError(502, "invalid preview response");
+    }
+  }
+
+  async #liveRequest(session: string, signal: AbortSignal, body?: string): Promise<unknown> {
+    return withDeadline(
+      async (attempt) => {
+        const res = await this.#fetch(
+          `${this.#baseUrl}/api/live-output?session=${encodeURIComponent(session)}`,
+          {
+            method: body === undefined ? "GET" : "PUT",
+            redirect: "error",
+            cache: "no-store",
+            signal: attempt,
+            headers: {
+              authorization: this.#authHeader(),
+              "content-type": "application/json",
+              ...this.#backendHeader(),
+              ...this.#bypassHeader(),
+            },
+            ...(body === undefined ? {} : { body }),
+          },
+        );
+        if (res.status === 404 || res.status === 501) {
+          void res.body?.cancel().catch(() => {});
+          return undefined;
+        }
+        if (!res.ok) {
+          void res.body?.cancel().catch(() => {});
+          throw new BrokerError(res.status, "preview unavailable");
+        }
+        try {
+          const text = await readLiveBody(res.body);
+          if (text === null) throw new Error();
+          return JSON.parse(text) as unknown;
+        } catch {
+          throw new BrokerError(502, "invalid preview response");
+        }
+      },
+      5_000,
+      "preview",
+      signal,
+    );
   }
 
   /** POST one sealed frame on its channel (bus for presence lifecycle, else the session channel). */

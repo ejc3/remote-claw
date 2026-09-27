@@ -20,5 +20,6 @@ export {
   type RelayResult,
   type StreamOptions,
 } from "./client.js";
+export * from "./live-output.js";
 export { FrameOrderer } from "./order.js";
 export { CONTENT_KINDS, CONTROL_KINDS, META_KINDS, planeForKind } from "./protocol.js";

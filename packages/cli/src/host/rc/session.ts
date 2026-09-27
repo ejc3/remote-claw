@@ -12,6 +12,7 @@
 // downstream events — preventing duplicate turns on a reconnect race. (§17.2/§17.3.)
 
 import { randomUUID } from "node:crypto";
+import type { LiveItem } from "../../broker/live-output.js";
 import type { SessionSettings } from "../../harness.js";
 
 /** A wake primitive: a promise that resolves on the next `wake()`, then re-arms. The async stand-in
@@ -207,6 +208,14 @@ export class Session {
   workerStatus = "WORKER_STATUS_UNSPECIFIED";
   /** Catalog plus native-confirmed values; permissionMode is independent. */
   sessionSettings: SessionSettings | null = null;
+  /** Replaceable advisory state; never enters retained upstream events or wakes mutation gates. */
+  liveOutput: Readonly<{ revision: number; item: LiveItem | null }> = { revision: 0, item: null };
+  setLiveOutput(item: LiveItem | null): void {
+    this.liveOutput = {
+      revision: this.liveOutput.revision + 1,
+      item: item === null ? null : { ...item },
+    };
+  }
   permissionMode: string | null;
   closed = false;
   /** First local fail-stop/teardown cause. Diagnostic only; never transported or derived from content. */

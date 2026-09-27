@@ -777,6 +777,14 @@ summary:focus-visible,
 .prose.assistant-sub {
   --text-body-size: 15px;
 }
+.live-output {
+  margin: 12px 0;
+}
+.live-output-label {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
 /* Collapse the outer margins of the first/last block so the prose block keeps its own 6/12px frame. */
 .prose > :first-child {
   margin-top: 0;

@@ -15,7 +15,12 @@ import {
   BrokerClient,
   type BrokerClientOptions,
   BrokerStreamRotationError,
+  compareLiveCoordinates,
   FrameOrderer,
+  LIVE_OUTPUT_TTL_MS,
+  type LiveItem,
+  type LiveOutput,
+  parseLiveOutput,
   securityProvider,
 } from "@remote-claw/cli/broker";
 import {
@@ -327,6 +332,7 @@ export function parseCapabilities(raw: unknown, harness?: Harness): Capabilities
     },
     attachments: bool(c.attachments, legacyDefaults),
     ...(typeof c.files === "boolean" ? { files: c.files } : {}),
+    ...(c.liveAssistant === true ? { liveAssistant: true } : {}),
   };
 }
 
@@ -352,6 +358,27 @@ export function parseGit(raw: unknown): GitInfo | null {
     ahead: typeof g.ahead === "number" && Number.isFinite(g.ahead) ? g.ahead : 0,
     behind: typeof g.behind === "number" && Number.isFinite(g.behind) ? g.behind : 0,
   };
+}
+
+/** Rendering suppression is independent of cache arrival order; canonical final always wins. */
+export function visibleLiveItem(
+  output: LiveOutput | null,
+  announce: Announce | undefined,
+  messages: readonly { msgId: string }[],
+  now: number,
+): LiveItem | null {
+  if (
+    !output ||
+    announce?.capabilities?.liveAssistant !== true ||
+    output.incarnation !== announce.incarnation ||
+    output.startedAt !== announce.incarnationStartedAt ||
+    now - output.sentAt >= LIVE_OUTPUT_TTL_MS ||
+    output.sentAt > now + ANNOUNCE_FUTURE_SKEW_MS ||
+    !output.item?.text ||
+    messages.some((m) => m.msgId === output.item?.finalMsgId)
+  )
+    return null;
+  return output.item;
 }
 
 /** A decrypted transcript message from a session's out-stream. */
@@ -460,6 +487,7 @@ export class Viewer {
   readonly #incarnations = new Map<string, string>();
   readonly #incarnationListeners = new Map<string, Set<(incarnation: string) => void>>();
   readonly #durability = new Map<string, boolean>();
+  readonly #liveOutputs = new Map<string, LiveOutput>();
 
   private constructor(
     identity: Identity,
@@ -612,6 +640,7 @@ export class Viewer {
             const sessionId = frame.sessionId;
             if (sessionId === "" || this.#terminalSessions.has(sessionId)) continue;
             this.#terminalSessions.add(sessionId);
+            this.#liveOutputs.delete(sessionId);
             this.#acceptedAnnounces.delete(sessionId);
             this.#incarnations.delete(sessionId);
             this.#durability.delete(sessionId);
@@ -906,6 +935,47 @@ export class Viewer {
     } finally {
       stopIncarnationWatch();
     }
+  }
+
+  /** Advisory latest read; never advances transcript order or grants native/control authority. */
+  async readLiveOutput(
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<LiveOutput | null | undefined> {
+    if (this.#terminalSessions.has(sessionId)) return null;
+    const frame = await this.#client.getLiveOutput(sessionId, signal);
+    if (frame === undefined || frame === null) return frame;
+    if (frame.sessionId !== sessionId || !timingSafeEqual(frame.identityId, this.#identityId))
+      return null;
+    let incoming: LiveOutput | null;
+    try {
+      incoming = parseLiveOutput(td.decode(await this.#client.openFrame(frame)), frame.msgId);
+    } catch {
+      return null;
+    }
+    // Re-read after all awaits: a newer announce/terminal may have arrived during fetch/decryption.
+    const announce = this.#acceptedAnnounces.get(sessionId);
+    if (
+      signal.aborted ||
+      !incoming ||
+      this.#terminalSessions.has(sessionId) ||
+      announce?.capabilities?.liveAssistant !== true ||
+      incoming.incarnation !== announce.incarnation ||
+      incoming.startedAt !== announce.incarnationStartedAt
+    )
+      return null;
+    const previous = this.#liveOutputs.get(sessionId);
+    if (incoming.sentAt > Date.now() + ANNOUNCE_FUTURE_SKEW_MS) return null;
+    const latest =
+      previous &&
+      previous.incarnation === incoming.incarnation &&
+      previous.startedAt === incoming.startedAt &&
+      compareLiveCoordinates(incoming, previous) <= 0
+        ? previous
+        : incoming;
+    this.#liveOutputs.set(sessionId, latest); // retain watermark even after expiry/empty response
+    const age = Date.now() - latest.sentAt;
+    return age < -ANNOUNCE_FUTURE_SKEW_MS || age >= LIVE_OUTPUT_TTL_MS ? null : latest;
   }
 
   /** Ask for history plus fresh settings discovery, including on durable transcript backends. */
