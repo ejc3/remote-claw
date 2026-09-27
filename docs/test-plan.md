@@ -109,6 +109,16 @@ terminal-before-items metadata, no partial final identity, one-shot repair, immu
 approval responsiveness, and abort cleanup. The separate [0.154.0 active-attach run](release-finish-line.md#codex-active-turn-attachment--2026-09-26)
 checks the real metadata/filter APIs and two-viewer reload without adding a timing-heavy CI matrix.
 
+The [native file-approval slice](release-finish-line.md#native-file-approvals) adds shared parser tests
+in `harness.test.ts`, Claude client/control tests, and Codex client/`file-approvals.test.ts`/driver tests.
+These own copied-input bounds, complete-path/content/diff display contracts, unsupported-shape
+rejection, immutable native callbacks, one attempt, native-peer resolution, and history/stream-loss
+non-authority. `apps/web/test/native-file-permissions.test.ts` owns malformed-card fallback and complete
+previews; the existing transcript browser sentinel owns phone/desktop interaction and pending/resolved
+rendering. Actual native acceptance checks provider wire/PTY wiring and the resulting scratch file,
+not a duplicate exhaustive input matrix. Add/delete/multiple-file variants are not live-qualified
+merely because their parser tests pass.
+
 ## 4. Pull-request CI
 
 CI is path-scoped. A change should run the jobs that own its changed surface:
@@ -635,6 +645,17 @@ focused ambiguity regression are future plumbing, not an advertised capability.
 
 Passing one row does not turn an untested row green. Agent collaboration and inference routing are
 orthogonal, so a Bedrock model response does not prove OpenCode/Claude collaboration and vice versa.
+
+### Native Codex task observations
+
+The Codex adapter/client tests own exact-version and thread isolation, bounded path/ID/kind shapes,
+history/live deduplication, changed-coordinate fencing, active-history deferral/repair, and unchanged
+mutation/native-idle authority. Existing full-turn web coverage owns task-row/activity-sheet wiring;
+do not add a second large synthetic task suite. The bounded native acceptance qualifies actual
+0.154.0 started/completed records in paginated history, a live parent TUI turn, two independent
+phone/desktop viewers, and reload. `interacted`/`interrupted` mapping and legacy-history behavior
+are deterministic coverage, not separate native acceptance claims. Details live in the
+[release record](release-finish-line.md#codex-native-task-observations).
 
 ## 9. Release decision
 

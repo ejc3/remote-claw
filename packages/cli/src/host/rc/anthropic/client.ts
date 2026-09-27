@@ -1,3 +1,4 @@
+import { parseNativeFileInput } from "../../../harness.js";
 import { ClaudeOAuthFileCredentialSource } from "./credentials.js";
 import { AnthropicRcError } from "./errors.js";
 import {
@@ -87,11 +88,23 @@ export interface RcBashInput {
   description: string;
 }
 
+export type RcFileToolInput =
+  | { toolName: "Read"; input: { file_path: string } }
+  | { toolName: "Write"; input: { file_path: string; content: string } }
+  | {
+      toolName: "Edit";
+      input: { file_path: string; old_string: string; new_string: string; replace_all: false };
+    };
+
 export type RcCommandResponseInput = {
   uuid: string;
   requestId: string;
   toolUseId: string;
-} & ({ behavior: "allow"; input: RcBashInput } | { behavior: "deny" });
+} & (
+  | { behavior: "allow"; toolName?: "Bash"; input: RcBashInput }
+  | ({ behavior: "allow" } & RcFileToolInput)
+  | { behavior: "deny"; toolName?: "Bash" | RcFileToolInput["toolName"] }
+);
 
 export interface RcPostAck {
   /** Anthropic's canonical event identity; this may differ from the submitted UUID. */
@@ -478,7 +491,7 @@ export class AnthropicRcClient {
     return parsePostAck(raw, operation);
   }
 
-  /** One captured Bash decision; Allow preserves native input and Deny carries no input rewrite. */
+  /** Captured Bash/file decisions; Allow preserves native input, never permission suggestions. */
   async postCommandResponse(
     sessionId: string,
     event: RcCommandResponseInput,
@@ -498,7 +511,12 @@ export class AnthropicRcClient {
               response: {
                 behavior: validated.behavior,
                 toolUseID: validated.toolUseId,
-                tool_name: "Bash",
+                // Native file Deny carries no tool-name/input rewrite. Preserve the existing Bash wire.
+                ...(validated.behavior === "allow" ||
+                validated.toolName === undefined ||
+                validated.toolName === "Bash"
+                  ? { tool_name: validated.toolName ?? "Bash" }
+                  : {}),
                 ...(validated.behavior === "allow"
                   ? { updatedInput: validated.input }
                   : { message: "Denied by user" }),
@@ -1114,15 +1132,37 @@ export function parseBashInput(value: unknown): RcBashInput | null {
   }
 }
 
+/** Only captured file-tool fields, copied before publication and bounded without truncation. */
+export function parseFileInput(toolName: unknown, value: unknown): RcFileToolInput | null {
+  const parsed = parseNativeFileInput(toolName, value);
+  if (parsed === null) return null;
+  switch (parsed.tool) {
+    case "Read":
+      return { toolName: parsed.tool, input: parsed.input };
+    case "Write":
+      return { toolName: parsed.tool, input: parsed.input };
+    case "Edit":
+      return { toolName: parsed.tool, input: parsed.input };
+  }
+}
+
 function validateCommandResponse(
   event: RcCommandResponseInput,
   operation: string,
 ): RcCommandResponseInput {
   try {
     const hasInput = Object.hasOwn(expectRecord(event, operation, "command response"), "input");
+    const hasToolName = Object.hasOwn(event, "toolName");
     const input = controlInputSnapshot(
       event,
-      ["uuid", "requestId", "toolUseId", "behavior", ...(hasInput ? ["input"] : [])],
+      [
+        "uuid",
+        "requestId",
+        "toolUseId",
+        "behavior",
+        ...(hasInput ? ["input"] : []),
+        ...(hasToolName ? ["toolName"] : []),
+      ],
       operation,
     );
     const identity = {
@@ -1130,8 +1170,19 @@ function validateCommandResponse(
       requestId: nonblankControlString(input.requestId, operation, "requestId", 256),
       toolUseId: nonblankControlString(input.toolUseId, operation, "toolUseId", 256),
     };
-    if (input.behavior === "deny" && !hasInput) return { ...identity, behavior: "deny" };
-    const bash = input.behavior === "allow" && hasInput ? parseBashInput(input.input) : null;
+    const toolName = hasToolName ? input.toolName : "Bash";
+    if (toolName !== "Bash" && toolName !== "Read" && toolName !== "Write" && toolName !== "Edit")
+      throw AnthropicRcError.protocol(operation, "unsupported decision tool");
+    if (input.behavior === "deny" && !hasInput)
+      return { ...identity, behavior: "deny", ...(hasToolName ? { toolName } : {}) };
+    if (input.behavior === "allow" && hasInput && toolName !== "Bash") {
+      const file = parseFileInput(toolName, input.input);
+      if (file !== null) return { ...identity, behavior: "allow", ...file };
+    }
+    const bash =
+      input.behavior === "allow" && hasInput && toolName === "Bash"
+        ? parseBashInput(input.input)
+        : null;
     if (bash !== null) return { ...identity, behavior: "allow", input: bash };
   } catch {
     // Invalid caller fields never cross the transport boundary.

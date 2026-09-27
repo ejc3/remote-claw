@@ -1187,6 +1187,25 @@ summary:focus-visible,
   word-break: break-word;
   overflow-wrap: anywhere;
 }
+.native-file-details { min-width: 0; }
+.native-file-path { display: grid; gap: 6px; margin: 14px 0; }
+.native-file-path > span { font-size: 12px; color: var(--text-dim); }
+.native-file-path code { overflow-wrap: anywhere; white-space: pre-wrap; }
+.native-file-note { margin: 12px 0; font-size: 13px; line-height: 1.5; color: var(--text-dim); }
+.native-file-block { margin: 14px 0; }
+.native-file-block h4 { font-size: 13px; margin: 0 0 6px; }
+.native-file-block .code-block {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-inline-start: 3px solid var(--line);
+}
+.native-file-block[data-change="remove"] h4 { color: var(--del-fg); }
+.native-file-block[data-change="add"] h4 { color: var(--add-fg); }
+.native-file-block[data-change="remove"] .code-block { border-inline-start-color: var(--del-fg); }
+.native-file-block[data-change="add"] .code-block { border-inline-start-color: var(--add-fg); }
+
 .perm-actions {
   display: flex;
   gap: 8px;

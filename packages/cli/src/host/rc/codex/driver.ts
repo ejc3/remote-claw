@@ -28,6 +28,7 @@ import {
   isCodexTurnStatus,
   parseCodexStatus,
 } from "./client.js";
+import { CodexFileApprovals } from "./file-approvals.js";
 import { CodexUserQuestions } from "./questions.js";
 import {
   type CodexSettingsUpdate,
@@ -261,12 +262,14 @@ class CodexReconciler {
   #draftCoordinate: string | null = null;
   #lastFinishedCoordinate: string | null = null;
   #overlap = false;
+  readonly tasksSupported: boolean;
 
   constructor(
     session: Session,
     mutations: Map<string, BrowserMutation>,
     uploads: NativeUploadStore,
     previewByteLimit?: number,
+    tasksSupported = false,
     live = false,
   ) {
     this.#session = session;
@@ -274,6 +277,7 @@ class CodexReconciler {
     this.#uploads = uploads;
     this.#previews = new NativePreviewBudget(previewByteLimit);
     this.#live = live;
+    this.tasksSupported = tasksSupported;
   }
 
   #textId(coordinate: string): string {
@@ -379,6 +383,38 @@ class CodexReconciler {
       return;
     }
 
+    if (item.type === "subAgentActivity" && this.tasksSupported) {
+      // These are immutable parent-thread observations, not child state or authority. In particular,
+      // a completed wait call or parent turn cannot establish that a child has finished.
+      const { kind, agentThreadId, agentPath } = item;
+      if (
+        (kind !== "started" &&
+          kind !== "interacted" &&
+          kind !== "interrupted" &&
+          kind !== "completed") ||
+        !isCodexThreadId(agentThreadId) ||
+        typeof agentPath !== "string" ||
+        agentPath === "" ||
+        agentPath.length > 1024 ||
+        /[\p{Cc}\p{Cf}]/u.test(agentPath) ||
+        item.id === "" ||
+        item.id.length > 256 ||
+        turnId === "" ||
+        turnId.length > 256
+      )
+        return;
+      if (!this.#admit(coordinate, JSON.stringify([item.type, kind, agentThreadId, agentPath])))
+        return;
+      this.#session.pushUpstream({
+        type: "system",
+        uuid: coordinate,
+        subtype: kind === "started" ? "task_started" : "task_updated",
+        task_id: agentThreadId,
+        description: `${agentPath} — ${kind}`,
+      });
+      return;
+    }
+
     if (item.type === "commandExecution") {
       // Completed native observations only: no execution, approval response, or inferred running
       // lifecycle. History can include in-progress items, which must not consume their final identity.
@@ -479,6 +515,7 @@ export class CodexDriver implements Driver {
   readonly #browserTurns = new BrowserTurnQueue();
   #lastInterruptedTurn: string | null = null;
   #approvals: CodexCommandApprovals | null = null;
+  #fileApprovals: CodexFileApprovals | null = null;
   #questions: CodexUserQuestions | null = null;
   readonly #uploads: NativeUploadStore;
   readonly #historyRepairs = new HistoryRepairQueue();
@@ -525,6 +562,9 @@ export class CodexDriver implements Driver {
       // Approval/question replay and resolution belong to these exact versions, not the older tuple.
       const nativeVersion = codexAppServerVersion(initialized.userAgent);
       this.#filesSupported = nativeVersion === "0.154.0";
+      if (nativeVersion === "0.154.0") {
+        this.#fileApprovals = new CodexFileApprovals(session, this.#options.threadId, this.#client);
+      }
       if (nativeVersion === "0.153.4" || nativeVersion === "0.154.0") {
         this.#approvals = new CodexCommandApprovals(session, this.#options.threadId, this.#client);
         this.#questions = new CodexUserQuestions(session, this.#options.threadId, this.#client);
@@ -565,6 +605,7 @@ export class CodexDriver implements Driver {
         this.#mutations,
         this.#uploads,
         this.#options.projectionPreviewByteLimit,
+        nativeVersion === "0.154.0",
         this.#filesSupported,
       );
       session.workerStatus = resumed.thread.status.type === "active" ? "running" : "idle";
@@ -611,6 +652,7 @@ export class CodexDriver implements Driver {
         });
       }
     } finally {
+      this.#fileApprovals?.close();
       this.#client.close();
       await bridge.close("Codex companion exited");
       await Promise.allSettled([...terminalTasks, ...(historyRepair ? [historyRepair] : [])]);
@@ -646,7 +688,8 @@ export class CodexDriver implements Driver {
             throw new CodexProjectionError("Codex returned a different turn's repair history");
           continue; // Legacy has no turn-filtered pager; never project other turns during repair.
         }
-        if (entry.item.type === "agentMessage") {
+        if (entry.item.type === "subAgentActivity" && !reconciler.tasksSupported) continue;
+        if (entry.item.type === "agentMessage" || entry.item.type === "subAgentActivity") {
           if (historyMode === "legacy" && !isCodexTurnStatus(entry.turnStatus))
             throw new CodexProjectionError("Codex history has invalid turn status");
           const final =
@@ -733,6 +776,7 @@ export class CodexDriver implements Driver {
   ): void {
     if (inbound.kind === "request") {
       this.#approvals?.observe(inbound.value);
+      this.#fileApprovals?.observe(inbound.value);
       this.#questions?.observe(inbound.value);
       return;
     }
@@ -770,10 +814,16 @@ export class CodexDriver implements Driver {
     }
     if (method === "serverRequest/resolved") {
       this.#approvals?.resolve(params);
+      this.#fileApprovals?.resolve(params);
       this.#questions?.resolve(params);
       return;
     }
+    if (method === "item/started") {
+      this.#fileApprovals?.started(params);
+      return;
+    }
     if (method === "item/completed") {
+      this.#fileApprovals?.completed(params);
       const item = record(params.item);
       if (
         typeof params.turnId !== "string" ||
@@ -836,6 +886,7 @@ export class CodexDriver implements Driver {
       }
       if (event.eventType === "control_response") {
         this.#approvals?.respond(event.payload, signal);
+        this.#fileApprovals?.respond(event.payload, signal);
         this.#questions?.respond(event.payload, signal);
       }
       session.ack(event.eventId);

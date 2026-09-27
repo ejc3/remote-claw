@@ -131,6 +131,21 @@ function coordinate(turnId: string, itemId: string): string {
   return JSON.stringify([turnId, itemId]);
 }
 
+function taskItem(
+  id: string,
+  kind = "started",
+  overrides: Record<string, unknown> = {},
+): CodexThreadItem {
+  return {
+    type: "subAgentActivity",
+    id,
+    kind,
+    agentThreadId: OTHER_THREAD_ID,
+    agentPath: "/root/example",
+    ...overrides,
+  };
+}
+
 function completed(item: CodexThreadItem, threadId = THREAD_ID, turnId = "turn-1"): CodexInbound {
   return {
     kind: "notification",
@@ -167,6 +182,10 @@ class FakeCodexClient implements CodexClient {
     decision: "accept" | "decline" | "cancel";
   }> = [];
   approvalError: Error | null = null;
+  readonly fileApprovalCalls: Array<{
+    request: CodexServerRequest;
+    decision: "accept" | "decline";
+  }> = [];
   readonly questionCalls: Array<{
     request: CodexServerRequest;
     answers: Record<string, { answers: string[] }>;
@@ -320,6 +339,17 @@ class FakeCodexClient implements CodexClient {
 
   drainInbound(): CodexInbound[] {
     return this.buffered.splice(0);
+  }
+
+  respondFileApproval(
+    request: CodexServerRequest,
+    decision: "accept" | "decline",
+    signal: AbortSignal,
+  ): boolean {
+    if (signal.aborted) return false;
+    this.fileApprovalCalls.push({ request, decision });
+    if (this.approvalError !== null) throw this.approvalError;
+    return true;
   }
 
   respondUserInput(
@@ -1656,6 +1686,127 @@ describe("Codex M3a companion", () => {
     controllers.splice(controllers.indexOf(launched.ac), 1);
   });
 
+  it("projects immutable native child observations once, without inferring child or parent state", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    client.resumeResult.thread.status = { type: "active" };
+    client.pages = [{ data: [{ turnId: "turn-1", item: taskItem("start") }], nextCursor: null }];
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    client.emit(completed(taskItem("start")));
+    for (const kind of ["interacted", "interrupted", "completed"])
+      client.emit(completed(taskItem(kind, kind)));
+    client.emit(completed(taskItem("foreign"), OTHER_THREAD_ID));
+    client.emit(
+      completed({ type: "collabAgentToolCall", id: "wait", tool: "wait", status: "completed" }),
+    );
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "item/started",
+        params: { threadId: THREAD_ID, turnId: "turn-1", item: taskItem("unfinished") },
+      },
+    });
+    client.emit(completed(assistantItem("barrier", "Done")));
+    await waitFor(() =>
+      launched.broker.posts.some((p) => p.recordKind === "assistant" && p.text === "Done"),
+    );
+    expect(
+      launched.broker.posts.filter((p) => p.recordKind === "task").map((p) => JSON.parse(p.text)),
+    ).toEqual(
+      ["started", "interacted", "interrupted", "completed"].map((kind) => ({
+        subtype: kind === "started" ? "task_started" : "task_updated",
+        task_id: OTHER_THREAD_ID,
+        description: `/root/example — ${kind}`,
+        tool_use_id: "",
+      })),
+    );
+    expect(launched.session.workerStatus).toBe("running");
+    expect(client.startCalls).toEqual([]);
+    expect(client.approvalCalls).toEqual([]);
+    expect(client.interruptCalls).toEqual([]);
+    // Only displayed semantic fields participate; unrelated optional metadata never gains authority.
+    client.emit(completed(taskItem("completed", "completed", { extra: { untrusted: true } })));
+    client.emit(completed(taskItem("completed", "completed", { agentPath: "/root/changed" })));
+    await expect(within(launched.run)).resolves.toBe(1);
+    expect(client.externalThreadRunning).toBe(true);
+  });
+
+  it.each([
+    "0.151.0",
+    "0.153.4",
+    "0.154.0",
+  ])("bounds task shapes and preserves exact-version qualification (%s)", async (version) => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = version;
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    for (const [index, override] of [
+      { kind: "failed" },
+      { agentThreadId: "invalid" },
+      { agentPath: "" },
+      { agentPath: "x".repeat(1025) },
+      { agentPath: "spoof\u202Ename" },
+      { agentPath: "line\nnext" },
+      { id: "" },
+      { id: "x".repeat(257) },
+    ].entries())
+      client.emit(completed(taskItem(`bad-${index}`, "started", override)));
+    client.emit(completed(taskItem("valid")));
+    client.emit(completed(assistantItem("barrier", "Done")));
+    await waitFor(() =>
+      launched.broker.posts.some((p) => p.recordKind === "assistant" && p.text === "Done"),
+    );
+    expect(launched.broker.posts.filter((p) => p.recordKind === "task")).toHaveLength(
+      version === "0.154.0" ? 1 : 0,
+    );
+    expect(launched.session.closed).toBe(false);
+    await stop(launched.ac, launched.run);
+  });
+
+  it.each([
+    false,
+    true,
+  ])("defers active task history then repairs without duplicating live observations (legacy=%s)", async (legacy) => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    client.resumeResult.thread.historyMode = legacy ? "legacy" : "paginated";
+    client.metadataPages = [{ data: [{ id: "turn-1", status: "inProgress" }], nextCursor: null }];
+    const data = [{ turnId: "turn-1", item: taskItem("start"), turnStatus: "inProgress" as const }];
+    client.pages = client.turnPages = [{ data, nextCursor: null }];
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    expect(launched.broker.posts.filter((p) => p.recordKind === "task")).toHaveLength(0);
+    client.emit(completed(taskItem("end", "completed")));
+    const repaired = [
+      {
+        data: [taskItem("start"), taskItem("end", "completed")].map((item) => ({
+          turnId: "turn-1",
+          item,
+          turnStatus: "completed" as const,
+        })),
+        nextCursor: null,
+      },
+    ];
+    client.turnPages = repaired;
+    client.repairPages.set("turn-1", repaired);
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "turn/completed",
+        params: { threadId: THREAD_ID, turn: { id: "turn-1", status: "completed" } },
+      },
+    });
+    await waitFor(() => launched.broker.posts.filter((p) => p.recordKind === "task").length === 2);
+    expect(
+      launched.broker.posts
+        .filter((p) => p.recordKind === "task")
+        .map((p) => JSON.parse(p.text).description),
+    ).toEqual(["/root/example — completed", "/root/example — started"]);
+    expect(client.startCalls).toEqual([]);
+    await stop(launched.ac, launched.run);
+  });
+
   it("projects completed commands once through the bounded tool relay in native item order", async () => {
     const client = new FakeCodexClient();
     const success = commandItem("read");
@@ -2395,6 +2546,90 @@ describe("Codex M3a companion", () => {
     ]);
     expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("data:image");
     expect(JSON.stringify(upstream(launched.session, "user"))).not.toContain("/not-readable.png");
+    await stop(launched.ac, launched.run);
+  });
+
+  it.each([
+    { version: "0.154.0", source: "fresh", allowed: true },
+    { version: "0.153.4", source: "fresh", allowed: false },
+    { version: "0.154.0", source: "history", allowed: false },
+  ])("projects file approvals only for $version $source item/request pairs", async ({
+    version,
+    source,
+    allowed,
+  }) => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = version;
+    client.resumeResult.thread.status = { type: "active" };
+    const item = {
+      type: "fileChange",
+      id: "file-item",
+      status: "inProgress",
+      changes: [
+        {
+          path: "/scratch.txt",
+          kind: { type: "update", move_path: null },
+          diff: "@@ -1 +1 @@\n-before\n+after\n",
+        },
+      ],
+    };
+    const native: CodexServerRequest = {
+      id: 84,
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: THREAD_ID,
+        turnId: "file-turn",
+        itemId: item.id,
+        startedAtMs: 1001,
+        reason: null,
+        grantRoot: null,
+      },
+    };
+    if (source === "history")
+      client.pages = [{ data: [{ turnId: "file-turn", item }], nextCursor: null }];
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    if (source === "fresh")
+      client.emit({
+        kind: "notification",
+        value: {
+          method: "item/started",
+          params: { threadId: THREAD_ID, turnId: "file-turn", item, startedAtMs: 1000 },
+        },
+      });
+    client.emit({ kind: "request", value: native });
+    client.emit(completed(assistantItem("file-observation-barrier", "file observation processed")));
+    await waitFor(() => upstream(launched.session, "assistant").length === 1);
+    expect(upstream(launched.session, "control_request")).toHaveLength(allowed ? 1 : 0);
+    if (allowed) {
+      await waitFor(() =>
+        launched.broker.posts.some((post) => post.recordKind === "permission_request"),
+      );
+      const viewerId = approvalViewerId(launched.session);
+      launched.broker.pushInbound(
+        approvalFrame(launched.identityId, launched.broker.sessionId, viewerId, "allow"),
+      );
+      await waitFor(() => client.fileApprovalCalls.length === 1);
+      expect(client.fileApprovalCalls).toEqual([{ request: native, decision: "accept" }]);
+      expect(client.approvalCalls).toHaveLength(0);
+      expect(client.startCalls).toHaveLength(0);
+      expect(launched.session.workerStatus).toBe("running");
+      client.emit({
+        kind: "notification",
+        value: { method: "serverRequest/resolved", params: { threadId: THREAD_ID, requestId: 84 } },
+      });
+      await waitFor(() => upstream(launched.session, "control_cancel_request").length === 1);
+      launched.broker.pushInbound(
+        approvalFrame(
+          launched.identityId,
+          launched.broker.sessionId,
+          viewerId,
+          "deny",
+          "other-peer-file",
+        ),
+      );
+      expect(client.fileApprovalCalls).toHaveLength(1);
+    } else expect(client.fileApprovalCalls).toHaveLength(0);
     await stop(launched.ac, launched.run);
   });
 

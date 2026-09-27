@@ -96,7 +96,7 @@ export function isCodexTurnStatus(value: unknown): value is CodexTurnStatus {
   );
 }
 
-/** Only explicitly selected, observed command approvals and supported native input forms can receive
+/** Only explicitly selected, observed approvals and supported native input forms can receive
  * responses. There is no generic result/error or policy-changing response API. */
 export interface CodexClient {
   initialize(signal: AbortSignal): Promise<CodexInitializeResult>;
@@ -132,6 +132,11 @@ export interface CodexClient {
   respondCommandApproval(
     request: CodexServerRequest,
     decision: "accept" | "decline" | "cancel",
+    signal: AbortSignal,
+  ): boolean;
+  respondFileApproval(
+    request: CodexServerRequest,
+    decision: "accept" | "decline",
     signal: AbortSignal,
   ): boolean;
   respondUserInput(
@@ -514,7 +519,8 @@ export class CodexAppServerClient implements CodexClient {
       if (
         item.type === "userMessage" ||
         item.type === "agentMessage" ||
-        item.type === "commandExecution"
+        item.type === "commandExecution" ||
+        item.type === "subAgentActivity"
       ) {
         data.push({ turnId: entry.turnId, item: item as CodexThreadItem });
       }
@@ -566,7 +572,8 @@ export class CodexAppServerClient implements CodexClient {
         if (
           item.type === "userMessage" ||
           item.type === "agentMessage" ||
-          item.type === "commandExecution"
+          item.type === "commandExecution" ||
+          item.type === "subAgentActivity"
         ) {
           data.push({ turnId: turn.id, item: item as CodexThreadItem, turnStatus: turn.status });
         }
@@ -678,6 +685,20 @@ export class CodexAppServerClient implements CodexClient {
     });
   }
 
+  /** Exact one-shot file decisions only; the adapter owns the fresh, fully displayed patch binding. */
+  respondFileApproval(
+    request: CodexServerRequest,
+    decision: "accept" | "decline",
+    signal: AbortSignal,
+  ): boolean {
+    return this.#respondToRequest(request, "item/fileChange/requestApproval", signal, () => {
+      if (decision !== "accept" && decision !== "decline") {
+        throw new CodexAppServerError("unsupported Codex file approval response");
+      }
+      return { decision };
+    });
+  }
+
   /** The host form adapter validates offered choices. Copy only bounded answer envelopes here;
    * extra viewer fields cannot become native configuration or a different response family. */
   respondUserInput(
@@ -710,7 +731,10 @@ export class CodexAppServerClient implements CodexClient {
 
   #respondToRequest(
     request: CodexServerRequest,
-    method: "item/commandExecution/requestApproval" | "item/tool/requestUserInput",
+    method:
+      | "item/commandExecution/requestApproval"
+      | "item/fileChange/requestApproval"
+      | "item/tool/requestUserInput",
     signal: AbortSignal,
     result: () => Record<string, unknown>,
   ): boolean {
@@ -722,7 +746,12 @@ export class CodexAppServerClient implements CodexClient {
     ) {
       return false;
     }
-    const label = method === "item/tool/requestUserInput" ? "user input" : "command approval";
+    const label =
+      method === "item/tool/requestUserInput"
+        ? "user input"
+        : method === "item/fileChange/requestApproval"
+          ? "file approval"
+          : "command approval";
     if (
       this.#serverRequests.get(request.id)?.fingerprint !== requestFingerprint(request) ||
       request.method !== method

@@ -673,6 +673,103 @@ describe("Codex app-server boundary", () => {
     client.close();
   });
 
+  it.each([
+    "accept",
+    "decline",
+  ] as const)("sends only the one-shot %s result for an owned file request", async (decision) => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    socket.emit({
+      id: 84,
+      method: "item/fileChange/requestApproval",
+      params: {
+        threadId: THREAD_ID,
+        turnId: "file-turn",
+        itemId: "file-item",
+        startedAtMs: 1000,
+        reason: null,
+        grantRoot: null,
+      },
+    });
+    const request = takeServerRequest(client);
+    expect(client.respondFileApproval(structuredClone(request), decision, signal)).toBe(false);
+    expect(() =>
+      client.respondFileApproval(request, "acceptForSession" as "accept", signal),
+    ).toThrow("unsupported Codex file approval response");
+    expect(() => client.respondFileApproval(request, "cancel" as "decline", signal)).toThrow(
+      "unsupported Codex file approval response",
+    );
+    expect(client.respondFileApproval(request, decision, signal)).toBe(true);
+    expect(socket.sent.at(-1)).toEqual({ id: 84, result: { decision } });
+    expect(client.respondFileApproval(request, decision, signal)).toBe(false);
+    client.close();
+  });
+
+  it("binds file responses to the original request family and immutable parameters", async () => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    socket.emit(commandApproval());
+    const command = takeServerRequest(client);
+    expect(() => client.respondFileApproval(command, "accept", signal)).toThrow(
+      "unsupported Codex file approval response",
+    );
+    socket.emit({
+      id: 84,
+      method: "item/fileChange/requestApproval",
+      params: { threadId: THREAD_ID, grantRoot: null },
+    });
+    const patch = takeServerRequest(client);
+    patch.params.grantRoot = "/";
+    expect(() => client.respondFileApproval(patch, "accept", signal)).toThrow(
+      "unsupported Codex file approval response",
+    );
+    expect(socket.sent.some((row) => "result" in row)).toBe(false);
+    client.close();
+  });
+
+  it.each([
+    "resolved",
+    "ambiguous",
+  ])("never retries a file decision after native %s", async (state) => {
+    const socket = new FakeSocket();
+    const client = new CodexAppServerClient("unix://", () => socket);
+    const signal = new AbortController().signal;
+    await client.initialize(signal);
+    const source = {
+      id: 84,
+      method: "item/fileChange/requestApproval",
+      params: { threadId: THREAD_ID, grantRoot: null },
+    };
+    socket.emit(source);
+    const patch = takeServerRequest(client);
+    if (state === "resolved")
+      socket.emit({
+        method: "serverRequest/resolved",
+        params: { threadId: THREAD_ID, requestId: 84 },
+      });
+    else {
+      const send = socket.send.bind(socket);
+      socket.send = (data) => {
+        send(data);
+        throw Error("private detail");
+      };
+      expect(() => client.respondFileApproval(patch, "decline", signal)).toThrow(
+        "Codex file approval submission failed",
+      );
+    }
+    expect(client.respondFileApproval(patch, "accept", signal)).toBe(false);
+    socket.emit(source);
+    expect(client.drainInbound().some((row) => row.kind === "request")).toBe(false);
+    expect(socket.sent.filter((row) => "result" in row)).toHaveLength(
+      state === "ambiguous" ? 1 : 0,
+    );
+    client.close();
+  });
+
   it("sends a bounded native question response through the same one-shot callback ownership", async () => {
     const socket = new FakeSocket();
     const client = new CodexAppServerClient("unix://", () => socket);
@@ -1139,6 +1236,7 @@ describe("Codex app-server boundary", () => {
                 exitCode: 0,
               },
               { type: "mcpToolCall", id: "tool-hidden" },
+              { type: "subAgentActivity", id: "task-visible" },
               { type: "userMessage", id: "user-legacy", content: [{ type: "text", text: "hi" }] },
               { type: "agentMessage", id: "agent-legacy", text: "hello" },
             ],
@@ -1157,6 +1255,7 @@ describe("Codex app-server boundary", () => {
     expect(page).toMatchObject({
       data: [
         { turnId: "turn-legacy", item: { id: "command-visible", type: "commandExecution" } },
+        { turnId: "turn-legacy", item: { id: "task-visible", type: "subAgentActivity" } },
         { turnId: "turn-legacy", item: { id: "user-legacy" } },
         { turnId: "turn-legacy", turnStatus: "completed", item: { id: "agent-legacy" } },
       ],
@@ -1241,6 +1340,7 @@ describe("Codex app-server boundary", () => {
             },
           },
           { turnId: "turn", item: { type: "mcpToolCall", id: "unsupported" } },
+          { turnId: "turn", item: { type: "subAgentActivity", id: "task" } },
         ],
         nextCursor: null,
       });
@@ -1251,6 +1351,7 @@ describe("Codex app-server boundary", () => {
     const page = await client.listItems(THREAD_ID, undefined, signal);
     expect(page.data).toMatchObject([
       { turnId: "turn", item: { type: "commandExecution", id: "command" } },
+      { turnId: "turn", item: { type: "subAgentActivity", id: "task" } },
     ]);
     expect(socket.sent.at(-1)?.params).toEqual({
       threadId: THREAD_ID,

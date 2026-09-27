@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AnthropicRcClient,
   parseBashInput,
+  parseFileInput,
   type RcCommandResponseInput,
   type RcInterruptEventInput,
   type RcQuestionResponseInput,
@@ -820,6 +821,100 @@ describe("AnthropicRcClient.postCommandResponse", () => {
     behavior === "allow"
       ? { ...identity, behavior, input: { ...bash } }
       : { ...identity, behavior };
+
+  const fileInputs = [
+    { toolName: "Read", input: { file_path: "/tmp/owned/read.txt" } },
+    { toolName: "Write", input: { file_path: "/tmp/owned/write.txt", content: "color=blue\n" } },
+    {
+      toolName: "Edit",
+      input: {
+        file_path: "/tmp/owned/write.txt",
+        old_string: "color=blue",
+        new_string: "color=green",
+        replace_all: false,
+      },
+    },
+  ] as const;
+
+  it.each(
+    fileInputs,
+  )("posts captured $toolName Allow/Deny without policy or rewritten input", async (file) => {
+    for (const behavior of ["allow", "deny"] as const) {
+      const transport = new FakeTransport(
+        json({ results: [{ event_id: "evt_file", sequence_num: "31", duplicate: false }] }),
+      );
+      await new AnthropicRcClient({ transport }).postCommandResponse("cse_file", {
+        ...identity,
+        ...(behavior === "allow" ? { behavior, ...file } : { behavior, toolName: file.toolName }),
+      });
+      expect(transport.requests).toHaveLength(1);
+      expect(transport.requests[0]).toMatchObject({
+        retryAfter401: false,
+        path: "/v1/code/sessions/cse_file/events",
+      });
+      expect(JSON.parse(transport.requests[0]?.body ?? "{}")).toEqual({
+        events: [
+          {
+            payload: {
+              type: "control_response",
+              uuid: identity.uuid,
+              response: {
+                subtype: "success",
+                request_id: identity.requestId,
+                response: {
+                  behavior,
+                  toolUseID: identity.toolUseId,
+                  ...(behavior === "allow" ? { tool_name: file.toolName } : {}),
+                  ...(behavior === "allow"
+                    ? { updatedInput: file.input }
+                    : { message: "Denied by user" }),
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
+  });
+
+  it("uses the shared file parser and rejects extensions before native dispatch", async () => {
+    for (const file of fileInputs) {
+      const parsed = parseFileInput(file.toolName, file.input);
+      expect(parsed).toEqual(file);
+      expect(parsed?.input).not.toBe(file.input);
+    }
+    const invalid = [
+      { toolName: "Write", input: { ...fileInputs[1].input, content: "é".repeat(16_384) } },
+      { toolName: "Read", input: { ...fileInputs[0].input, offset: 1 } },
+      { toolName: "Edit", input: { ...fileInputs[2].input, replace_all: true } },
+      { toolName: "Edit", input: { ...fileInputs[2].input, additional: "unrendered" } },
+      { toolName: "NotebookEdit", input: fileInputs[2].input },
+      { toolName: undefined, input: fileInputs[0].input },
+    ];
+    const transport = new FakeTransport();
+    const client = new AnthropicRcClient({ transport });
+    for (const file of invalid) {
+      expect(parseFileInput(file.toolName, file.input)).toBeNull();
+      await expect(
+        client.postCommandResponse("cse_file", {
+          ...identity,
+          behavior: "allow",
+          ...file,
+        } as RcCommandResponseInput),
+      ).rejects.toMatchObject({ outcomeUnknown: false });
+    }
+    for (const file of fileInputs)
+      for (const policy of ["updatedPermissions", "permission_suggestions"])
+        await expect(
+          client.postCommandResponse("cse_file", {
+            ...identity,
+            behavior: "allow",
+            ...file,
+            [policy]: [],
+          } as RcCommandResponseInput),
+        ).rejects.toMatchObject({ outcomeUnknown: false });
+    expect(transport.requests).toEqual([]);
+  });
 
   it.each(["allow", "deny"] as const)("posts the exact captured %s body once", async (behavior) => {
     const transport = new FakeTransport(
