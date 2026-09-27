@@ -667,6 +667,17 @@ phone/desktop viewers, and reload. `interacted`/`interrupted` mapping and legacy
 are deterministic coverage, not separate native acceptance claims. Details live in the
 [release record](release-finish-line.md#codex-native-task-observations).
 
+### Native Claude task observations
+
+The Claude adapter tests own worker/session binding, bounded copied labels, omitted private task
+fields, history/live deduplication, changed-event fencing, ignored counters, and unchanged control/status
+authority. Existing browser task-row/activity-sheet coverage owns rendering. The bounded acceptance
+uses actual 2.1.237 task-start/completion wire records and a fresh companion recovering that exact
+native history into two phone/desktop viewers, including reload and inspected light/dark screenshots.
+It sends no extra native prompt and does not claim a simultaneous new live child through the companion,
+failed/cancelled native examples, child controls, or task-success/idle semantics. See the
+[release record](release-finish-line.md#claude-native-task-observations).
+
 ## 9. Release decision
 
 After the candidate bytes are frozen:

@@ -250,6 +250,23 @@ failure closes only that remote-claw projection. In launch form the transparent 
 Claude child remain running; in attach-only form the companion exits nonzero while the independently
 owned native session remains live.
 
+#### Claude native task observations
+
+Exact Claude 2.1.237/Linux arm64 additionally copies worker `system/task_started` and
+`system/task_notification` into the existing encrypted `task` rows. Both the event and payload must
+be `system`; payload `session_id` must exactly match the attached native session. Required nonblank
+`task_id` and `tool_use_id` are capped at 256 characters, start `description` at 4,096, and notification
+`status` at 128. These fields reject Unicode control/format characters. Missing, malformed, oversized,
+or foreign-session fields are not projected. Extra fields are never copied into these task rows.
+
+Start rows use the copied description. Notifications display the task ID followed by literal
+`reported <native status>`; status is a bounded native label, not an invented enum, child success,
+parent idle, or control authority. Task prompts, output paths, summaries, usage, and other metadata are
+not forwarded through this mapping. `task_updated` counters/patches and `background_tasks_changed`
+are ignored. There is no reconstructed task list or child subscription. Existing provider event
+identity/sequence fences own history/live overlap, changed-byte rejection, and ordering; no new state
+is added. [Bounded acceptance](release-finish-line.md#claude-native-task-observations) is separate from M1.
+
 ### 4.3 Pinned OpenCode text/interrupt/status companion
 
 The supported OpenCode path requires exact version 1.17.5 on Linux arm64, the pinned

@@ -250,6 +250,8 @@ replay but are not durable exactly-once claims.
 The Claude-native companion sends non-empty, non-slash text through one serialized provider writer with
 a stable UUID. It waits for the canonical provider history/SSE event before publishing the ordered user
 row. Any rejected or outcome-unknown POST permanently fences the projection and is not retried.
+Bounded [worker task observations](protocol.md#claude-native-task-observations) reuse existing task
+rows and provider identity/sequence fences, without child controls, task state, or idle inference.
 Image/file groups are prepared as private, exclusive upload files and submitted as references in that same
 native text. Correlation keeps the full text; display alone strips the generated reference-group form,
 leaving names/caption and bounded available image previews on live/history replay. Raw Session

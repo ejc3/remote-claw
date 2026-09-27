@@ -353,6 +353,12 @@ class NativeReconciler {
       return;
     }
 
+    if (event.eventType === "system" && event.source === "worker") {
+      const task = providerTask(event, this.#nativeId);
+      if (task !== null) this.#session.pushUpstream(task);
+      return;
+    }
+
     if (event.eventType === "result" && event.source === "worker") {
       const result = event.payload.result;
       if (event.payload.type !== "result" || typeof result !== "string") {
@@ -918,6 +924,38 @@ function providerUserUuid(event: AnthropicRcEvent): string | null {
     uuid !== ""
     ? uuid
     : null;
+}
+
+/** Copy only pinned task observations, never child prompts/output or state/control authority. */
+function providerTask(event: AnthropicRcEvent, nativeId: string): Record<string, unknown> | null {
+  const p = event.payload;
+  const label = (value: unknown, max: number): value is string =>
+    typeof value === "string" &&
+    value.trim() !== "" &&
+    value.length <= max &&
+    !/[\p{Cc}\p{Cf}]/u.test(value);
+  if (
+    p.type !== "system" ||
+    p.session_id !== nativeId ||
+    !label(p.task_id, 256) ||
+    !label(p.tool_use_id, 256)
+  )
+    return null;
+  const description =
+    p.subtype === "task_started" && label(p.description, 4096)
+      ? p.description
+      : p.subtype === "task_notification" && label(p.status, 128)
+        ? `${p.task_id} — reported ${p.status}`
+        : null;
+  if (description === null) return null;
+  return {
+    type: "system",
+    uuid: event.eventId,
+    subtype: p.subtype,
+    task_id: p.task_id,
+    tool_use_id: p.tool_use_id,
+    description,
+  };
 }
 
 function providerUser(

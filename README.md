@@ -293,7 +293,9 @@ from historical M1 in the [release roadmap](docs/release-finish-line.md).
 
 Validated worker tool calls and textual tool results also appear as read-only activity,
 with failures kept visible in the transcript and existing output truncation applied. This does not
-infer running state or background-task lifecycle. Fresh native forms of 1–4 distinct questions support
+infer running state or background-task lifecycle. Bounded native
+[task-start/status observations](docs/protocol.md#claude-native-task-observations) also appear in the
+existing activity details, without child controls or inferred success. Fresh native forms of 1–4 distinct questions support
 single/multiple choices, bounded Other text, and per-question Skip; supported Bash and bounded
 Read/Write/Edit approvals can also be answered here. Unsupported permissions/forms stay in Claude. Bash Allow copies
 the native command/description unchanged; Deny rejects that command. The card explicitly notes that
