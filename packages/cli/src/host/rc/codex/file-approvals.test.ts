@@ -158,6 +158,8 @@ describe("Codex fresh file approvals", () => {
     },
     { label: "missing diff", change: { ...CHANGE, diff: undefined } },
     { label: "empty update", change: { ...CHANGE, diff: "" } },
+    { label: "bidi-control diff", change: { ...CHANGE, diff: "+safe\u202Ehidden" } },
+    { label: "zero-width diff", change: { ...CHANGE, diff: "+safe\u200Bhidden" } },
     { label: "oversized multibyte diff", change: { ...CHANGE, diff: "界".repeat(12_000) } },
   ])("never truncates or authorizes $label", ({ change }) => {
     const s = setup();

@@ -650,7 +650,9 @@ contents or Edit replacement are valid. Read offsets/pages and other fields, rep
 tools, and malformed or oversized inputs stay native-owned.
 
 The serialized copied input is at most 32 KiB UTF-8; paths are nonblank, at most 4,096 characters,
-and contain no Unicode control/format characters. No truncation creates an actionable request.
+and contain no Unicode control/format characters. Write content and both Edit strings reject Unicode
+control/format characters except ordinary TAB/LF/CR; these unsupported requests stay native-owned.
+This bounds hidden-control consent risk, not all visually confusable text. No truncation creates an actionable request.
 The canonical card uses `nativeFile:true` and shows the full path plus complete Write contents or
 Edit before/after text. Write explicitly warns about creation/overwrite. Malformed file cards have
 no generic Allow fallback. Allow once echoes only the retained native input and tool identity;
@@ -704,6 +706,8 @@ Versions 0.151.0 and 0.153.4 keep all file approvals native-owned.
 The `nativePatch:true` card contains 1–20 distinct absolute paths and complete native add/delete/update
 diff bodies. Paths are at most 4,096 characters with no Unicode control/format characters; the full
 serialized patch body (`{changes}`, excluding the `nativePatch` marker) is at most 32 KiB UTF-8.
+Diff bodies reject Unicode control/format characters except ordinary TAB/LF/CR, leaving those requests
+native-owned rather than rendering hidden controls in consent UI. This is not general confusable-text detection.
 Update diffs must be nonempty; empty add/delete bodies display “(empty diff),” not a claim about
 file size. There is no truncation or move approval. Add/delete and
 multiple-file shapes are implemented and deterministic-test-covered, not implicitly live-qualified.

@@ -283,6 +283,8 @@ describe("Claude native controls", () => {
 
   it.each([
     { input: { content: "é".repeat(16_384) } },
+    { input: { content: "safe\u202Ehidden" } },
+    { input: { content: "safe\u200Bhidden" } },
     { input: { unknown: "unreviewed" } },
     { request: { display_name: "Different action" } },
     { request: { description: "" } },

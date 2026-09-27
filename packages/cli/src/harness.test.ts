@@ -79,6 +79,36 @@ describe("shared harness contract", () => {
     ).toBe("Write");
   });
 
+  it("keeps hidden controls out of consent bodies while preserving ordinary text whitespace", () => {
+    for (const control of ["\u202e", "\u2066", "\u200b", "\ufeff", "\0", "\b", "\x1b", "\u0085"]) {
+      const text = `before${control}after`;
+      expect(parseNativeFileInput("Write", { file_path: "/tmp/a", content: text })).toBeNull();
+      for (const field of ["old_string", "new_string"]) {
+        expect(
+          parseNativeFileInput("Edit", {
+            file_path: "/tmp/a",
+            old_string: "before",
+            new_string: "after",
+            replace_all: false,
+            [field]: text,
+          }),
+        ).toBeNull();
+      }
+      expect(
+        parseNativePatchInput({ changes: [{ path: "/tmp/a", operation: "update", diff: text }] }),
+      ).toBeNull();
+    }
+    const text = "\tordinary\r\ntext\n";
+    expect(parseNativeFileInput("Write", { file_path: "/tmp/a", content: text })?.input).toEqual({
+      file_path: "/tmp/a",
+      content: text,
+    });
+    const edit = { file_path: "/tmp/a", old_string: text, new_string: text, replace_all: false };
+    expect(parseNativeFileInput("Edit", edit)?.input).toEqual(edit);
+    const patch = { changes: [{ path: "/tmp/a", operation: "update", diff: text }] };
+    expect(parseNativePatchInput(patch)).toEqual(patch);
+  });
+
   it("accepts exactly one bounded settings selection without permission fields", () => {
     for (const change of [
       { model: "native-model" },

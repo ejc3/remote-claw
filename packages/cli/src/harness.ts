@@ -20,6 +20,11 @@ export type NativeFileInput =
       input: { file_path: string; old_string: string; new_string: string; replace_all: false };
     };
 
+/** Preserve ordinary text-file whitespace; hidden controls must stay native-owned, not in consent UI. */
+function hasHiddenFileControls(text: string): boolean {
+  return /[\p{Cc}\p{Cf}]/u.test(text.replace(/[\t\n\r]/g, ""));
+}
+
 export function parseNativeFileInput(tool: unknown, raw: unknown): NativeFileInput | null {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
   const input = raw as Record<string, unknown>;
@@ -39,7 +44,8 @@ export function parseNativeFileInput(tool: unknown, raw: unknown): NativeFileInp
   } else if (
     tool === "Write" &&
     exact(["file_path", "content"]) &&
-    typeof input.content === "string"
+    typeof input.content === "string" &&
+    !hasHiddenFileControls(input.content)
   ) {
     result = { tool, input: { file_path: input.file_path, content: input.content } };
   } else if (
@@ -47,7 +53,9 @@ export function parseNativeFileInput(tool: unknown, raw: unknown): NativeFileInp
     exact(["file_path", "old_string", "new_string", "replace_all"]) &&
     typeof input.old_string === "string" &&
     input.old_string !== "" &&
+    !hasHiddenFileControls(input.old_string) &&
     typeof input.new_string === "string" &&
+    !hasHiddenFileControls(input.new_string) &&
     input.replace_all === false
   ) {
     result = {
@@ -98,6 +106,7 @@ export function parseNativePatchInput(raw: unknown): NativePatchInput | null {
         change.operation !== "delete" &&
         change.operation !== "update") ||
       typeof change.diff !== "string" ||
+      hasHiddenFileControls(change.diff) ||
       (change.operation === "update" && change.diff === "")
     )
       return null;

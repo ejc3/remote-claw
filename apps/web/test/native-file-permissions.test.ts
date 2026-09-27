@@ -147,4 +147,33 @@ describe("one-time native file approvals", () => {
     const readonly = render("Read", input, { canGrant: false });
     expect(readonly.match(/<button[^>]*disabled/g)).toHaveLength(2);
   });
+
+  it("never offers approval for hidden control-bearing content or diffs", () => {
+    for (const control of ["\u202e", "\u200b", "\x1b"]) {
+      const text = `safe-looking${control}changed`;
+      for (const [tool, input, agent] of [
+        ["Write", { nativeFile: true, file_path: "/tmp/a", content: text }, "Claude"],
+        [
+          "Edit",
+          {
+            nativeFile: true,
+            file_path: "/tmp/a",
+            old_string: "before",
+            new_string: text,
+            replace_all: false,
+          },
+          "Claude",
+        ],
+        [
+          "Patch",
+          { nativePatch: true, changes: [{ path: "/tmp/a", operation: "update", diff: text }] },
+          "Codex",
+        ],
+      ] as const) {
+        const html = render(tool, input, { agent });
+        expect(html).toContain("File approval unavailable here");
+        expect(html).not.toContain("<button");
+      }
+    }
+  });
 });

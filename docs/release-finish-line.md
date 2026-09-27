@@ -370,6 +370,8 @@ or patch bodies are capped at 32 KiB serialized UTF-8; Codex patches have at mos
 Paths are bounded to 4,096 characters without Unicode control/format characters. Claude Read accepts
 only `file_path`, Write includes full content, and Edit requires `replace_all:false` with complete
 before/after strings. Codex requires a fresh matching item/request pair and rejects moves or grant roots.
+Write/Edit strings and patch diffs containing Unicode control/format characters other than TAB/LF/CR
+stay native-owned; this prevents hidden-control approval previews, not every visual text ambiguity.
 Oversized/unfamiliar requests remain native-owned. No truncated or malformed card can become generic
 Allow. One-shot decisions cannot rewrite input or grant folder/session permissions, and history cannot
 restore authority. Native peers retain decision ownership.
