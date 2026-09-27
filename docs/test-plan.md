@@ -646,6 +646,17 @@ focused ambiguity regression are future plumbing, not an advertised capability.
 Passing one row does not turn an untested row green. Agent collaboration and inference routing are
 orthogonal, so a Bedrock model response does not prove OpenCode/Claude collaboration and vice versa.
 
+### Native Codex task observations
+
+The Codex adapter/client tests own exact-version and thread isolation, bounded path/ID/kind shapes,
+history/live deduplication, changed-coordinate fencing, active-history deferral/repair, and unchanged
+mutation/native-idle authority. Existing full-turn web coverage owns task-row/activity-sheet wiring;
+do not add a second large synthetic task suite. The bounded native acceptance qualifies actual
+0.154.0 started/completed records in paginated history, a live parent TUI turn, two independent
+phone/desktop viewers, and reload. `interacted`/`interrupted` mapping and legacy-history behavior
+are deterministic coverage, not separate native acceptance claims. Details live in the
+[release record](release-finish-line.md#codex-native-task-observations).
+
 ## 9. Release decision
 
 After the candidate bytes are frozen:

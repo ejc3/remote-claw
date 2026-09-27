@@ -293,7 +293,7 @@ discovers/selects/creates/deletes/stops a thread, or owns the local TUI.
 `legacy` uses `thread/turns/list` with `itemsView:"full"`. Both request one item/turn per page, avoiding
 combined inline-image groups that exceed a transport frame; the raw scan is capped at 100,000 pages.
 Each reader validates the native envelope and
-retains `userMessage`, `agentMessage`, and `commandExecution`; the projection validates supported
+retains `userMessage`, `agentMessage`, `commandExecution`, and `subAgentActivity`; the projection validates supported
 completed shapes before the shared 10,000 native-item cap. It drains notifications buffered during
 history before readiness. Page count and cursor-cycle bounds still fail closed. A missing half of the
 broker cursor pair fails the projection before it serves the
@@ -328,9 +328,28 @@ Completed `commandExecution` items use the same coordinate/fingerprint fence and
 `Shell` call followed by its result. The call carries native command/cwd; result output uses the shared
 4,000-character cap plus a truncation marker when needed. Failed or declined status and nonzero exit
 codes are marked as errors, with a fallback explanation when native output is empty. Unfinished commands do not consume a projected
-identity. Other general tool activity, streaming partials, file-change activity, and task lifecycle are not projected;
+identity. Apart from the exact-0.154.0 task observations below, other general tool activity, streaming partials,
+general file-change activity, and reconstructed task tracking are not projected;
 the separate [file approval path](#codex-native-file-approvals) displays only fresh bounded pending patches;
 these observations cannot acknowledge a pending browser prompt or execute a command.
+
+#### Codex native task observations
+
+Exact Codex 0.154.0 projects parent-thread `subAgentActivity` records into the existing encrypted
+`task` rows. Supported native kinds are `started`, `interacted`, `interrupted`, and `completed`;
+the displayed description copies the native agent path and kind. `agentThreadId` must be a canonical
+UUIDv7, the nonempty path is at most 1,024 characters with no Unicode control/format characters,
+and nonempty native item/turn IDs are at most 256 characters. Unsupported or malformed records are
+ignored before consuming projected identity. Old qualified versions do not project these records.
+
+Live observations require `item/completed` on the selected parent thread. History uses the existing
+terminal-turn rule and one-shot deferred repair conservatively, so late repairs append rather than
+reorder. The `(turnId,itemId)` fingerprint copies only kind, agent ID, and path; exact history/live
+overlap deduplicates, changed semantic bytes fence only the companion. The shared 10,000-item bound
+applies. This is an event log, not a reconstructed running-task list: native `completed` does not
+assert success, `interrupted` does not assert termination, and neither parent completion nor a
+completed `collabAgentToolCall`/wait synthesizes a child outcome. No child subscription, prompt/output
+forwarding, control, permission, browser receipt, or native-idle authority is added.
 
 Browser text first receives only seq-less `{native_pending:true}` admission. One idle gate serializes
 `turn/start`, using the host event UUID as `clientUserMessageId`. After waiting for idle, the writer

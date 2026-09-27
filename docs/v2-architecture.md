@@ -480,13 +480,18 @@ The driver subscribes before history. Resume's <code>historyMode</code> selects 
 <code>thread/turns/list</code> with <code>itemsView:"full"</code> for <code>legacy</code>. Each requests
 one item/turn per page so inline-image groups do not combine into oversized frames; the raw scan is
 capped at 100,000 pages. Both paths
-validate native envelopes and retain user/assistant text plus <code>commandExecution</code>. The
+validate native envelopes and retain user/assistant text plus <code>commandExecution</code> and
+<code>subAgentActivity</code> (projected only on exact 0.154.0). The
 projection validates supported completed shapes before its shared 10,000 native-item cap, then drains
 buffered notifications before readiness. Projected items are keyed by immutable
 <code>(turnId,itemId)</code>, not the turn-scoped item ID alone; exact replay deduplicates and changed
 projected bytes at the same coordinate fence the projection. Completed commands emit read-only
 <code>Shell</code> calls and bounded results, including failed/declined/nonzero-exit outcomes. Unfinished
-commands, other general tool activity, streaming partials, general file-change activity, and task lifecycle are not projected.
+commands, other general tool activity, streaming partials, general file-change activity, and reconstructed task tracking are
+not projected. Exact 0.154.0 copies bounded native parent-thread sub-agent observations into existing
+task rows, without child controls/subscriptions or inferred outcome/idle state; see
+[the task boundary](protocol.md#codex-native-task-observations). Task history follows the same
+conservative terminal-turn/deferred-repair rule described below.
 The separate bounded file-approval path displays fresh pending patches, not a general file-activity ledger.
 Historical assistant text requires native terminal-turn evidence read before paginated item history,
 or retained on a legacy full-turn page. Active/unknown turn text is deferred; one terminal-triggered

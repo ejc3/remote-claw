@@ -34,7 +34,10 @@ tracks its bounded native acceptance separately from the historical results belo
 Interrupt
 targets one observed active native turn without retargeting or retrying, and remains reachable while
 text waits for native idle. Background commands may outlive the interrupted model turn. Other controls,
-streaming partials, general file-change activity, other tool families, and task lifecycle are unsupported.
+streaming partials, general file-change activity, other tool families, and reconstructed task tracking are unsupported.
+Exact 0.154.0 separately projects bounded native parent-thread
+[sub-agent observations](protocol.md#codex-native-task-observations) through existing task rows;
+child control/output subscriptions and inferred success/idle remain excluded.
 Current-version/activity/interrupt/image/approval/question acceptance lives in the [release roadmap](release-finish-line.md),
 separately from the historical results below. The separate
 [0.154.0 result](release-finish-line.md#codex-current-version-acceptance) records that tuple's tested
@@ -176,7 +179,7 @@ The resumed thread's native `historyMode` now chooses the bounded reader rather 
 `itemsView:"full"`. Current readers request one item/turn per page, with a 100,000-page raw scan cap,
 so retained inline-image groups do not combine into an oversized frame. The historical M3b readers
 retained only user/assistant text. Current readers also
-retain `commandExecution`; the projection validates supported completed shapes before counting the
+retain `commandExecution` and `subAgentActivity` (exact 0.154.0 projection); the projection validates supported completed shapes before counting the
 shared 10,000 native-item cap. Other tool families, reasoning, and unfinished commands are not projected.
 The immutable projection coordinate is `(turnId,itemId)`, because Codex may reuse one item ID in
 different turns. Same-coordinate, same-byte history/live overlap deduplicates; changed projected bytes

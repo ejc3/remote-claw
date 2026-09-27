@@ -378,7 +378,9 @@ available while browser text is queued; that text waits for native idle before s
 the model turn does not guarantee cancellation of native background commands.
 Completed native `commandExecution` items appear as read-only `Shell` calls and bounded results,
 including failed, declined, and nonzero-exit outcomes. Activity observation itself adds no execution
-authority, streaming partials, file-change projection, or task lifecycle tracking.
+authority, streaming partials, file-change projection, or task lifecycle tracking. Exact 0.154.0
+separately shows native [sub-agent observations](docs/protocol.md#codex-native-task-observations)
+in the existing activity details, without reconstructing child state or granting child controls.
 
 The separate 0.153.4/0.154.0 approval path shows the complete bounded command, absolute cwd, and optional
 native reason only for ordinary local commands with no network/additional-permission context and
@@ -415,7 +417,7 @@ After `thread/resume`, Codex's returned `historyMode` selects the bounded histor
 uses ascending `thread/items/list`; `legacy` uses ascending `thread/turns/list` with
 `itemsView:"full"`. Both request one item/turn per page so inline image groups do not combine into an
 oversized history frame, with a 100,000-page raw scan cap. Both retain user/assistant text, native
-image-bearing user input, and `commandExecution`; the projection
+image-bearing user input, `commandExecution`, and `subAgentActivity` (exact 0.154.0 projection); the projection
 validates supported completed shapes before counting the shared 10,000 native-item limit. Other tool
 families, reasoning, and unfinished commands are not projected. Projected identity is the immutable
 `(turnId,itemId)` pair: replay of the same pair and bytes deduplicates, while changed projected bytes

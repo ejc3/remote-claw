@@ -257,17 +257,20 @@ class CodexReconciler {
   readonly #seen = new Map<string, string>();
   readonly #uploads: NativeUploadStore;
   readonly #previews: NativePreviewBudget;
+  readonly tasksSupported: boolean;
 
   constructor(
     session: Session,
     mutations: Map<string, BrowserMutation>,
     uploads: NativeUploadStore,
     previewByteLimit?: number,
+    tasksSupported = false,
   ) {
     this.#session = session;
     this.#mutations = mutations;
     this.#uploads = uploads;
     this.#previews = new NativePreviewBudget(previewByteLimit);
+    this.tasksSupported = tasksSupported;
   }
 
   accept(turnId: string, item: CodexThreadItem): void {
@@ -310,6 +313,38 @@ class CodexReconciler {
         type: "assistant",
         uuid: coordinate,
         message: { role: "assistant", content: [{ type: "text", text: item.text }] },
+      });
+      return;
+    }
+
+    if (item.type === "subAgentActivity" && this.tasksSupported) {
+      // These are immutable parent-thread observations, not child state or authority. In particular,
+      // a completed wait call or parent turn cannot establish that a child has finished.
+      const { kind, agentThreadId, agentPath } = item;
+      if (
+        (kind !== "started" &&
+          kind !== "interacted" &&
+          kind !== "interrupted" &&
+          kind !== "completed") ||
+        !isCodexThreadId(agentThreadId) ||
+        typeof agentPath !== "string" ||
+        agentPath === "" ||
+        agentPath.length > 1024 ||
+        /[\p{Cc}\p{Cf}]/u.test(agentPath) ||
+        item.id === "" ||
+        item.id.length > 256 ||
+        turnId === "" ||
+        turnId.length > 256
+      )
+        return;
+      if (!this.#admit(coordinate, JSON.stringify([item.type, kind, agentThreadId, agentPath])))
+        return;
+      this.#session.pushUpstream({
+        type: "system",
+        uuid: coordinate,
+        subtype: kind === "started" ? "task_started" : "task_updated",
+        task_id: agentThreadId,
+        description: `${agentPath} — ${kind}`,
       });
       return;
     }
@@ -503,6 +538,7 @@ export class CodexDriver implements Driver {
         this.#mutations,
         this.#uploads,
         this.#options.projectionPreviewByteLimit,
+        nativeVersion === "0.154.0",
       );
       session.workerStatus = resumed.thread.status.type === "active" ? "running" : "idle";
       await this.#reconcileHistory(reconciler, resumed.thread.historyMode, signal);
@@ -584,7 +620,8 @@ export class CodexDriver implements Driver {
             throw new CodexProjectionError("Codex returned a different turn's repair history");
           continue; // Legacy has no turn-filtered pager; never project other turns during repair.
         }
-        if (entry.item.type === "agentMessage") {
+        if (entry.item.type === "subAgentActivity" && !reconciler.tasksSupported) continue;
+        if (entry.item.type === "agentMessage" || entry.item.type === "subAgentActivity") {
           if (historyMode === "legacy" && !isCodexTurnStatus(entry.turnStatus))
             throw new CodexProjectionError("Codex history has invalid turn status");
           const final =
