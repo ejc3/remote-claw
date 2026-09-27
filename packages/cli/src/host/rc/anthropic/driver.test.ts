@@ -14,7 +14,9 @@ import {
   MAX_USER_CONTENT_CHARS,
   type RcCommandResponseInput,
   type RcEventPage,
+  type RcInitializeEventInput,
   type RcInterruptEventInput,
+  type RcModelEventInput,
   type RcPostAck,
   type RcQuestionResponseInput,
   type RcSseItem,
@@ -131,6 +133,19 @@ class FakeNativeClient implements ClaudeNativeClient {
   readonly interruptCalls: Array<{ sessionId: string; input: RcInterruptEventInput }> = [];
   readonly questionCalls: Array<{ sessionId: string; input: RcQuestionResponseInput }> = [];
   readonly commandCalls: Array<{ sessionId: string; input: RcCommandResponseInput }> = [];
+  readonly initializeCalls: Array<{ sessionId: string; input: RcInitializeEventInput }> = [];
+  readonly modelCalls: Array<{ sessionId: string; input: RcModelEventInput }> = [];
+  initializeImpl: (input: RcInitializeEventInput, signal: AbortSignal) => Promise<RcPostAck> =
+    async (input) => ({
+      eventId: input.uuid,
+      sequenceNum: "1",
+      duplicate: false,
+    });
+  modelImpl: (input: RcModelEventInput) => Promise<RcPostAck> = async (input) => ({
+    eventId: input.uuid,
+    sequenceNum: "1",
+    duplicate: false,
+  });
   commandImpl: () => Promise<RcPostAck> = async () => ({
     eventId: "command-ack",
     sequenceNum: "2",
@@ -188,6 +203,20 @@ class FakeNativeClient implements ClaudeNativeClient {
   postInterrupt(sessionId: string, input: RcInterruptEventInput): Promise<RcPostAck> {
     this.interruptCalls.push({ sessionId, input });
     return this.interruptImpl(input);
+  }
+
+  postInitialize(
+    sessionId: string,
+    input: RcInitializeEventInput,
+    options: { signal: AbortSignal },
+  ): Promise<RcPostAck> {
+    this.initializeCalls.push({ sessionId, input });
+    return this.initializeImpl(input, options.signal);
+  }
+
+  postModel(sessionId: string, input: RcModelEventInput): Promise<RcPostAck> {
+    this.modelCalls.push({ sessionId, input });
+    return this.modelImpl(input);
   }
 
   postQuestionResponse(sessionId: string, input: RcQuestionResponseInput): Promise<RcPostAck> {
@@ -539,6 +568,48 @@ function interruptResponse(
     payload,
     raw: { event_id: eventId, event_type: "control_response", sequence_num: sequence, payload },
   };
+}
+
+function modelResponse(
+  sequence: string,
+  requestId: string,
+  model?: unknown,
+  nativeId = "cse_models",
+): AnthropicRcEvent {
+  const payload = {
+    type: "control_response",
+    session_id: nativeId,
+    response: {
+      subtype: "success",
+      request_id: requestId,
+      ...(model === undefined ? {} : { response: { current_model: model } }),
+    },
+  };
+  const eventId = `model-response-${sequence}`;
+  return {
+    ...assistant(eventId, sequence, ""),
+    eventType: "control_response",
+    payload,
+    raw: { event_id: eventId, event_type: "control_response", sequence_num: sequence, payload },
+  };
+}
+
+async function bindModels(harness: Harness, nativeId = "cse_models"): Promise<void> {
+  await bindReady(harness, nativeId);
+  await waitFor(() => harness.native.initializeCalls.length === 1);
+  const input = harness.native.initializeCalls[0]?.input;
+  if (!input) throw new Error("missing native initialization");
+  harness.native.streams[0]?.push(
+    modelResponse("0", input.requestId, "claude-sonnet-4-6", nativeId),
+  );
+  await waitFor(() => harness.session.sessionSettings !== null);
+}
+
+function selectModel(harness: Harness, model = "claude-haiku-4-5-20251001"): void {
+  harness.session.pushControlRequest("set_session_settings", {
+    change: { model },
+    expiry: Date.now() + 10_000,
+  });
 }
 
 function nativeQuestion(sequence = "1"): AnthropicRcEvent {
@@ -2169,6 +2240,277 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
     } finally {
       await harness.stop();
     }
+  });
+
+  it("keeps settings optional when initialization fails, without blocking presence or text", async () => {
+    const harness = await startHarness();
+    harness.native.initializeImpl = async () => {
+      throw new Error("unavailable");
+    };
+    try {
+      await bindReady(harness, "cse_models");
+      await waitFor(() => harness.native.initializeCalls.length === 1);
+      expect(harness.broker.announcements[0]).toMatchObject({
+        capabilities: { controls: { configureSession: true } },
+      });
+      expect(harness.session.sessionSettings).toBeNull();
+      selectModel(harness);
+      harness.session.pushUserInput("text without model initialization");
+      await waitFor(() => harness.native.postCalls.length === 1);
+      expect(harness.native.modelCalls).toEqual([]);
+      expect(harness.native.initializeCalls).toHaveLength(1);
+      expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("requires a fresh exact native response, not HTTP or setter ACK, before confirming a model", async () => {
+    const harness = await startHarness();
+    try {
+      await bindModels(harness);
+      selectModel(harness);
+      await waitFor(() => harness.native.modelCalls.length === 1);
+      const requestId = harness.native.modelCalls[0]?.input.requestId ?? "";
+      expect(harness.session.sessionSettings?.current.model).toBe("claude-sonnet-4-6");
+      harness.native.streams[0]?.push(modelResponse("1", requestId, undefined, "cse_foreign"));
+      harness.native.streams[0]?.push(modelResponse("2", "unrelated"));
+      const clientReply = modelResponse("3", requestId);
+      harness.native.streams[0]?.push({ ...clientReply, source: "client" });
+      harness.native.streams[0]?.push(assistant("barrier", "4", "foreign responses ignored"));
+      await waitFor(() =>
+        harness.broker.content.some((entry) => entry.text === "foreign responses ignored"),
+      );
+      expect(harness.native.initializeCalls).toHaveLength(1);
+      const ack = modelResponse("5", requestId);
+      harness.native.streams[0]?.push(ack);
+      harness.native.streams[0]?.push(ack);
+      await waitFor(() => harness.native.initializeCalls.length === 2);
+      expect(harness.session.sessionSettings?.current.model).toBe("claude-sonnet-4-6");
+      const readId = harness.native.initializeCalls[1]?.input.requestId ?? "";
+      harness.native.streams[0]?.push(modelResponse("6", readId, ""));
+      harness.native.streams[0]?.push(
+        modelResponse("7", readId, "claude-haiku-4-5-20251001", "cse_foreign"),
+      );
+      harness.native.streams[0]?.push(modelResponse("8", readId, "claude-haiku-4-5-20251001"));
+      await waitFor(
+        () => harness.session.sessionSettings?.current.model === "claude-haiku-4-5-20251001",
+      );
+      expect(harness.session.sessionSettings).toMatchObject({
+        modelChoicesSource: "qualified",
+        collaborationModes: [],
+        current: { effort: null, collaborationMode: null },
+      });
+      selectModel(harness, "claude-sonnet-4-6");
+      await waitFor(() => harness.native.modelCalls.length === 2);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it.each([
+    false,
+    true,
+  ])("retains an unconfirmed guard after ambiguous HTTP=%s while text, Stop and approvals work", async (ambiguous) => {
+    const harness = await startHarness();
+    if (ambiguous)
+      harness.native.modelImpl = async () => {
+        throw AnthropicRcError.network("postModel", { outcomeUnknown: true, retryable: false });
+      };
+    harness.native.interruptImpl = async (input) => {
+      harness.native.streams[0]?.push(interruptResponse("3", input.requestId));
+      return { eventId: input.uuid, sequenceNum: "3", duplicate: false };
+    };
+    try {
+      await bindModels(harness, "cse_question");
+      selectModel(harness);
+      selectModel(harness, "claude-sonnet-4-6");
+      harness.session.pushControlRequest("interrupt");
+      harness.session.pushUserInput("usable without model confirmation");
+      await waitFor(() => harness.native.postCalls.length === 1);
+      harness.native.streams[0]?.push(nativeQuestion("4"));
+      await waitFor(() =>
+        harness.broker.posts.some(({ header }) => header.recordKind === "permission_request"),
+      );
+      harness.broker.push(
+        inbound(harness, "permission", "model-pending-answer", questionAnswer(harness)),
+      );
+      await waitFor(() => harness.native.questionCalls.length === 1);
+      expect(harness.native.modelCalls).toHaveLength(1);
+      expect(harness.native.interruptCalls).toHaveLength(1);
+      expect(harness.session.sessionSettings?.current.model).toBe("claude-sonnet-4-6");
+      expect(harness.session.closed).toBe(false);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("shows mismatching native state but blocks dependent settings until fresh reconnect confirms", async () => {
+    const harness = await startHarness();
+    try {
+      await bindModels(harness);
+      selectModel(harness);
+      await waitFor(() => harness.native.modelCalls.length === 1);
+      harness.native.streams[0]?.push(
+        modelResponse("1", harness.native.modelCalls[0]?.input.requestId ?? ""),
+      );
+      await waitFor(() => harness.native.initializeCalls.length === 2);
+      harness.native.streams[0]?.push(
+        modelResponse(
+          "2",
+          harness.native.initializeCalls[1]?.input.requestId ?? "",
+          "external-native-model",
+        ),
+      );
+      await waitFor(
+        () => harness.session.sessionSettings?.current.model === "external-native-model",
+      );
+      selectModel(harness, "claude-sonnet-4-6");
+      harness.session.pushUserInput("guard barrier");
+      await waitFor(() => harness.native.postCalls.length === 1);
+      expect(harness.native.modelCalls).toHaveLength(1);
+      harness.native.streams.push(new NativeStream());
+      harness.native.streams[0]?.end();
+      await waitFor(() => harness.native.initializeCalls.length === 3);
+      harness.native.streams[1]?.push(
+        modelResponse(
+          "3",
+          harness.native.initializeCalls[2]?.input.requestId ?? "",
+          "claude-haiku-4-5-20251001",
+        ),
+      );
+      await waitFor(
+        () => harness.session.sessionSettings?.current.model === "claude-haiku-4-5-20251001",
+      );
+      selectModel(harness, "claude-sonnet-4-6");
+      await waitFor(() => harness.native.modelCalls.length === 2);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("handles native confirmation before both HTTP responses without duplicate writes", async () => {
+    const harness = await startHarness();
+    const posted = Promise.withResolvers<RcPostAck>();
+    try {
+      await bindModels(harness);
+      harness.native.modelImpl = (input) => {
+        harness.native.streams[0]?.push(modelResponse("1", input.requestId));
+        return posted.promise;
+      };
+      harness.native.initializeImpl = async (input) => {
+        harness.native.streams[0]?.push(
+          modelResponse("2", input.requestId, "claude-haiku-4-5-20251001"),
+        );
+        await tick();
+        return { eventId: input.uuid, sequenceNum: "2", duplicate: false };
+      };
+      selectModel(harness);
+      await waitFor(
+        () => harness.session.sessionSettings?.current.model === "claude-haiku-4-5-20251001",
+      );
+      posted.resolve({ eventId: "model", sequenceNum: "1", duplicate: false });
+      selectModel(harness); // Latest confirmed no-op.
+      harness.session.pushUserInput("after early confirmation");
+      await waitFor(() => harness.native.postCalls.length === 1);
+      expect(harness.native.modelCalls).toHaveLength(1);
+      expect(harness.native.initializeCalls).toHaveLength(2);
+    } finally {
+      posted.resolve({ eventId: "model", sequenceNum: "1", duplicate: false });
+      await harness.stop();
+    }
+  });
+
+  it("coalesces fresh confirmation behind an in-flight read without letting its stale response confirm", async () => {
+    const harness = await startHarness();
+    const firstRead = Promise.withResolvers<RcPostAck>();
+    harness.native.initializeImpl = () => firstRead.promise;
+    try {
+      await bindModels(harness);
+      const oldReadId = harness.native.initializeCalls[0]?.input.requestId ?? "";
+      selectModel(harness);
+      await waitFor(() => harness.native.modelCalls.length === 1);
+      harness.native.streams[0]?.push(
+        modelResponse("1", harness.native.modelCalls[0]?.input.requestId ?? ""),
+      );
+      harness.native.streams[0]?.push(modelResponse("2", oldReadId, "claude-haiku-4-5-20251001"));
+      harness.session.pushUserInput("fresh read must not block text");
+      await waitFor(() => harness.native.postCalls.length === 1);
+      expect(harness.session.sessionSettings?.current.model).toBe("claude-sonnet-4-6");
+      expect(harness.native.initializeCalls).toHaveLength(1);
+      harness.native.initializeImpl = async (input) => ({
+        eventId: input.uuid,
+        sequenceNum: "4",
+        duplicate: false,
+      });
+      firstRead.resolve({ eventId: "first-read", sequenceNum: "0", duplicate: false });
+      await waitFor(() => harness.native.initializeCalls.length === 2);
+      harness.native.streams[0]?.push(
+        modelResponse(
+          "3",
+          harness.native.initializeCalls[1]?.input.requestId ?? "",
+          "claude-haiku-4-5-20251001",
+        ),
+      );
+      await waitFor(
+        () => harness.session.sessionSettings?.current.model === "claude-haiku-4-5-20251001",
+      );
+      selectModel(harness, "claude-sonnet-4-6");
+      await waitFor(() => harness.native.modelCalls.length === 2);
+    } finally {
+      firstRead.resolve({ eventId: "first-read", sequenceNum: "0", duplicate: false });
+      await harness.stop();
+    }
+  });
+
+  it("rejects stale, unqualified and non-model choices and consumes a confirmed no-op", async () => {
+    const harness = await startHarness();
+    try {
+      await bindModels(harness);
+      selectModel(harness, "claude-sonnet-4-6");
+      for (const change of [
+        { model: "opus" },
+        { effort: "high" },
+        { collaborationMode: "plan" },
+        { model: "claude-haiku-4-5-20251001", permissionMode: "bypassPermissions" },
+      ])
+        harness.session.pushControlRequest("set_session_settings", {
+          change,
+          expiry: Date.now() + 10_000,
+        });
+      for (const expiry of [undefined, 0, Date.now() - 1, Number.NaN])
+        harness.session.pushControlRequest("set_session_settings", {
+          change: { model: "claude-haiku-4-5-20251001" },
+          expiry,
+        });
+      harness.session.pushUserInput("validation barrier");
+      await waitFor(() => harness.native.postCalls.length === 1);
+      expect(harness.native.modelCalls).toEqual([]);
+      selectModel(harness);
+      await waitFor(() => harness.native.modelCalls.length === 1);
+    } finally {
+      await harness.stop();
+    }
+  });
+
+  it("aborts the one owned initialization read on shutdown without waiting for native confirmation", async () => {
+    const harness = await startHarness();
+    let aborted = false;
+    harness.native.initializeImpl = async (_input, signal) =>
+      new Promise((_, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            aborted = true;
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+    await bindReady(harness, "cse_models");
+    await waitFor(() => harness.native.initializeCalls.length === 1);
+    await harness.stop();
+    expect(aborted).toBe(true);
   });
 
   it("does not POST unsupported downstream controls to Anthropic", async () => {

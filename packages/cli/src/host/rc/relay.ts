@@ -739,7 +739,11 @@ export class HostRcRelay {
     const catalog =
       p.settings === null
         ? null
-        : JSON.stringify([p.settings.models, p.settings.collaborationModes]);
+        : JSON.stringify([
+            p.settings.models,
+            p.settings.collaborationModes,
+            p.settings.modelChoicesSource,
+          ]);
     const includeCatalog =
       catalog !== null && (this.#settingsCatalogRequested || catalog !== this.#lastSettingsCatalog);
     // Consume before awaiting so a catch-up arriving during this post remains pending afterward.

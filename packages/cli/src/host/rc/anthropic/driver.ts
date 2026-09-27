@@ -1,7 +1,8 @@
 /// <reference lib="es2024.promise" />
 
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { hasClaudeNativeReferences } from "../../../harness.js";
+import { hasClaudeNativeReferences, parseSessionSettingsChange } from "../../../harness.js";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import { ensureCerts } from "../certs.js";
 import {
@@ -22,7 +23,9 @@ import {
   type AnthropicRcEvent,
   type RcCommandResponseInput,
   type RcEventPage,
+  type RcInitializeEventInput,
   type RcInterruptEventInput,
+  type RcModelEventInput,
   type RcPostAck,
   type RcQuestionResponseInput,
   type RcSseItem,
@@ -30,6 +33,7 @@ import {
 } from "./client.js";
 import { ClaudeNativeControls } from "./controls.js";
 import { AnthropicRcError } from "./errors.js";
+import { type ClaudeSessionModel, claudeModelSettings, isClaudeSessionModel } from "./settings.js";
 
 const HISTORY_PAGE_LIMIT = 100;
 const HISTORY_PAGE_CAP = 1_000;
@@ -58,6 +62,16 @@ export interface ClaudeNativeClient {
     sessionId: string,
     event: RcInterruptEventInput,
     options?: { signal?: AbortSignal },
+  ): Promise<RcPostAck>;
+  postInitialize(
+    sessionId: string,
+    event: RcInitializeEventInput,
+    options: { signal: AbortSignal },
+  ): Promise<RcPostAck>;
+  postModel(
+    sessionId: string,
+    event: RcModelEventInput,
+    options: { signal: AbortSignal },
   ): Promise<RcPostAck>;
   postQuestionResponse(
     sessionId: string,
@@ -394,6 +408,16 @@ export class ClaudeNativeDriver implements Driver {
   readonly #images: NativeUploadStore;
   #pendingInterrupt: PendingInterrupt | null = null;
   #controls: ClaudeNativeControls | null = null;
+  #expectedModel: {
+    model: ClaudeSessionModel;
+    requestId: string;
+    acknowledged: boolean;
+    readRequestId: string | null;
+  } | null = null;
+  #modelReadRequestId: string | null = null;
+  #modelReadTask: Promise<void> | null = null;
+  #modelRefreshRequested = false;
+  readonly #modelReadAbort = new AbortController();
 
   constructor(ctx: DriverContext, options: ClaudeNativeDriverOptions) {
     this.#ctx = ctx;
@@ -537,7 +561,10 @@ export class ClaudeNativeDriver implements Driver {
       this.#mutations,
       budget,
       this.#trace,
-      (event) => this.#observeInterruptResponse(event),
+      (event) => {
+        this.#observeInterruptResponse(event);
+        this.#observeModelResponse(session, nativeId, event, signal);
+      },
       this.#images,
       this.#controls,
       this.#options.projectionPreviewByteLimit,
@@ -559,11 +586,19 @@ export class ClaudeNativeDriver implements Driver {
     this.#writeGate.resume();
     this.#trace.info("native session attached", { session: session.id });
 
-    await Promise.race([
-      this.#capturePump(session, nativeId, reconciler, firstConnection, signal),
-      this.#injectPump(session, nativeId, budget, signal),
-      waitAbort(signal),
-    ]);
+    const capture = this.#capturePump(session, nativeId, reconciler, firstConnection, signal);
+    // Optional settings observation must not delay presence, text, or native approval capture.
+    this.#refreshModel(session, nativeId, signal);
+    try {
+      await Promise.race([
+        capture,
+        this.#injectPump(session, nativeId, budget, signal),
+        waitAbort(signal),
+      ]);
+    } finally {
+      this.#modelReadAbort.abort();
+      if (this.#modelReadTask !== null) await settleWithin(this.#modelReadTask, TEARDOWN_WAIT_MS);
+    }
   }
 
   async #openConnection(nativeId: string, signal: AbortSignal): Promise<NativeConnection> {
@@ -662,6 +697,7 @@ export class ClaudeNativeDriver implements Driver {
             await this.#reconcileHistory(nativeId, reconciler, signal);
             connection = candidate;
             this.#writeGate.resume();
+            this.#refreshModel(session, nativeId, signal);
             recovered = true;
             break;
           } catch (error) {
@@ -714,6 +750,14 @@ export class ClaudeNativeDriver implements Driver {
       }
       if (event.eventType === "control_request" && controlSubtype(event) === "interrupt") {
         await this.#interrupt(session, nativeId, event, signal);
+        session.ack(event.eventId);
+        continue;
+      }
+      if (
+        event.eventType === "control_request" &&
+        controlSubtype(event) === "set_session_settings"
+      ) {
+        await this.#setModel(session, nativeId, event, signal);
         session.ack(event.eventId);
         continue;
       }
@@ -806,6 +850,114 @@ export class ClaudeNativeDriver implements Driver {
         if (!attempted) await prepared?.discard();
       }
     }
+  }
+
+  async #setModel(
+    session: Session,
+    nativeId: string,
+    event: RcEvent,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await this.#writeGate.wait(signal);
+    const request = record(event.payload.request);
+    const change = parseSessionSettingsChange(request?.change);
+    if (
+      signal.aborted ||
+      session.closed ||
+      session.sessionSettings === null ||
+      !change ||
+      !("model" in change) ||
+      !isClaudeSessionModel(change.model) ||
+      typeof request?.expiry !== "number" ||
+      !Number.isFinite(request.expiry) ||
+      request.expiry <= Date.now()
+    )
+      return;
+    if (this.#expectedModel !== null) {
+      this.#trace.warn("Claude model choice dropped: prior update lacks native confirmation");
+      return;
+    }
+    if (change.model === session.sessionSettings.current.model) return;
+    const input = { uuid: randomUUID(), requestId: randomUUID(), model: change.model };
+    this.#expectedModel = {
+      model: change.model,
+      requestId: input.requestId,
+      acknowledged: false,
+      readRequestId: null,
+    };
+    this.#modelReadRequestId = null;
+    // Only bounded HTTP admission is awaited here. Canonical confirmation never blocks this writer.
+    try {
+      await this.#client.postModel(nativeId, input, { signal });
+    } catch {
+      if (!signal.aborted && !session.closed)
+        this.#trace.warn("Claude model update not confirmed; not retried");
+    }
+  }
+
+  #observeModelResponse(
+    session: Session,
+    nativeId: string,
+    event: AnthropicRcEvent,
+    signal: AbortSignal,
+  ): void {
+    if (
+      signal.aborted ||
+      session.closed ||
+      event.source !== "worker" ||
+      event.payload.type !== "control_response" ||
+      event.payload.session_id !== nativeId
+    )
+      return;
+    const response = record(event.payload.response);
+    if (response?.subtype !== "success") return;
+    const expected = this.#expectedModel;
+    if (expected !== null && response.request_id === expected.requestId) {
+      if (!expected.acknowledged) {
+        expected.acknowledged = true;
+        this.#refreshModel(session, nativeId, signal);
+      }
+      return;
+    }
+    if (this.#modelReadRequestId === null || response.request_id !== this.#modelReadRequestId)
+      return;
+    const settings = claudeModelSettings(record(response.response)?.current_model);
+    if (settings === null) return;
+    this.#modelReadRequestId = null;
+    session.sessionSettings = settings;
+    // Never release a newer setter using a stale pre-write initialization response.
+    if (
+      expected?.readRequestId === response.request_id &&
+      expected.model === settings.current.model
+    )
+      this.#expectedModel = null;
+    session.wake();
+  }
+
+  #refreshModel(session: Session, nativeId: string, signal: AbortSignal): void {
+    if (signal.aborted || session.closed || this.#modelReadAbort.signal.aborted) return;
+    this.#modelRefreshRequested = true;
+    if (this.#modelReadTask !== null) return;
+    const readSignal = AbortSignal.any([signal, this.#modelReadAbort.signal]);
+    this.#modelReadTask = (async () => {
+      while (this.#modelRefreshRequested && !readSignal.aborted && !session.closed) {
+        this.#modelRefreshRequested = false;
+        try {
+          await this.#writeGate.wait(readSignal);
+          if (readSignal.aborted || session.closed) return;
+          const input = { uuid: randomUUID(), requestId: randomUUID() };
+          this.#modelReadRequestId = input.requestId;
+          if (this.#expectedModel !== null) this.#expectedModel.readRequestId = input.requestId;
+          await this.#client.postInitialize(nativeId, input, { signal: readSignal });
+        } catch {
+          if (!readSignal.aborted && !session.closed)
+            this.#trace.warn("Claude model observation unavailable; conversation remains usable");
+        }
+      }
+    })().finally(() => {
+      this.#modelReadTask = null;
+      if (this.#modelRefreshRequested) this.#refreshModel(session, nativeId, signal);
+    });
   }
 
   async #interrupt(
@@ -1137,6 +1289,12 @@ function downstreamInput(event: RcEvent): RcUserEventInput {
     message: { role: "user", content: text },
     parentToolUseId: null,
   };
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function controlSubtype(event: RcEvent): unknown {

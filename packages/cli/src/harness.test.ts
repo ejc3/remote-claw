@@ -183,6 +183,25 @@ describe("shared harness contract", () => {
       }),
     ).toBeNull();
   });
+  it("preserves qualified model-only choices without inventing reasoning effort", () => {
+    const snapshot = {
+      modelChoicesSource: "qualified",
+      models: [{ id: "verified", label: "Verified model", defaultEffort: null, efforts: [] }],
+      collaborationModes: [],
+      current: { model: "native-unknown", effort: null, collaborationMode: null },
+    };
+    expect(parseSessionSettings(snapshot)).toEqual(snapshot);
+    for (const bad of [
+      { ...snapshot, modelChoicesSource: "guessed" },
+      { ...snapshot, models: [{ ...snapshot.models[0], defaultEffort: "high" }] },
+      {
+        ...snapshot,
+        models: [{ ...snapshot.models[0], efforts: [{ id: "high", description: "High" }] }],
+      },
+    ])
+      expect(parseSessionSettings(bad)).toBeNull();
+  });
+
   it("reserves pinned Claude native reference grammar without blocking ordinary emails", () => {
     for (const text of [
       '@"/outside/file with spaces.txt"',

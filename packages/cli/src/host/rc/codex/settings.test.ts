@@ -63,6 +63,7 @@ describe("Codex settings projection", () => {
       [model({ hidden: true })],
       [model({ defaultReasoningEffort: "missing" })],
       [model({ supportedReasoningEfforts: [] })],
+      [model({ defaultReasoningEffort: null, supportedReasoningEfforts: [] })],
       [
         model({
           supportedReasoningEfforts: Array(13).fill({

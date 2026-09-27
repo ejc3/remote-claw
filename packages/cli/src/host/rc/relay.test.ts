@@ -2326,6 +2326,10 @@ describe("HostRcRelay bounded settings discovery", () => {
       session.wake();
       await waitFor(() => client.announces.length === 6);
       expect(client.announces[5]?.session_settings).toEqual(original);
+      session.sessionSettings = { ...original, modelChoicesSource: "qualified" };
+      session.wake();
+      await waitFor(() => client.announces.length === 7);
+      expect(client.announces[6]?.session_settings).toEqual(session.sessionSettings);
     } finally {
       clock.mockRestore();
       ac.abort();

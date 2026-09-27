@@ -5,6 +5,7 @@ import {
   parseFileInput,
   type RcCommandResponseInput,
   type RcInterruptEventInput,
+  type RcModelEventInput,
   type RcQuestionResponseInput,
   type RcUserEventInput,
 } from "./client.js";
@@ -351,6 +352,48 @@ describe("AnthropicRcClient.postEvent", () => {
         },
       ],
     });
+  });
+});
+
+describe("AnthropicRcClient model controls", () => {
+  it("constructs only exact session-scoped model/initialize bodies without retry or permission fields", async () => {
+    const transport = new FakeTransport(
+      ...Array.from({ length: 3 }, () =>
+        json({ results: [{ event_id: "ack", sequence_num: "1", duplicate: false }] }),
+      ),
+    );
+    const client = new AnthropicRcClient({ transport });
+    const control = { uuid: "event", requestId: "request", permissionMode: "bypassPermissions" };
+    for (const model of ["claude-sonnet-4-6", "claude-haiku-4-5-20251001"] as const)
+      await client.postModel("cse/models", { ...control, model });
+    await client.postInitialize("cse/models", control);
+    expect(
+      transport.requests.map((request) => JSON.parse(request.body ?? "{}").events[0].payload),
+    ).toEqual([
+      ...["claude-sonnet-4-6", "claude-haiku-4-5-20251001"].map((model) => ({
+        type: "control_request",
+        uuid: "event",
+        request_id: "request",
+        request: { subtype: "set_model", model },
+      })),
+      {
+        type: "control_request",
+        uuid: "event",
+        request_id: "request",
+        request: { subtype: "initialize", promptSuggestions: true },
+      },
+    ]);
+    for (const request of transport.requests)
+      expect(request).toMatchObject({
+        method: "POST",
+        path: "/v1/code/sessions/cse%2Fmodels/events",
+        retryAfter401: false,
+      });
+    for (const model of ["sonnet", "opus", "default", "arbitrary", "", null])
+      await expect(
+        client.postModel("cse/models", { ...control, model } as RcModelEventInput),
+      ).rejects.toBeInstanceOf(AnthropicRcError);
+    expect(transport.requests).toHaveLength(3);
   });
 });
 
