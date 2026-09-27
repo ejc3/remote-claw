@@ -183,7 +183,7 @@ test("a native command approval waits for provider resolution and stays inactive
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
   await expect(page.locator(".local-input-disclosure")).toContainText(
-    "Command approvals can be answered here. Questions and other approvals stay in Codex.",
+    "Supported approvals can be answered here. Questions and other requests stay in Codex.",
   );
 
   const permission = page.locator(".perm", { hasText: "Shell" });
@@ -205,6 +205,52 @@ test("a native command approval waits for provider resolution and stays inactive
   await expect(permission).not.toContainText("Allowed");
 });
 
+for (const agent of ["claude", "codex"] as const) {
+  test(`${agent} one-time file approval stays native-confirmed and legible`, async ({
+    page,
+    seedHost,
+  }, testInfo) => {
+    const { pass, resolvePermission } = await seedHost({
+      fileApproval: agent,
+      caps: agent === "claude" ? "native-rc" : "codex-approval",
+      harness: agent === "claude" ? "native-rc" : "codex",
+    });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect" }).click();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+    const card = page.locator(".perm", { has: page.locator(".native-file-details") });
+    await expect(card).toContainText("color=blue");
+    await expect(card).toContainText("color=green");
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 1280, height: 900 },
+    ]) {
+      await page.setViewportSize(viewport);
+      for (const colorScheme of ["light", "dark"] as const) {
+        await page.emulateMedia({ colorScheme });
+        await card.scrollIntoViewIfNeeded();
+        expect(await card.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+        await expect(
+          card.getByRole("button", { name: "Allow once", exact: true }),
+        ).toBeInViewport();
+        await card.screenshot({
+          path: testInfo.outputPath(`${agent}-${viewport.width}-${colorScheme}.png`),
+          animations: "disabled",
+        });
+      }
+    }
+    await card.getByRole("button", { name: "Allow once", exact: true }).click();
+    await expect(card.locator(".perm-resolved")).toContainText("Submitted — waiting for");
+    await expect(card.locator(".perm-actions")).toHaveCount(0);
+    await resolvePermission();
+    await expect(card.locator(".perm-resolved")).toContainText("Resolved by");
+    await page.reload();
+    await page.locator("button.row", { hasText: "rc box" }).click();
+    await expect(card.locator(".perm-resolved")).toContainText("Resolved by");
+    await expect(card.locator(".perm-actions")).toHaveCount(0);
+  });
+}
+
 // The native adapter tests own response validity and ownership; this is the one real UI/broker
 // sentinel for independent question IDs, permitted free text, and neutral resolution after reload.
 test("native questions submit independently and stay neutral after provider resolution and reload", async ({
@@ -220,7 +266,7 @@ test("native questions submit independently and stay neutral after provider reso
   await page.getByRole("button", { name: "Connect" }).click();
   await page.locator("button.row", { hasText: "rc box" }).click();
   await expect(page.locator(".local-input-disclosure")).toContainText(
-    "Command approvals and supported questions can be answered here.",
+    "Supported approvals and questions can be answered here.",
   );
   const card = page.locator(".perm.perm-q");
   await expect(card).toContainText("Codex is asking");

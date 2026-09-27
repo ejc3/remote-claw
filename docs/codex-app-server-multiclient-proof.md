@@ -19,7 +19,9 @@ bounded results, including failed/declined/nonzero-exit outcomes. Browser mutati
 non-empty non-slash text, image groups with an optional non-slash caption, and interrupt. Exact 0.153.4
 and 0.154.0 implement one-shot ordinary local-command approvals and bounded non-secret blocking choice
 forms; their dedicated response APIs use exact connection-owned callbacks and native-confirmed
-resolution. Version 0.151.0 approvals/questions and unsupported request shapes stay native-owned.
+resolution. Exact 0.154.0 also implements [bounded native patch decisions](protocol.md#codex-native-file-approvals)
+from fresh complete item/request pairs, with no move/folder/session grants. Earlier versions keep file
+approvals native-owned. Version 0.151.0 approvals/questions and unsupported request shapes stay native-owned.
 Images reuse the encrypted composer payload and host-constructed
 inline data URLs, with full ordered input digests and bounded transient retention. Native image URLs
 and paths are never fetched; bounded valid inline images may be previewed, otherwise the viewer shows
@@ -32,7 +34,7 @@ tracks its bounded native acceptance separately from the historical results belo
 Interrupt
 targets one observed active native turn without retargeting or retrying, and remains reachable while
 text waits for native idle. Background commands may outlive the interrupted model turn. Other controls,
-streaming partials, file changes, other tool families, and reconstructed task tracking are unsupported.
+streaming partials, general file-change activity, other tool families, and reconstructed task tracking are unsupported.
 Exact 0.154.0 separately projects bounded native parent-thread
 [sub-agent observations](protocol.md#codex-native-task-observations) through existing task rows;
 child control/output subscriptions and inferred success/idle remain excluded.

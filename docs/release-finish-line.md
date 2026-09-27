@@ -360,6 +360,61 @@ claim other Bash input shapes, other tools, startup/reconnect authority, physica
 transport or general approval parity. Evidence remains outside Git under
 `/home/ubuntu/remote-claw-ui-artifacts/claude-native-approval-capture-2026-09-25.pM3qoc/companion-acceptance.x8wLEP/LIVE-ACCEPTANCE.md`.
 
+### Native file approvals
+
+**Implemented; both providers' bounded browser/native acceptance passed 2026-09-26.** This is one bounded approval slice,
+not general permission parity: [Claude Read/Write/Edit](protocol.md#claude-native-file-approvals)
+on exact 2.1.237/Linux arm64 and [Codex patches](protocol.md#codex-native-file-approvals) on exact
+0.154.0/Linux arm64. Existing Bash/command/question semantics are unchanged. Complete copied inputs
+or patch bodies are capped at 32 KiB serialized UTF-8; Codex patches have at most 20 distinct files.
+Paths are bounded to 4,096 characters without Unicode control/format characters. Claude Read accepts
+only `file_path`, Write includes full content, and Edit requires `replace_all:false` with complete
+before/after strings. Codex requires a fresh matching item/request pair and rejects moves or grant roots.
+Write/Edit strings and patch diffs containing Unicode control/format characters other than TAB/LF/CR
+stay native-owned; this prevents hidden-control approval previews, not every visual text ambiguity.
+Oversized/unfamiliar requests remain native-owned. No truncated or malformed card can become generic
+Allow. One-shot decisions cannot rewrite input or grant folder/session permissions, and history cannot
+restore authority. Native peers retain decision ownership.
+
+The native qualification fixture captured actual Claude Android Allow once for Read, Write, and Edit,
+with exact copied input, one matching tool result each, no `updatedPermissions`, and the completed
+reply in the native TUI and phone. A separate fresh Codex 0.154.0 managed-Unix/TUI fixture captured
+one external scratch-file update request and native Allow once: the preceding `fileChange` item
+contained the diff, while the callback itself contained only identity/reason/grant metadata. Native
+resolution and the actual file update were observed. Codex outgoing TUI bytes were not intercepted;
+accept/decline encoding is pinned by its schema and adapter tests. These captures alone do not
+qualify the encrypted browser path. Add/delete and multiple-file patches are implemented and covered
+deterministically; no live acceptance for those variants is claimed.
+
+Claude's integrated run used the production viewer, durable SQLite broker, real companion, and two
+independent phone/desktop Chromium contexts. Viewer Allow once for Read, Write, and Edit preserved
+native input, produced one result each, and left the exact expected scratch contents. Viewer Deny
+for a later Write produced an error and no file. A subsequent Read was approved once in the actual
+Claude Android app; both viewers reached neutral resolution and exact-once replies, including reload.
+No response included permission updates. The native app labeled the denied invocation as a creation,
+but the error result and absent file established non-execution; our viewer does not copy that label
+as success. Native TUI and settings were preserved; owned companion/broker/observer/viewers stopped.
+This qualifies the bounded Chromium phone-layout/desktop path, not physical-phone browser/WebKit
+transport or all simultaneous winner races.
+
+Codex's integrated run used exact 0.154.0/Linux arm64, the managed Unix app-server, the native TUI,
+the production viewer, durable SQLite broker, and independent phone/desktop Chromium viewers. A
+phone-viewer Allow once completed one external scratch-file update; a desktop-viewer Deny produced
+native `declined` status and unchanged bytes. A third update approved once in the native TUI closed
+both viewers' cards neutrally, including reload. Each journey produced exactly one final reply in
+each viewer. Native request/item/results correlated once, no other tool actions occurred, and native
+readback proved the `on-request` approval policy and full workspace-write sandbox object unchanged.
+The native TUI labeled the denied invocation “Edited,” but native status and unchanged disk bytes
+established non-execution; the viewer's resolution is not a claim that a patch succeeded. Owned
+observer/viewer/companion/broker processes stopped while the native TUI stayed alive and idle. This
+qualifies one-file updates, not live add/delete/multiple-file/rename or Android patch controls.
+
+Private captures: `~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/claude-file-fixture.dCoy3j/`
+and `codex-file-approval.8Cr5uX/`. Integrated evidence is in `native-file-approvals.UMZWfA/README.md`
+and `claude-acceptance.json` / `codex-acceptance.json`. Final file cards were also inspected at phone
+and desktop widths in both themes; the focused browser tests preserve pending/native-resolution
+semantics and reload without regranting authority.
+
 ### Native files and image previews
 
 **Implemented; bounded native acceptance passed 2026-09-26.** Claude-native/exact 2.1.237/Linux and

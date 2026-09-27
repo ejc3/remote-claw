@@ -3,10 +3,12 @@ import type { Session } from "../session.js";
 import {
   type AnthropicRcEvent,
   parseBashInput,
+  parseFileInput,
   parseNativeAnswers,
   parseNativeQuestions,
   type RcBashInput,
   type RcCommandResponseInput,
+  type RcFileToolInput,
   type RcPostAck,
   type RcQuestion,
   type RcQuestionResponseInput,
@@ -36,6 +38,7 @@ type NativeControl = NativeControlIdentity &
   (
     | { kind: "question"; questionIds: string[]; questions: RcQuestion[] }
     | { kind: "bash"; input: RcBashInput }
+    | { kind: "file"; file: RcFileToolInput }
   );
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -52,7 +55,7 @@ function text(value: unknown, max: number, empty = false): value is string {
   return typeof value === "string" && value.length <= max && (empty || value.trim() !== "");
 }
 
-/** Captured native question forms or one captured Bash decision. Other forms and policy stay native-owned.
+/** Captured native questions and one-time Bash/file decisions. Other forms and policy stay native-owned.
  * History never grants authority; losing the live stream with an open request retires the companion. */
 export class ClaudeNativeControls {
   readonly #seenRequests = new Set<string>();
@@ -147,6 +150,30 @@ export class ClaudeNativeControls {
         command: input.command,
         reason: `${input.description}\nWorking directory not provided by Claude.\nAllow applies to this command once; Deny rejects it.`,
       };
+    } else if (
+      request.tool_name === "Read" ||
+      request.tool_name === "Write" ||
+      request.tool_name === "Edit"
+    ) {
+      if (
+        !keys(request, [
+          "subtype",
+          "tool_name",
+          "display_name",
+          "description",
+          "tool_use_id",
+          "input",
+          "permission_suggestions",
+        ]) ||
+        request.display_name !== request.tool_name ||
+        !text(request.description, 4096) ||
+        !filePermissionSuggestions(request.permission_suggestions, request.tool_name)
+      )
+        return;
+      const file = parseFileInput(request.tool_name, request.input);
+      if (file === null) return;
+      form = { ...identity, kind: "file", file };
+      projectedInput = { nativeFile: true, ...file.input };
     } else {
       const input = record(request.input);
       if (
@@ -202,7 +229,7 @@ export class ClaudeNativeControls {
     const form = this.#viewers.get(response.request_id);
     const result = record(response.response);
     if (form === undefined || form.submitted) return;
-    if (form.kind === "bash") {
+    if (form.kind === "bash" || form.kind === "file") {
       const behavior = result?.behavior;
       if (behavior !== "allow" && behavior !== "deny") return;
       form.submitted = true;
@@ -213,7 +240,11 @@ export class ClaudeNativeControls {
           uuid: randomUUID(),
           requestId: form.requestId,
           toolUseId: form.toolUseId,
-          ...(behavior === "allow" ? { behavior, input: form.input } : { behavior }),
+          ...(behavior === "deny"
+            ? { behavior, ...(form.kind === "file" ? { toolName: form.file.toolName } : {}) }
+            : form.kind === "file"
+              ? { behavior, ...form.file }
+              : { behavior, input: form.input }),
         },
         { signal },
       );
@@ -246,4 +277,48 @@ export class ClaudeNativeControls {
       { signal },
     );
   }
+}
+
+/** Bounded captured suggestions are metadata only: never publish or apply their policy changes. */
+function filePermissionSuggestions(value: unknown, toolName: RcFileToolInput["toolName"]): boolean {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 4) return false;
+  try {
+    if (Buffer.byteLength(JSON.stringify(value), "utf8") > 8192) return false;
+  } catch {
+    return false;
+  }
+  return value.every((item) => {
+    const suggestion = record(item);
+    if (suggestion?.destination !== "session") return false;
+    if (toolName === "Read") {
+      if (
+        !keys(suggestion, ["type", "destination", "behavior", "rules"]) ||
+        suggestion.type !== "addRules" ||
+        suggestion.behavior !== "allow" ||
+        !Array.isArray(suggestion.rules) ||
+        suggestion.rules.length < 1 ||
+        suggestion.rules.length > 4
+      )
+        return false;
+      return suggestion.rules.every((value) => {
+        const rule = record(value);
+        return (
+          rule !== null &&
+          keys(rule, ["toolName", "ruleContent"]) &&
+          rule.toolName === "Read" &&
+          text(rule.ruleContent, 4096)
+        );
+      });
+    }
+    if (suggestion.type === "setMode")
+      return keys(suggestion, ["type", "destination", "mode"]) && suggestion.mode === "acceptEdits";
+    return (
+      suggestion.type === "addDirectories" &&
+      keys(suggestion, ["type", "destination", "directories"]) &&
+      Array.isArray(suggestion.directories) &&
+      suggestion.directories.length > 0 &&
+      suggestion.directories.length <= 4 &&
+      suggestion.directories.every((directory) => text(directory, 4096))
+    );
+  });
 }

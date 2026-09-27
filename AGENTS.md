@@ -34,7 +34,8 @@ ordinary Anthropic Remote Control remains active. Current browser mutations are 
 non-slash text, image/file groups with an optional non-slash caption, one-shot session-scoped Interrupt,
 fresh live bounded question-form responses (1–4 distinct questions, single/multiple choices, Other,
 and per-question Skip), and
-[bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals). The
+[bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals) plus
+[bounded Read/Write/Edit decisions](docs/protocol.md#claude-native-file-approvals). The
 [question boundary](docs/protocol.md#claude-native-questions) and Bash boundary preserve
 native ownership of unsupported permissions/forms; history never grants response authority. The separate
 [wider-form acceptance](docs/release-finish-line.md#claude-native-wider-question-forms) does not rewrite
@@ -101,7 +102,10 @@ the interrupted model turn. Exact 0.153.4 and 0.154.0 implement one-shot ordinar
 0.151.0 keeps all approvals native-owned. Only complete bounded command/cwd/optional reason, native
 `kind:"command"` / `environmentId:"local"`, and advertised `accept` plus `decline` or `cancel` qualify.
 The command path never answers network/additional permissions, stdin, file approvals, or questions,
-and never amends policy or grants session-wide authority. Their separate question path admits
+and never amends policy or grants session-wide authority. Exact 0.154.0 separately supports
+[bounded native patch approvals](docs/protocol.md#codex-native-file-approvals): fresh complete
+item/request pairs, one-time decisions, no moves or folder/session grants; older versions remain
+native-owned. Their separate question path admits
 complete non-secret blocking forms of 1–3 questions with 1–20 choices each; only native `isOther`
 enables free text. These transparent forms may authorize tool actions and are not planning-only.
 Secret, optionless, nonblocking, malformed, and all 0.151.0 questions stay native-owned; no invented
@@ -127,7 +131,7 @@ window, and viewers never inherit a catalog across host incarnations or removed 
 [separate acceptance](docs/release-finish-line.md#codex-native-session-settings).
 Exact 0.154.0 additionally projects bounded native parent-thread `subAgentActivity` events through
 existing task rows; these observations grant no child controls or inferred success/idle state.
-Other controls, streaming partials, file changes, and reconstructed task tracking remain unsupported.
+Other controls, streaming partials, general file-change activity, and reconstructed task tracking remain unsupported.
 The [release roadmap](docs/release-finish-line.md)
 owns current-version/activity/interrupt/image, command-approval, and question acceptance; the bounded
 question phone/desktop/native-TUI run passed on 0.153.4. The separate
@@ -175,7 +179,7 @@ Historical Claude RC observations are in `docs/phase0-findings.md` and `docs/v2-
   read-only worker tool activity through our encrypted broker. Browser mutations are ordinary text,
   host-owned image/file uploads with bounded image previews, one-shot session-scoped Interrupt,
   bounded native question responses,
-  and bounded one-time Bash decisions;
+  and bounded one-time Bash and Read/Write/Edit decisions;
   a delayed Stop can affect newer native/peer work. The local TUI and provider RC API remain live;
   other permissions, unsupported question forms, other controls,
   and status are disabled. Linux and exact Claude 2.1.237 only.

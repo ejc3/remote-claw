@@ -17,6 +17,10 @@ import {
   harnessMetadata,
   harnessPolicy,
   hasClaudeNativeReferences,
+  type NativeFileInput,
+  type NativePatchInput,
+  parseNativeFileInput,
+  parseNativePatchInput,
   type SessionSettings,
   type SessionSettingsChange,
 } from "@remote-claw/cli/harness";
@@ -1539,8 +1543,8 @@ export function Transcript(props: {
       ? (claudeNativeDisclosure ??
         (nativeCommandApprovals
           ? nativeQuestions
-            ? "Command approvals and supported questions can be answered here. Other approvals stay in Codex."
-            : "Command approvals can be answered here. Questions and other approvals stay in Codex."
+            ? "Supported approvals and questions can be answered here. Other requests stay in Codex."
+            : "Supported approvals can be answered here. Questions and other requests stay in Codex."
           : null))
       : codex
         ? "Approvals and questions stay in the local Codex TUI."
@@ -2394,8 +2398,8 @@ export function Transcript(props: {
                     : (claudeNativeDisclosure ??
                       (nativeCommandApprovals
                         ? nativeQuestions
-                          ? "Command approvals and supported questions here; other approvals stay in Codex"
-                          : "Command approvals here; questions and other approvals stay in Codex"
+                          ? "Supported approvals and questions here; other requests stay in Codex"
+                          : "Supported approvals here; questions and other requests stay in Codex"
                         : "Permission prompts can be answered here"))
           }
           branch={announce?.git?.branch ?? null}
@@ -3396,6 +3400,21 @@ function PermissionRow({
 
   // A native form must never become a generic Allow/Deny prompt if it is malformed or unsupported.
   if (
+    (req.nativeFile &&
+      (req.fileInput === null || !nativePermissionResolution || permissionAgent !== "Claude")) ||
+    (req.nativePatch &&
+      (req.patchInput === null || !nativePermissionResolution || permissionAgent !== "Codex"))
+  ) {
+    return (
+      <div className="perm perm-local-only">
+        <div className="perm-head">File approval unavailable here</div>
+        <div className="perm-local-note">
+          Review this request in the native {permissionAgent} interface.
+        </div>
+      </div>
+    );
+  }
+  if (
     req.nativeQuestions &&
     (req.questions.length === 0 || !nativePermissionResolution || !nativeQuestionsSupported)
   ) {
@@ -3468,7 +3487,13 @@ function PermissionRow({
           Allow <strong>{req.tool}</strong>?
         </span>
       </div>
-      {req.hint !== "" && <div className="perm-hint">{req.hint}</div>}
+      {req.fileInput ? (
+        <NativeFileDetails file={req.fileInput} />
+      ) : req.patchInput ? (
+        <NativePatchDetails patch={req.patchInput} />
+      ) : (
+        req.hint !== "" && <div className="perm-hint">{req.hint}</div>
+      )}
       {req.cwd !== "" && <div className="perm-hint">Working directory: {req.cwd}</div>}
       {req.reason !== "" && <div className="perm-hint">Reason: {req.reason}</div>}
       {effective === null ? (
@@ -3483,7 +3508,7 @@ function PermissionRow({
           <Button
             variant="secondary"
             className="perm-allow"
-            label="Allow"
+            label={req.fileInput || req.patchInput ? "Allow once" : "Allow"}
             isDisabled={busy || req.requestId === "" || !canGrant}
             onClick={() => void decide("allow")}
           />
@@ -3524,6 +3549,69 @@ interface ParsedPermission {
   questions: Question[];
   nativeQuestions: boolean;
   allowSkip: boolean;
+  nativeFile: boolean;
+  fileInput: NativeFileInput | null;
+  nativePatch: boolean;
+  patchInput: NativePatchInput | null;
+}
+
+function NativePatchDetails({ patch }: { patch: NativePatchInput }) {
+  return (
+    <div className="native-file-details">
+      {patch.changes.map((change) => (
+        <section className="native-file-block" key={change.path}>
+          <div className="native-file-path">
+            <span>
+              {change.operation === "add"
+                ? "Create file"
+                : change.operation === "delete"
+                  ? "Delete file"
+                  : "Update file"}
+            </span>
+            <code>{change.path}</code>
+          </div>
+          <pre className="code-block">{change.diff === "" ? <i>(empty diff)</i> : change.diff}</pre>
+        </section>
+      ))}
+      <p className="native-file-note">
+        Allow this patch once. No directory access or session-wide permission is granted.
+      </p>
+    </div>
+  );
+}
+
+function NativeFileDetails({ file }: { file: NativeFileInput }) {
+  const block = (label: string, value: string, change?: "remove" | "add") => (
+    <section className="native-file-block" data-change={change}>
+      <h4>{label}</h4>
+      <pre className="code-block">{value === "" ? <i>(empty)</i> : value}</pre>
+    </section>
+  );
+  return (
+    <div className="native-file-details">
+      <div className="native-file-path">
+        <span>File</span>
+        <code>{file.input.file_path}</code>
+      </div>
+      <p className="native-file-note">
+        {file.tool === "Read"
+          ? "Read this file once."
+          : file.tool === "Write"
+            ? "Create or overwrite this file. Existing contents may be replaced."
+            : "Replace the exact matching text once."}
+      </p>
+      {file.tool === "Write" && block("File contents", file.input.content, "add")}
+      {file.tool === "Edit" && (
+        <>
+          {block("Before", file.input.old_string, "remove")}
+          {block("After", file.input.new_string, "add")}
+        </>
+      )}
+      <p className="native-file-note">
+        This decision does not grant folder access or change permission mode.
+      </p>
+    </div>
+  );
 }
 
 /**
@@ -3873,6 +3961,8 @@ function parsePermission(text: string): ParsedPermission {
       p.tool_input !== null && typeof p.tool_input === "object"
         ? (p.tool_input as Record<string, unknown>)
         : {};
+    const { nativeFile, ...fileFields } = input;
+    const { nativePatch, ...patchFields } = input;
     return {
       tool: typeof p.tool_name === "string" ? p.tool_name : "tool",
       hint: toolHint(sanitizeInput(p.tool_input)),
@@ -3883,6 +3973,11 @@ function parsePermission(text: string): ParsedPermission {
       questions: parseQuestions(p.tool_input),
       nativeQuestions: Object.hasOwn(input, "nativeQuestions"),
       allowSkip: input.nativeQuestions === true && input.allowSkip === true,
+      nativeFile: Object.hasOwn(input, "nativeFile"),
+      fileInput: nativeFile === true ? parseNativeFileInput(p.tool_name, fileFields) : null,
+      nativePatch: Object.hasOwn(input, "nativePatch"),
+      patchInput:
+        nativePatch === true && p.tool_name === "Patch" ? parseNativePatchInput(patchFields) : null,
     };
   } catch {
     return {
@@ -3895,6 +3990,10 @@ function parsePermission(text: string): ParsedPermission {
       questions: [],
       nativeQuestions: false,
       allowSkip: false,
+      nativeFile: false,
+      fileInput: null,
+      nativePatch: false,
+      patchInput: null,
     };
   }
 }

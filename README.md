@@ -105,10 +105,10 @@ The implemented native modes are:
 | --- | --- |
 | `--rc-app <origin>` (default `--rc-driver=mitm`) | Runs real Claude Code behind a loopback TLS proxy, answers `/v1/code/sessions/**` locally, and relays through the E2E-encrypted broker. This replaces Anthropic Remote Control, so the official Claude client cannot join. |
 | `--rc-trace` | Passes traffic to Anthropic while recording bounded, redacted protocol diagnostics. The official client can drive the session, but remote-claw browsers cannot. |
-| `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text, image/file groups with an optional caption, one-shot session-scoped Interrupt, [bounded native question responses](docs/protocol.md#claude-native-questions), and [bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals). Bounded available image previews survive viewer reload; uploads deliberately supply bytes to native Claude without changing persistent permission settings. Browser-authored native `@` file references remain unsupported. Unsupported permissions/forms, model/mode changes, and end stay native/local. |
+| `--rc-app <origin> --rc-driver=claude-native --remote-control` | Runs ordinary Anthropic-hosted Remote Control behind a transparent exact-session observer and mirrors provider-ordered text and read-only tool activity to remote-claw. Linux and exact Claude 2.1.237 only. Browser mutations are ordinary text, image/file groups with an optional caption, one-shot session-scoped Interrupt, [bounded native question responses](docs/protocol.md#claude-native-questions), [bounded Bash decisions](docs/protocol.md#claude-native-bash-approvals), and [bounded Read/Write/Edit decisions](docs/protocol.md#claude-native-file-approvals). Bounded available image previews survive viewer reload; uploads deliberately supply bytes to native Claude without changing persistent permission settings. Browser-authored native `@` file references remain unsupported. Unsupported permissions/forms, model/mode changes, and end stay native/local. |
 | `--rc-app <origin> --rc-driver=claude-native --rc-native-session <cse_…>` | Attaches a fresh remote-claw projection to that exact already-running native session. It starts no interactive Claude session or proxy, performs no discovery, and rejects forwarded Claude arguments; the pinned-version probe still runs. |
 | `--rc-app <origin> --rc-driver=opencode --rc-oc-session <ses_…>` | Attaches a fresh projection to one exact already-running OpenCode 1.17.5 session on Linux arm64. The mutable surface remains non-empty non-slash text plus interrupt. Read-only MAIN-session running/idle status is advertised; native/local UI still owns permissions, questions, model/mode, attachments, and end. |
-| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0, 0.153.4, or 0.154.0 on Linux arm64. Browser mutations are non-empty non-slash text, image groups with an optional caption, and interrupt; exact 0.154.0 also accepts general files as private host-owned references. Available bounded image previews survive viewer reload. Exact 0.154.0 also conditionally offers [native model/effort/collaboration settings](docs/protocol.md#codex-native-session-settings). Native status and completed shell commands/results are read-only. Exact 0.153.4 and 0.154.0 additionally implement one-shot ordinary local-command approvals and bounded non-secret blocking choice forms; 0.151.0 approvals/questions and unsupported request shapes remain native-owned. |
+| `--rc-app <origin> --rc-driver=codex --rc-codex-thread <uuid>` | Attaches a fresh projection to one exact Codex thread through either an explicit-port loopback WebSocket app-server or literal `unix://`, which resolves only the current user's Codex managed control socket. The code accepts exact Codex 0.151.0, 0.153.4, or 0.154.0 on Linux arm64. Browser mutations are non-empty non-slash text, image groups with an optional caption, and interrupt; exact 0.154.0 also accepts general files as private host-owned references and bounded native patch approvals. Available bounded image previews survive viewer reload. Exact 0.154.0 also conditionally offers [native model/effort/collaboration settings](docs/protocol.md#codex-native-session-settings). Native status and completed shell commands/results are read-only. Exact 0.153.4 and 0.154.0 additionally implement one-shot ordinary local-command approvals and bounded non-secret blocking choice forms; 0.151.0 approvals/questions and unsupported request shapes remain native-owned. |
 | `--rc-app <origin> --rc-driver=tmux [claude args]` | Runs plain Claude in a recoverable private tmux pane while the lower-fidelity adapter projects transcript and serializes browser injection against active native turns. It fail-fast requires Linux arm64 and exact Claude 2.1.237 before identity, broker, or pane startup. Browser input is ordinary non-empty non-slash text plus attachments; interrupt, model, mode, and end are disabled. Permissions, questions, and folder trust stay in that local pane unless the caller explicitly bypasses Claude policy. Idle editor/config UI concurrency and independent peer ordering are not isolated. M4's maintained Bedrock tuple is green; provider-native and official-client coexistence are not advertised for this mode. |
 
 The launch form waits for the exact successful bridge request from its Claude child. The attach form
@@ -266,7 +266,8 @@ node dist/remote-claw.js --rc-app https://your-app.example \
 Use a durable `sqlite`/Turso broker profile and the same backend in the viewer. Browser mutations are
 ordinary non-empty non-slash text, images/files with an optional non-slash caption, one-shot session-scoped
 Interrupt, [bounded native question responses](docs/protocol.md#claude-native-questions),
-and [bounded one-time Bash decisions](docs/protocol.md#claude-native-bash-approvals).
+and [bounded one-time Bash decisions](docs/protocol.md#claude-native-bash-approvals) plus
+[Read/Write/Edit decisions](docs/protocol.md#claude-native-file-approvals).
 Images/files reuse the encrypted composer group. The host writes private upload files and submits
 their references through ordinary native text, deliberately sharing the uploaded bytes with Claude
 without changing persistent permission rules or sandbox settings. A separate Read prompt is not
@@ -295,14 +296,18 @@ with failures kept visible in the transcript and existing output truncation appl
 infer running state or background-task lifecycle. Bounded native
 [task-start/status observations](docs/protocol.md#claude-native-task-observations) also appear in the
 existing activity details, without child controls or inferred success. Fresh native forms of 1–4 distinct questions support
-single/multiple choices, bounded Other text, and per-question Skip; supported Bash approvals can also
-be answered here. Unsupported permissions/forms stay in Claude. Bash Allow copies
+single/multiple choices, bounded Other text, and per-question Skip; supported Bash and bounded
+Read/Write/Edit approvals can also be answered here. Unsupported permissions/forms stay in Claude. Bash Allow copies
 the native command/description unchanged; Deny rejects that command. The card explicitly notes that
 Claude did not provide a working directory, rather than guessing one. History and startup/reconnect
 overlap never restore decision authority. The separate
 [wider-form acceptance](docs/release-finish-line.md#claude-native-wider-question-forms) tracks the current
 slice separately from the historical single-choice result; [Bash acceptance](docs/release-finish-line.md#claude-native-bash-approvals)
-is tracked separately. Model/mode, general-file, and end actions remain native/local.
+is tracked separately. File cards show the complete bounded path/content or before/after text;
+Allow once preserves native input, never folder/session permission grants. Read options, replace-all,
+and oversized/unfamiliar inputs stay native. See the separate
+[file-approval acceptance](docs/release-finish-line.md#native-file-approvals). Model/mode and end
+actions remain native/local.
 
 To restart only the companion for a still-running native session, explicitly supply that session's
 exact `cse_*` ID:
@@ -387,6 +392,13 @@ or answers file/stdin/network permissions or questions. A submitted choice stays
 resolution; the resolved card does not claim which client or decision won. The local TUI and other
 native clients remain usable. See [permission semantics](docs/protocol.md#9-permissions) and the
 [acceptance status](docs/release-finish-line.md#codex-command-approvals).
+
+Exact 0.154.0 additionally implements [native file approvals](docs/protocol.md#codex-native-file-approvals)
+when a fresh complete pending patch matches its native request. Cards show all paths and diff bodies
+within a 32 KiB UTF-8/20-file bound; no moves, truncated patches, folder grants, or session-wide
+permission changes. Allow once/Deny bind the original callback; viewer replacement edits are ignored.
+Older Codex versions keep file approvals native-owned. See the separate
+[file-approval acceptance](docs/release-finish-line.md#native-file-approvals).
 
 The separate 0.153.4/0.154.0 question path reuses that native-confirmed card lifecycle for complete blocking,
 non-secret forms of 1–3 questions with 1–20 choices each. Native `isOther` alone enables a free-text

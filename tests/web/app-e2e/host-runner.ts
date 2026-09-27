@@ -94,6 +94,7 @@ if (!base) {
 const backend = process.env.RC_E2E_BACKEND || undefined; // ?backend= equivalent; unset ⇒ deployment default
 const bypass = process.env.RC_E2E_BYPASS || undefined; // VERCEL_AUTOMATION_BYPASS_SECRET for the preview SSO
 const withPerm = process.env.RC_E2E_PERM === "1";
+const fileApproval = process.env.RC_E2E_FILE_APPROVAL;
 const askqMode = process.env.RC_E2E_ASKQ; // "1" (single-select) | "multi" (multiSelect) | unset
 const withAskq = askqMode === "1" || askqMode === "multi";
 const askqMulti = askqMode === "multi";
@@ -188,6 +189,9 @@ if (process.env.RC_E2E_ATTACHMENT_ECHO === "1") {
 }
 const commands = createInterface({ input: process.stdin });
 commands.on("line", (line) => {
+  if (line.trim() === "resolve-permission" && fileApproval) {
+    session.pushUpstream({ type: "control_cancel_request", request_id: "perm-e2e-file" });
+  }
   if (line.startsWith("settings:") && capsPreset === "codex-settings") {
     const settings = parseSessionSettings(JSON.parse(line.slice("settings:".length)));
     if (settings) {
@@ -247,6 +251,32 @@ try {
         process.env.RC_E2E_RICH_TEXT === "1",
       )) {
     session.pushUpstream(payload);
+  }
+  if (fileApproval === "claude" || fileApproval === "codex") {
+    const path = `/work/${"nested-folder-".repeat(16)}/scratch.txt`;
+    session.pushUpstream({
+      type: "control_request",
+      request_id: "perm-e2e-file",
+      request: {
+        subtype: "can_use_tool",
+        tool_name: fileApproval === "claude" ? "Edit" : "Patch",
+        input:
+          fileApproval === "claude"
+            ? {
+                nativeFile: true,
+                file_path: path,
+                old_string: "color=blue\n",
+                new_string: "color=green\n",
+                replace_all: false,
+              }
+            : {
+                nativePatch: true,
+                changes: [
+                  { path, operation: "update", diff: "@@ -1 +1 @@\n-color=blue\n+color=green" },
+                ],
+              },
+      },
+    });
   }
   if (withPerm && capsPreset === "codex-approval") {
     session.pushUpstream({

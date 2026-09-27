@@ -424,7 +424,8 @@ reconciler across history/live; exhausted previews retain labels. See
 [upload bounds and retention](protocol.md#10-attachments).
 The viewer advertises <code>{agent:"claude-code",mode:"native-rc"}</code> with text, images/files, Interrupt,
 [bounded native question responses](protocol.md#claude-native-questions), and
-[bounded one-time Bash decisions](protocol.md#claude-native-bash-approvals). Unsupported permissions
+[bounded one-time Bash decisions](protocol.md#claude-native-bash-approvals), plus
+[bounded Read/Write/Edit decisions](protocol.md#claude-native-file-approvals). Unsupported permissions
 and forms, status, and other controls remain disabled. This surface is Linux-only and
 pins exact Claude 2.1.237. The [release roadmap](release-finish-line.md) owns current Interrupt acceptance,
 separately from historical M1. [Image acceptance](release-finish-line.md#claude-native-images--complete)
@@ -490,11 +491,12 @@ buffered notifications before readiness. Projected items are keyed by immutable
 <code>(turnId,itemId)</code>, not the turn-scoped item ID alone; exact replay deduplicates and changed
 projected bytes at the same coordinate fence the projection. Completed commands emit read-only
 <code>Shell</code> calls and bounded results, including failed/declined/nonzero-exit outcomes. Unfinished
-commands, other tool families, streaming partials, file changes, and reconstructed task tracking are
+commands, other general tool activity, streaming partials, general file-change activity, and reconstructed task tracking are
 not projected. Exact 0.154.0 copies bounded native parent-thread sub-agent observations into existing
 task rows, without child controls/subscriptions or inferred outcome/idle state; see
 [the task boundary](protocol.md#codex-native-task-observations). Task history follows the same
 conservative terminal-turn/deferred-repair rule described below.
+The separate bounded file-approval path displays fresh pending patches, not a general file-activity ledger.
 Historical assistant text requires native terminal-turn evidence read before paginated item history,
 or retained on a legacy full-turn page. Active/unknown turn text is deferred; one terminal-triggered
 read repair recovers earlier completed text without blocking approvals, releasing idle, or weakening
@@ -505,7 +507,8 @@ gets seq-less pending admission; its final acknowledgement waits for the exact n
 the host client ID and text. A 15-second correlation deadline and bounded history/dedup fence ambiguous
 or contradictory outcomes. Native active/idle status is advertised. Browser mutations are non-empty
 non-slash text, image groups with an optional non-slash caption, and interrupt. Exact 0.153.4 and 0.154.0
-implement one-shot ordinary local-command approvals and bounded native choice forms; 0.151.0
+implement one-shot ordinary local-command approvals and bounded native choice forms; exact 0.154.0
+also implements bounded native patch decisions. Version 0.151.0
 approvals/questions and unsupported request shapes remain native-owned. Exact 0.154.0 additionally
 offers optional [native model/effort/collaboration settings](protocol.md#codex-native-session-settings)
 after bounded catalog discovery. Its encrypted `session_settings` reports native current values;
@@ -543,8 +546,11 @@ additional permissions, and advertised `accept` plus `decline` or `cancel`. Fres
 exact connection-owned callbacks; its command-response API sends one advertised decision, never a
 generic error, input/policy amendment, or session grant. Broker admission produces pending, not a winning
 decision; provider resolution removes authority and closes the card neutrally, including after reload
-or delayed pending delivery. Ambiguous writes never retry. Stdin/file/network approvals and 0.151.0
-approvals remain native-owned. The separate question adapter admits complete non-secret blocking forms
+or delayed pending delivery. Ambiguous writes never retry. Stdin/network approvals and 0.151.0
+approvals remain native-owned. The separate exact-0.154.0 file adapter requires a fresh complete
+`fileChange` start plus matching callback, bounded to 20 paths and 32 KiB UTF-8, with no moves or
+folder/session grants. It sends only one native accept/decline; history cannot restore authority.
+See [file boundaries and acceptance](protocol.md#codex-native-file-approvals). The separate question adapter admits complete non-secret blocking forms
 of 1–3 questions with 1–20 choices each, with free text only when native `isOther` allows it. These are
 transparent native forms that may authorize tool actions, not a planning-only API. Responses use stable
 native question IDs and the same one-attempt/native-resolution lifecycle; no Dismiss, multiselect, or
@@ -573,10 +579,10 @@ have narrower, truthfully labeled guarantees.
 
 | Adapter or connector | Current role | Important limit |
 | --- | --- | --- |
-| Claude native companion | Structured text projection, host-owned image/file uploads and bounded previews, read-only tool activity, one-shot session-scoped Interrupt, [bounded native question responses](protocol.md#claude-native-questions), and [bounded Bash decisions](protocol.md#claude-native-bash-approvals) over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; unsupported permissions/forms, other controls, and status remain native/disabled; files/previews native acceptance is separate |
+| Claude native companion | Structured text projection, host-owned image/file uploads and bounded previews, read-only tool activity, one-shot session-scoped Interrupt, [bounded native question responses](protocol.md#claude-native-questions), [bounded Bash decisions](protocol.md#claude-native-bash-approvals), and [bounded Read/Write/Edit decisions](protocol.md#claude-native-file-approvals) over ordinary Anthropic RC; current follow-ons are separate from M1's text/restart/coexistence acceptance | Exact Linux/2.1.237 only; delayed Stop can affect newer peer work; attempted upload files retained under a per-run decoded-byte budget; unsupported permissions/forms, other controls, and status remain native/disabled; files/previews and file-approval native acceptance are separate |
 | tmux | Maintained lower-fidelity Claude compatibility driver; fail-fast limited to Linux arm64 and exact Claude 2.1.237, with M4's Bedrock tuple green | Ordinary non-empty non-slash text plus attachments only; an active turn and its native modal are fenced, but idle editor/slash/config UI remains shared and cannot be manipulated concurrently; independent peer ordering and provider-native/official-client coexistence are not claimed |
 | OpenCode | Supported text/interrupt server companion plus read-only MAIN status for the frozen 1.17.5/Linux arm64/pinned-model tuple | One explicit session, bounded history, fresh projection on restart; the separate status acceptance passed, while broader tuples and permission mirroring are not graduated |
-| Codex | Current code accepts exact 0.151.0, 0.153.4, and 0.154.0/Linux arm64 with text/images/interrupt/status, bounded image previews, and read-only completed command activity; exact 0.153.4 and 0.154.0 implement one-shot ordinary local-command approvals and bounded native choice forms; general files and optional [native model/effort/collaboration settings](protocol.md#codex-native-session-settings) require exact 0.154.0. Historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0; separate 0.153.4 managed recovery and [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) also passed | One explicit thread and attached local-TUI precondition; files/previews and other current acceptance are tracked in the release roadmap; unsupported permissions/questions, legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect, per-device unsubscribe, and other browser controls remain unclaimed |
+| Codex | Current code accepts exact 0.151.0, 0.153.4, and 0.154.0/Linux arm64 with text/images/interrupt/status, bounded image previews, and read-only completed command activity; exact 0.153.4 and 0.154.0 implement one-shot ordinary local-command approvals and bounded native choice forms; general files, bounded native patch approvals, and optional [native model/effort/collaboration settings](protocol.md#codex-native-session-settings) require exact 0.154.0. Historical M3a/M3b and explicit-WS/paginated recovery acceptance remain exact 0.151.0; separate 0.153.4 managed recovery and [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) also passed | One explicit thread and attached local-TUI precondition; files/previews, file-approval, and other current acceptance are tracked in the release roadmap; unsupported permissions/questions, legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect, per-device unsubscribe, and other browser controls remain unclaimed |
 | Bedrock inference | Maintained exact-tuple MITM connector | Replaces Anthropic inference while preserving the private local RC facade; other tuples remain unqualified |
 | Accountless mode | Maintained for the exact M5 Bedrock tuple | Means no Anthropic account, not no credentials; AWS/Bedrock and remote-claw credentials remain required |
 
@@ -715,14 +721,15 @@ The <code>claude-native</code> driver uses these bounded <code>AnthropicRcClient
 - current <code>postQuestionResponse</code> for one complete recorded native form with 1–4 distinct
   questions and retained single-string/multi-array answers, under the
   [question boundary](protocol.md#claude-native-questions); and
-- current <code>postCommandResponse</code> for one recorded Bash Allow/Deny decision, under the
-  [Bash boundary](protocol.md#claude-native-bash-approvals).
+- current <code>postCommandResponse</code> for one recorded Bash or bounded Read/Write/Edit
+  Allow/Deny decision, under the [Bash](protocol.md#claude-native-bash-approvals) and
+  [file](protocol.md#claude-native-file-approvals) boundaries.
 
 Its production transport is fixed to <code>https://api.anthropic.com</code> and the pinned API
 version. The built-in credential source is Linux-only, reads native Claude's owner-only mode-0600
 credential file afresh, never writes or refreshes it, and waits for native Claude to rotate a rejected
 token. A 401 is retried only when the bearer actually changed, except that session-scoped Interrupt
-and question/Bash responses disable rotation/retry entirely. Network-ambiguous writes are not automatically replayed.
+and question/Bash/file responses disable rotation/retry entirely. Network-ambiguous writes are not automatically replayed.
 Only user-event POSTs add the host-owned <code>anthropic-client-platform: web_claude_ai</code>
 compatibility header: authenticated browser input remains human input, while native permissions,
 peer messages, and server-owned <code>inbound_origin</code> remain unchanged. See the
