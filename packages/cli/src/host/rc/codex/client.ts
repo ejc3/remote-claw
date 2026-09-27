@@ -514,7 +514,8 @@ export class CodexAppServerClient implements CodexClient {
       if (
         item.type === "userMessage" ||
         item.type === "agentMessage" ||
-        item.type === "commandExecution"
+        item.type === "commandExecution" ||
+        item.type === "subAgentActivity"
       ) {
         data.push({ turnId: entry.turnId, item: item as CodexThreadItem });
       }
@@ -566,7 +567,8 @@ export class CodexAppServerClient implements CodexClient {
         if (
           item.type === "userMessage" ||
           item.type === "agentMessage" ||
-          item.type === "commandExecution"
+          item.type === "commandExecution" ||
+          item.type === "subAgentActivity"
         ) {
           data.push({ turnId: turn.id, item: item as CodexThreadItem, turnStatus: turn.status });
         }

@@ -129,7 +129,9 @@ Exact 0.154.0 now conditionally offers [native model/effort/collaboration settin
 after catalog discovery, without changing permissions or sandbox policy. The
 [separate settings slice](release-finish-line.md#codex-native-session-settings) tracks its current
 acceptance; Claude settings remain native/local. Other controls, streaming partials, file
-changes, task lifecycle, and other versions/platforms remain outside this implementation.
+changes, reconstructed task tracking, and other versions/platforms remain outside this implementation.
+Exact 0.154.0 now projects bounded native [sub-agent observations](protocol.md#codex-native-task-observations)
+through the existing task rows; child controls/output subscriptions remain native-owned.
 
 ### tmux compatibility
 

@@ -320,8 +320,11 @@ The immutable projection coordinate is `(turnId,itemId)`, because Codex item IDs
 An exact replay deduplicates; changed projected bytes at the same pair fence the projection.
 Completed `commandExecution` shares that identity fence and produces read-only `Shell` calls and bounded
 results, including failed/declined/nonzero-exit outcomes. It cannot correlate or acknowledge a pending
-browser prompt. Unfinished commands, other tool families, streaming partials, file changes, and task
-lifecycle are not projected.
+browser prompt. Exact 0.154.0 also projects bounded parent-thread `subAgentActivity` observations
+through existing task rows, with the same coordinate fence and conservative terminal-history rule.
+No child controls, inferred success/idle, or reconstructed lifecycle tracker is added; see
+[the task boundary](protocol.md#codex-native-task-observations). Unfinished commands, other tool
+families, streaming partials, and file changes are not projected.
 Exact 0.153.4 and 0.154.0 additionally admit ordinary local `commandExecution/requestApproval` records through
 `codex/approvals.ts`: complete bounded command/absolute cwd/optional reason, `kind:"command"`,
 `environmentId:"local"`, no network/additional-permission context, and advertised `accept` plus
@@ -501,7 +504,7 @@ query, or fragment, or the exact literal `unix://`. That token resolves only to
 After resume, `historyMode:"paginated"` selects bounded ascending `thread/items/list` and
 `historyMode:"legacy"` selects bounded ascending `thread/turns/list` with `itemsView:"full"`. Both request
 one item/turn per page to avoid combining inline-image groups, with a 100,000-page raw scan cap. Both
-retain user/assistant text and `commandExecution`; unsupported or unfinished shapes are filtered by
+retain user/assistant text, `commandExecution`, and `subAgentActivity` (exact 0.154.0 projection); unsupported or unfinished shapes are filtered by
 the projection before the shared 10,000 native-item cap. The exact
 official-Remote M3b acceptance exercised the literal managed socket and this legacy full-turn reader.
 
