@@ -44,8 +44,10 @@ restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated hist
 Codex results remain exact 0.151.0 evidence. The same sentinel separately passed on 2026-09-08 for
 exact 0.153.4/Linux arm64 through managed Unix with native-reported paginated history. Separate
 [0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
-and automatic stable-ID reconnect remain unqualified. Current-version, command-activity, and
+adds the actual Mac app and reopened viewers selecting a fresh projection. The later
+[bounded Android network-recovery result](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+qualifies UID-scoped outages for both native apps. Physical radio loss, natural screen-off/deep-sleep
+recovery, legacy-history recovery, and automatic stable-ID reconnect remain unqualified. Current-version, command-activity, and
 interrupt/image, command-approval, and question acceptance is tracked in the [release roadmap](release-finish-line.md). Other controls
 remain disabled.
 Every current `Session` binding remains process-local.
@@ -277,8 +279,8 @@ in the [release roadmap](release-finish-line.md).
 Claude-native additionally exposes [qualified session-only model choices](protocol.md#claude-native-model-settings)
 through `configureSession`, with no effort/mode/default/permission writes. A fresh owned initialize
 response supplies the last-confirmed model; the wire's empty model list is not fabricated into a
-native catalog. Only verified Sonnet 4.6 and Haiku 4.5 IDs are selectable, explicitly labeled a
-qualified subset. One expected-model guard and a bounded asynchronous confirmation read keep
+native catalog. Only verified Opus 5 (1M context), Fable 5, Sonnet 5, Sonnet 4.6, and Haiku 4.5 IDs
+are selectable, explicitly labeled a qualified subset. One expected-model guard and a bounded asynchronous confirmation read keep
 state-free ACKs from becoming selected ticks; uncertain settings block only further model changes,
 not text/interrupt/approval capture. Startup failure leaves settings unavailable. Native reconnect
 refreshes the observation without resending a model write. The shared current-only presence/catch-up
@@ -428,7 +430,7 @@ attached for the projection lifetime.
 | Local prompts in viewer | not generally surfaced | provider user events in provider order | post-hoc text-ledger match | every TUI/browser user at its native ordered ID; browser attribution requires exact marker + text | every completed TUI/browser text item at immutable `(turnId,itemId)` |
 | Permission behavior | stable surface disabled | supported Bash/Read/Write/Edit decisions and bounded question forms with native resolution; unsupported permissions/forms remain native/local | native/local owner; posture is `local`, `bypassed`, or initially `unknown`; no browser answer | native/local by default; positive mirroring opt-in is experimental | 0.153.4/0.154.0: one-shot ordinary local-command decisions and bounded native choice forms; 0.154.0 also bounded patch decisions, all with native resolution; 0.151.0 and unsupported permissions/questions remain native-owned |
 | Status advertised | yes | no | no | yes | yes |
-| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Legacy-history and mobile network-loss/deep-sleep recovery and automatic stable-ID reconnect remain unqualified |
+| Restart reattachment | no | explicit exact-ID attach creates a fresh projection; it never adopts the prior projection | no; SessionEnd/rotation retires the writable projection but preserves the local pane | explicit same-session attach creates a fresh projection, reconciles bounded history, and consumes no old commands | a new explicit exact-thread invocation creates a fresh projection, observes native history, and consumes no retired commands; accepted on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete) adds the actual Mac app and reopened viewers. Separate [Android UID-scoped network recovery](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27) also passed. Physical radio loss, natural screen-off/deep-sleep recovery, legacy-history recovery and automatic stable-ID reconnect remain unqualified |
 
 The exact advertised viewer capabilities are:
 

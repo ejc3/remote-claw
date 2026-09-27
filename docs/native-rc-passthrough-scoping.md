@@ -71,8 +71,8 @@ Current read-only [task observations](protocol.md#claude-native-task-observation
 activity rows for bounded worker start descriptions and reported status labels. They do not add child
 controls, prompt/output forwarding, a task tracker, or native-idle inference; historical M1 is unchanged.
 
-Current [model-only settings](protocol.md#claude-native-model-settings) add verified session-only
-Sonnet 4.6/Haiku 4.5 choices, explicitly not a discovered native catalog. Fresh owned initialize
+Current [model-only settings](protocol.md#claude-native-model-settings) add five verified session-only
+choices, explicitly not a discovered native catalog. Fresh owned initialize
 responses supply last-confirmed state; ACKs alone never select a model. One expected-target guard
 and an optional bounded fresh read leave conversation/approvals usable if confirmation is missing.
 Effort, mode, defaults, permissions and sandbox changes remain native/local. This is separate from

@@ -30,7 +30,9 @@ loss left the local TUI usable. The separate 2026-09-08
 [official desktop Remote recovery result](#codex-official-remote-recovery--complete) now qualifies
 0.154.0/Linux arm64/managed Unix/paginated with the actual Mac app. A separate
 [physical Android background/resume check](#native-phone-backgroundresume--2026-09-26) passed for
-both agents; legacy-history and mobile network-loss/deep-sleep recovery remain untested.
+both agents. Separate [Android network/forced-idle qualification](#native-phone-network-loss-and-forced-doze--2026-09-27)
+does not qualify physical radio loss or natural screen-off/deep sleep; legacy-history recovery also
+remains untested.
 Viewer UI-1 is also complete: routine contiguous tool/task events now collapse into an exact-count
 activity row with a responsive detail sheet, while errors and other already-visible non-routine rows
 remain first-class. This does not claim background-task lifecycle semantics the adapters do not expose.
@@ -154,7 +156,7 @@ remote-claw identity/viewer pass, and any deployment credential needed for a pro
 | Claude trace | Normal Anthropic RC and official-client control with protocol observation | It does not project to or accept commands from remote-claw browsers |
 | Claude native companion | M1 complete on Linux with exact Claude 2.1.237: exact launch/attach binding, provider-ordered text, host-only OAuth, local TUI, literal official web UI on the user's phone, two browsers, ambiguity fencing, fresh-projection restart, broker-loss isolation, packed install, and exact-SHA deployed-broker evidence | Later controls, platforms, and versions remain separate capability tranches, not M1 blockers |
 | OpenCode | M2 complete for Linux arm64, exact OpenCode 1.17.5, the pinned Bedrock Sonnet model, one explicit live session, non-empty non-slash text, interrupt, native/local permissions, and fresh-projection restart; the separate read-only MAIN running/idle status follow-on is also complete | Later versions, platforms, models, permission graduation, and richer controls are separate tranches |
-| Codex | M3a and M3b complete for exact 0.151.0/Linux arm64: explicit UUIDv7, local TUI plus two browsers, native-ordered text/status, TUI-only approvals/questions, explicit-loopback and literal managed-`unix://` attachment, same-thread ChatGPT Remote text coexistence, and provider-transport isolation. Recovery passed fresh-projection restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; separate [0.154.0 official desktop Remote recovery](#codex-official-remote-recovery--complete) also passed | Legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect, per-device Remote unsubscribe, richer controls/content, and other versions/platforms remain separate results |
+| Codex | M3a and M3b complete for exact 0.151.0/Linux arm64: explicit UUIDv7, local TUI plus two browsers, native-ordered text/status, TUI-only approvals/questions, explicit-loopback and literal managed-`unix://` attachment, same-thread ChatGPT Remote text coexistence, and provider-transport isolation. Recovery passed fresh-projection restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated; separate [0.154.0 official desktop Remote recovery](#codex-official-remote-recovery--complete) also passed | Legacy-history, physical radio-loss/natural-deep-sleep recovery, automatic stable-ID reconnect, per-device Remote unsubscribe, richer controls/content, and other versions/platforms remain separate results |
 | tmux | M4 complete for exact Claude 2.1.237/Linux arm64 with Bedrock Sonnet 4.6: packed install, private pane, two browsers, reload, non-empty non-slash text plus attachments held behind an active turn and its native modal, queued completion after browser departure, and broker-loss isolation | Idle editor/slash/config UI concurrency is unsupported; other versions/platforms/providers, native peer ordering, exactly-once native application, raw browser controls, slash commands, and provider-native/official-client coexistence remain unclaimed |
 | Bedrock/accountless | M5 complete for one tools-disabled text round-trip on exact Linux arm64 / Claude 2.1.237 / `us-east-1` / `anthropic.claude-opus-4-8` / temporary IMDSv2 SigV4, plus the already-qualified OpenCode M2 tuple | Each newly advertised capability, version, platform, model, region, credential source, or adapter tuple needs its own bounded gate |
 
@@ -192,11 +194,11 @@ home-folder UI artifacts, outside Git.
 | Follow-on | Status | Bounded user outcome |
 | --- | --- | --- |
 | Native work visibility, Claude first | Claude tools, Codex completed commands, [Codex task observations](#codex-native-task-observations), and [Claude task observations](#claude-native-task-observations) implemented; each bounded acceptance is recorded separately | Real observations reach the existing activity/details UI; no invented child state or task controls |
-| Desktop/mobile daily-use finish | Current: recovery warning scoped; [draft navigation and credential restoration](#viewer-daily-use--2026-09-25) implemented | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
+| Desktop/mobile daily-use finish | Current: recovery warning scoped; [draft navigation and credential restoration](#viewer-daily-use--2026-09-25) implemented; [offline/foreground browser recovery](#browser-offlineforeground-recovery--2026-09-27) passed | Join, discover, read, send, and reconnect with legible typography/highlights and usable keyboard/composer behavior on both sizes |
 | Remote interrupt and continue | Codex and Claude-native implemented and live-accepted | Phone and desktop can interrupt native work and continue; each adapter preserves its provider's targeting semantics |
 | Codex official-Remote recovery | [Complete for exact 0.154.0/Linux arm64/managed Unix/paginated](#codex-official-remote-recovery--complete) | Existing TUI and actual Mac desktop app keep the same native thread across companion restart/broker loss; reopened viewers select a fresh projection, recover history once, and complete later browser work |
 | Screenshot/file input | Historical Codex and Claude-native images live-accepted; [files and bounded previews implemented, bounded native acceptance passed](#native-files-and-image-previews) for Claude-native and exact Codex 0.154.0 | Phone/desktop send encrypted mixed groups with native-confirmed delivery and bounded canonical previews; uploads deliberately share bytes without changing persistent permission/sandbox settings |
-| Native-phone foreground recovery | [Short Android background/resume](#native-phone-backgroundresume--2026-09-26) passed for both agents; separate [OS lifecycle outcomes](#native-phone-os-lifecycle--2026-09-26) also passed | Native Claude thaw and ChatGPT app-process reopen restore usable sessions; true network-loss/deep-sleep recovery remains unverified |
+| Native-phone foreground recovery | [Short background/resume](#native-phone-backgroundresume--2026-09-26), [OS lifecycle outcomes](#native-phone-os-lifecycle--2026-09-26), and [network/forced-idle qualification](#native-phone-network-loss-and-forced-doze--2026-09-27) recorded separately | Same-session catch-up and later phone work without re-pairing; physical radio loss and natural screen-off/deep sleep remain unverified |
 | Native session settings | Exact Codex 0.154.0 [native settings](#codex-native-session-settings) and exact Claude 2.1.237 [qualified model-only choices](#claude-native-model-settings) implemented; bounded native/browser acceptance passed | Phone/desktop pick each adapter's supported settings; selections require native confirmation and never change permission/sandbox policy |
 | Remote approvals and questions | Codex 0.153.4 and 0.154.0 ordinary-command approvals and bounded native choice forms implemented and browser/TUI live-accepted; [0.154.0 scope](#codex-current-version-acceptance). Claude [single-choice acceptance](#claude-native-single-choice-questions), [bounded Bash acceptance](#claude-native-bash-approvals), and [wider-form acceptance](#claude-native-wider-question-forms) passed | Browser decisions reconcile with native/local/provider decisions without weakening permission policy; unsupported form/permission kinds remain queued |
 | Practical compatibility expansion | Codex 0.153.4/Linux arm64 text/status/command activity live-accepted; 0.154.0 native-app text and browser/TUI mutation [acceptance passed](#codex-current-version-acceptance) | Add one useful native version/platform/inference configuration with its actual user journey, not a theoretical matrix |
@@ -465,6 +467,54 @@ boundaries; the native capture is not itself a test of the browser guard.
 This does not rewrite historical image-only acceptance or graduate wider native forms, model/mode,
 streaming/task/status, or network recovery.
 
+### Browser offline/foreground recovery — 2026-09-27
+
+**Current: Chromium and WebKit acceptance passed; no production recovery fix needed.** The existing
+revive suite now backgrounds a viewer, disconnects its browser context, then foregrounds while still
+offline. It requires the exact new transcript subscription to fail, not merely `navigator.onLine`
+or an announce error. An independent desktop-layout peer completes a host-confirmed send while the
+offline viewer cannot receive it. Restoring connectivity without reload catches up once, preserves
+the unsent draft without publishing it, and supports a new confirmed send. Both viewers retain the
+canonical sends and prior assistant once. The original foreground sentinel also passed on both engines.
+
+This uses the production viewer/broker with the existing scripted native worker. It does not claim
+physical iPhone/radio-loss or native-app recovery. Browser transport and foreground replacement are
+the causal integration boundary; detailed ordering/parser regressions remain deterministic tests.
+WebKit offline emulation leaves established SSE alive, so the explicit foreground replacement is
+essential. A test-only helper reuses the existing HTTP-loopback CSP setup for the peer; production
+CSP is unchanged. Private failed attempts, review finding/fix, and final four-test result:
+`~/remote-claw-ui-artifacts/parity-gap-closure-2026-09-27.yR4TDx/browser-recovery.md`.
+
+### Native-phone network loss and forced Doze — 2026-09-27
+
+**Current: bounded actual Android outcomes passed for both agents; no product recovery fix needed.**
+Moto G 2025/Android 15, Claude Android 1.260923.20 with exact Claude 2.1.237/Linux arm64/Manual,
+and ChatGPT Android 1.2026.258 with Codex 0.154.0/Linux arm64/on-request/read-only were exercised
+on fresh explicitly named native sessions. No account, permission, pairing, or lock-security change
+was made. This is native-app/host acceptance, separate from the browser sentinel above.
+
+For each app separately, an OS UID-specific network denial was verified in Android's BPF owner map.
+The host completed one no-tools marker while it was absent from the disconnected phone. Removing
+the denial restored the same session automatically, without reload/re-pairing; a new phone-origin
+marker then completed. Denial lasted about 13.3 seconds for Claude and 12.4 seconds for ChatGPT.
+Wireless ADB remained available throughout. A detached phone-local watchdog was rehearsed before
+the real interval; both rules and the test chain were verified restored afterward.
+
+A separate roughly nine-second forced deep-Doze interval kept the display awake and keyguard
+unlocked. Device `IDLE`, `force=true`, and the active Doze BPF chain were observed while host work
+completed. Claude was not exempt; ChatGPT retained an OS Doze allowlist bit. Thus ChatGPT's Doze
+result proves session catch-up across device idle, **not** network suspension under Doze; its
+independent UID-denial result above owns network recovery. After unforce and ordinary app reopening,
+both exact sessions displayed the host result and accepted a later phone-origin turn. Canonical
+history contains each of the five test user/reply pairs once per agent; both native PIDs remained
+unchanged. The phone returned to `ACTIVE`, `force=false`, awake/unlocked with secure keyguard enabled.
+
+This is not physical radio loss, natural screen-off sleep, a long overnight suspension, or proof
+about other devices/versions. Natural lock/deep-sleep remains pending a confirmed physical unlock
+route; Wi-Fi and lock security were preserved. Private scripts, watchdogs, failed setup attempts,
+canonical IDs, state captures, and screenshots:
+`~/remote-claw-ui-artifacts/parity-gap-closure-2026-09-27.yR4TDx/phone-recovery.zJDBRb/README.md`.
+
 ### Native-phone background/resume — 2026-09-26
 
 **Bounded actual Android acceptance passed.** On Moto G 2025/Android 15, the retained Claude
@@ -671,6 +721,24 @@ tested app-client feed, not a universal claim about Claude streaming interfaces.
 Child, reasoning, and command streams, native model/status changes, mobile network-loss recovery,
 and cross-agent streaming parity are outside this slice.
 
+### Claude interactive streaming — upstream blocked
+
+**Current: unavailable on the qualified interactive bridge; no production upgrade made.** A
+2026-09-27 source check found that exact 2.1.237's interactive producer excludes text deltas even
+though its transport understands ephemeral `stream_event` records. `--include-partial-messages`
+requires print/stream-JSON mode and does not preserve the interactive TUI. An isolated official
+2.1.283 binary adds an interactive emitter behind the provider-served
+`tengu_bridge_partial_messages` flag. A fresh native launch received false; one real no-tools
+120-line turn produced a single 9,055-character final and zero partial/ephemeral records.
+
+This identifies a concrete upstream rollout dependency, not a missing browser subscription or a
+universal limitation of Claude. No flag forcing, installed-version change, headless substitute,
+permission/default change, or guessed parser was added. Once ordinarily available, capture native
+message/block coordinates and finality, qualify the newer version's existing supported controls,
+then feed a small text-only adapter into the existing encrypted latest-value preview transport.
+Private source excerpts, redacted wire records, and verification:
+`~/remote-claw-ui-artifacts/parity-gap-closure-2026-09-27.yR4TDx/claude-streaming.oBpJcZ/README.md`.
+
 ### Claude native task observations
 
 **Current: implemented; bounded native-history/two-viewer acceptance passed 2026-09-27.** Exact Claude
@@ -781,7 +849,8 @@ the sibling `native-settings.ZNvEGo/` directory; Android corroboration is in
 ### Claude native model settings
 
 **Current: implemented; bounded native/browser acceptance passed 2026-09-27.** Exact Claude Code
-2.1.237/Linux arm64 exposes two verified session-only IDs, Sonnet 4.6 and Haiku 4.5. Native
+2.1.237/Linux arm64 exposes five verified session-only choices: Opus 5 (1M context), Fable 5,
+Sonnet 5, Sonnet 4.6, and Haiku 4.5. Native
 `initialize` returns `models:[]`, so the picker explicitly says this is a verified subset, not the
 native catalog. No effort, mode, global/default, permission, or sandbox writes are enabled.
 Unknown native current models stay readable without becoming choices. Native status/tasks and
@@ -795,7 +864,7 @@ does not block text, Interrupt, or approval/question responses. Fresh native rec
 fresh companion is required if confirmation never arrives; browser reload does not reset the guard.
 The [protocol boundary](protocol.md#claude-native-model-settings) owns exact correlation and bounds.
 
-Actual acceptance used the retained native session/process plus independent desktop Chromium and
+Initial two-choice acceptance used the retained native session/process plus independent desktop Chromium and
 390×844 phone-sized WebKit viewers against a fresh encrypted SQLite broker. Phone selected Haiku;
 both viewers showed it only after the exact fresh initialize confirmed the native value. An ordinary
 current-only keepalive and reload/catch-up preserved the verified-subset label and selection. Desktop
@@ -816,6 +885,22 @@ Evidence and helpers live outside Git under
 the preceding direct RC qualification is in sibling `claude-model-control.MUTSdw/`. Detailed
 confirmation/race/failure regressions remain in the adapter/client tests, with cheap shared-parser,
 provenance-retention, and UI tests rather than additional expensive native scenarios.
+
+The 2026-09-27 expansion qualified exact `claude-opus-5[1m]`, `claude-fable-5`, and
+`claude-sonnet-5` with fresh RC current-model confirmation and one actual no-tools reply each,
+restoring Sonnet 4.6 after every probe. Native Opus inference reports its base model without the
+context suffix; current-model confirmation preserves the selected exact ID. Native picker/SDK
+metadata informed these literal choices, but no discovery subprocess or inferred alias ships.
+Five explicit rows extend the existing allowlist; unknown native models remain read-only and
+account-specific native rejection is not converted to success.
+
+Separate encrypted two-viewer acceptance selected Opus from phone WebKit, confirmed it in both
+phone and desktop Chromium, retained five choices through current-only keepalive/reload, then
+restored Sonnet 4.6 from desktop. Two model writes and three fresh initialize confirmations kept
+the same native process and Manual/default policy. Phone/desktop light/dark screenshots were
+opened and inspected. Native inference and browser evidence are respectively under
+`~/remote-claw-ui-artifacts/parity-gap-closure-2026-09-27.yR4TDx/claude-models.t31Xsz/` and
+`~/remote-claw-ui-artifacts/parity-gap-closure-2026-09-27.yR4TDx/claude-model-viewers.MtMp8w/`.
 
 ### Daily-use recovery warning
 
@@ -1612,7 +1697,7 @@ implemented and accepted capability; it does not rewrite M2. M4 proves only the 
 tmux row. Codex recovery is also accepted on 0.151.0/explicit WS/paginated and
 0.153.4/managed Unix/paginated; separate [0.154.0 official desktop Remote recovery](#codex-official-remote-recovery--complete)
 adds the actual Mac app and a reopened-viewer restoration tail. Broader tuples and controls, including
-legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect, additional
+legacy-history, physical radio-loss/natural-deep-sleep recovery, automatic stable-ID reconnect, additional
 Bedrock/account tuples, viewer parity, and the full product remain separate outcomes.
 Line count, fixture count, and proof machinery are not success metrics. The metric is supported user
 surfaces working safely with the smallest maintainable implementation.

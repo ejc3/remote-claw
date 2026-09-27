@@ -9,8 +9,10 @@ hydration. The separate 2026-09-07
 restart/backfill and broker-loss isolation on 0.151.0/explicit WS/paginated history. The same sentinel
 separately passed on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
 paginated history. The separate [0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
-and automatic stable-ID reconnect remain unqualified.
+adds the actual Mac app and reopened viewers selecting a fresh projection. The later
+[bounded Android network-recovery result](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+qualifies UID-scoped outages for both native apps. Physical radio loss, natural screen-off/deep-sleep
+recovery, legacy-history recovery, and automatic stable-ID reconnect remain unqualified.
 The earlier `0.146.0` observations below remain historical seam evidence.
 
 **Current implementation:** the version gate accepts exact `0.151.0`, `0.153.4`, and `0.154.0` on Linux arm64.

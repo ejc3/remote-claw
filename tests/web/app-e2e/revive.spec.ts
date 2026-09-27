@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import { expect, test } from "./fixtures";
+import { expect, prepareAppPage, test } from "./fixtures";
 
 // iOS-Safari foreground revive (#121/#125). When a tab is backgrounded (photo picker, app switch, lock
 // screen), iOS Safari SUSPENDS the in-flight fetch streams (the announce bus + the transcript SSE) and
@@ -89,4 +89,89 @@ test("survives a background→foreground cycle: re-subscribes idempotently (no d
     page.locator(".row-user .pill:not(.pill-pending)", { hasText: "after foreground" }),
   ).toBeVisible();
   await expect(page.locator(".row-user .pill", { hasText: "before background" })).toHaveCount(1);
+});
+
+// Return to a tab while its network is still unavailable, then restore connectivity as a peer works.
+// WebKit's offline emulation leaves already-open SSE connections alive; foreground revival explicitly
+// closes those streams, so this checks a real failed resubscription, not just navigator.onLine=false.
+// Ordering/parser edge cases stay in deterministic tests. This is browser-engine transport recovery,
+// not evidence of physical-phone radio loss or Android Doze.
+test("an offline viewer catches up after foreground without reload, duplicate sends, or draft loss", async ({
+  page,
+  browser,
+  browserName,
+  baseURL,
+  seedHost,
+}) => {
+  const { pass } = await seedHost();
+  if (!baseURL) throw new Error("network recovery requires the configured broker URL");
+  const peerContext = await browser.newContext({ baseURL, viewport: { width: 1280, height: 900 } });
+  const peer = await peerContext.newPage();
+  try {
+    await prepareAppPage(peer, browserName, baseURL);
+    for (const viewer of [page, peer]) {
+      await viewer.goto(`/${qp}#${encodeURIComponent(pass)}`);
+      await expect(viewer.getByRole("button", { name: "Connect" })).toBeEnabled();
+      await viewer.getByRole("button", { name: "Connect" }).click();
+      await viewer.locator("button.row", { hasText: "rc box" }).click();
+      await expect(viewer.locator(".prose.assistant", { hasText: "Build is green" })).toBeVisible();
+    }
+    await sendPrompt(page, "before network loss");
+    await expect(
+      peer.locator(".row-user .pill:not(.pill-pending)", { hasText: "before network loss" }),
+    ).toBeVisible();
+    const draft = page.getByRole("textbox", { name: "Message" });
+    await draft.pressSequentially("keep this unsent draft");
+
+    await setVisibility(page, "hidden");
+    await page.context().setOffline(true);
+    await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+    const reSubscribe = page.waitForRequest((r) => isTranscriptStream(r.url()));
+    await setVisibility(page, "visible");
+    const offlineTranscript = await reSubscribe;
+    expect(await offlineTranscript.response()).toBeNull();
+    expect(offlineTranscript.failure()).not.toBeNull();
+    await expect(page.locator(".bus-error")).toHaveCount(1);
+    await sendPrompt(peer, "peer work during network loss");
+    await expect(
+      peer.locator(".row-user .pill:not(.pill-pending)", {
+        hasText: "peer work during network loss",
+      }),
+    ).toBeVisible();
+    await expect(
+      page.locator(".row-user .pill", { hasText: "peer work during network loss" }),
+    ).toHaveCount(0);
+
+    await page.context().setOffline(false);
+    await expect(
+      page.locator(".row-user .pill:not(.pill-pending)", {
+        hasText: "peer work during network loss",
+      }),
+    ).toBeVisible();
+    await expect(draft).toHaveValue("keep this unsent draft");
+    await expect(
+      page.locator(".row-user .pill", { hasText: "keep this unsent draft" }),
+    ).toHaveCount(0);
+    await sendPrompt(page, "after network recovery");
+    for (const viewer of [page, peer]) {
+      for (const text of [
+        "before network loss",
+        "peer work during network loss",
+        "after network recovery",
+      ]) {
+        await expect(
+          viewer.locator(".row-user .pill:not(.pill-pending)", { hasText: text }),
+        ).toHaveCount(1);
+      }
+      await expect(viewer.locator(".prose.assistant", { hasText: "Build is green" })).toHaveCount(
+        1,
+      );
+    }
+  } finally {
+    await page
+      .context()
+      .setOffline(false)
+      .catch(() => {});
+    await peerContext.close();
+  }
 });

@@ -21,8 +21,10 @@ The separate [Codex recovery follow-on](release-finish-line.md#codex-recovery--c
 fresh-projection restart/backfill and broker-loss isolation on Linux arm64 with 0.151.0/explicit-port
 loopback WebSocket and 0.153.4/managed Unix, both with paginated history. Separate
 [0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
-and automatic stable-ID reconnect remain unqualified.
+adds the actual Mac app and reopened viewers selecting a fresh projection. The later
+[bounded Android network-recovery result](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+qualifies UID-scoped outages for both native apps. Physical radio loss, natural screen-off/deep-sleep
+recovery, legacy-history recovery, and automatic stable-ID reconnect remain unqualified.
 Current evidence and remaining gates live in
 [native coexistence](native-rc-passthrough-scoping.md) and the
 [release roadmap](release-finish-line.md).
@@ -108,8 +110,10 @@ restart/backfill and broker-loss isolation for the pinned version/platform with 
 WebSocket, paginated history, a packed CLI, local SQLite, one TUI, and two browsers. The same sentinel
 passed separately on 2026-09-08 for exact 0.153.4/Linux arm64 through managed Unix with native-reported
 paginated history. The separate [0.154.0 official desktop recovery result](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened-viewer restoration. Legacy-history and mobile network-loss/deep-sleep recovery and automatic
-stable-ID reconnect remain later adapter-local gates; they do not reopen M3a or M3b.
+adds the actual Mac app and reopened-viewer restoration. The separate
+[Android UID-scoped network-recovery result](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+also passed. Physical radio loss, natural screen-off/deep-sleep recovery, legacy-history recovery, and
+automatic stable-ID reconnect remain later adapter-local qualifications; they do not reopen M3a or M3b.
 Current code also accepts exact 0.153.4 and 0.154.0/Linux arm64,
 displays completed shell commands/results as read-only activity, and supports browser interrupt on all
 accepted versions. Interrupt binds one observed active turn without retargeting or retrying; queued
