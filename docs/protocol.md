@@ -360,8 +360,10 @@ these observations cannot acknowledge a pending browser prompt or execute a comm
 Exact Codex 0.154.0 advertises optional `liveAssistant:true`. A parent-thread `item/started`
 `agentMessage` followed by matching `item/agentMessage/delta` updates one in-memory text preview.
 Unknown coordinates, completed items, child output, reasoning, and command output never become
-previews. Overlapping parent text items suppress previews until terminal-turn observation. Native
-`item/completed` remains the only live final-text authority; neither previews nor their absence
+previews. Overlapping parent text items suppress previews until terminal-turn observation. Empty
+native text completions also retain their coordinate in the existing 10,000-item identity bound on
+this live-enabled tuple, without emitting an empty canonical row, so replay cannot revive them.
+Native `item/completed` remains the only live final-text authority; neither previews nor their absence
 establish idle, success, delivery, or permission authority. Historical assistant finality is unchanged.
 
 The separate `assistant_preview` record uses existing session AEAD, `dir:"out"`, `seq:null`, one
@@ -391,7 +393,8 @@ uncertain write is not resealed at the same coordinate, and a hard request timeo
 optional pump. Foreground viewers poll only the selected connected session. They authenticate the
 exact already-accepted presence generation after fetch/decryption, reject stale/future timestamps,
 retain a revision watermark, and always suppress a preview whose final ID is in canonical history.
-The safe Markdown row is explicitly labeled Live, is not a transcript row, and contains no controls.
+The safe Markdown row is explicitly labeled Live, is not a transcript row, and contains no native/tool
+action controls. Ordinary Markdown links and read-only task-list checkboxes keep their existing rendering.
 
 The existing bearer is shared identity admission, **not host-only authorization**. A bearer holder
 can interfere with advisory storage; the broker cannot forge session AEAD without content keys.
@@ -611,8 +614,9 @@ cannot bypass a disabled button:
 The model/mode columns above describe legacy `set_model` and permission `set_mode`, not the separate
 `controls.configureSession` capability. Only exact Codex 0.154.0 conditionally advertises
 [native session settings](#codex-native-session-settings) after successful catalog discovery.
-Its separate optional `liveAssistant` capability enables [bounded parent text previews](#codex-live-assistant-preview)
-only when the broker supports the SQLite latest-value route; no other driver advertises it.
+Its separate optional `liveAssistant` capability advertises native preview support before broker
+support is known. [Bounded parent text previews](#codex-live-assistant-preview) require the SQLite
+latest-value route; HTTP 404/501 falls back to final-only. No other driver advertises this capability.
 
 Text input on the stable Claude, pinned Codex, and maintained tmux surfaces must be non-empty and non-slash.
 Tmux also accepts attachments as ordinary relay-owned user turns; Codex accepts image groups and,

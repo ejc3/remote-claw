@@ -139,7 +139,8 @@ activity, reconstructed task tracking, and other versions/platforms remain outsi
 Exact 0.154.0 now projects bounded native [sub-agent observations](protocol.md#codex-native-task-observations)
 through the existing task rows; child controls/output subscriptions remain native-owned.
 Its separate [bounded live-preview slice](release-finish-line.md#codex-live-assistant-preview)
-implements parent assistant text only on SQLite, with canonical final replies unchanged. Broader
+implements parent assistant text only on SQLite. Canonical final content, publication, and finality
+remain unchanged, apart from the supported parent's new projection-scoped final message ID. Broader
 streaming, including Claude-native and child/reasoning/command output, remains future work; no
 cross-agent streaming-parity claim follows from this slice.
 

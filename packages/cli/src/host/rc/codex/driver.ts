@@ -260,7 +260,6 @@ class CodexReconciler {
   readonly #previews: NativePreviewBudget;
   readonly #live: boolean;
   #draftCoordinate: string | null = null;
-  #lastFinishedCoordinate: string | null = null;
   #overlap = false;
   readonly tasksSupported: boolean;
 
@@ -299,8 +298,7 @@ class CodexReconciler {
     const id = method === "item/started" ? item?.id : params.itemId;
     if (typeof id !== "string" || !id || id.length > 256) return;
     const coordinate = JSON.stringify([params.turnId, id]);
-    if (this.#seen.has(coordinate) || coordinate === this.#lastFinishedCoordinate || this.#overlap)
-      return;
+    if (this.#seen.has(coordinate) || this.#overlap) return;
     if (
       method === "item/started" &&
       item?.type === "agentMessage" &&
@@ -367,12 +365,15 @@ class CodexReconciler {
     }
 
     if (item.type === "agentMessage" && typeof item.text === "string") {
-      this.#lastFinishedCoordinate = coordinate;
       if (this.#draftCoordinate === coordinate) {
         this.#draftCoordinate = null;
         this.#session.setLiveOutput(null);
       }
-      if (item.text === "" || !this.#admit(coordinate, JSON.stringify([item.type, item.text])))
+      // A completed empty item still owns its live-preview coordinate. Keep its tombstone in the
+      // existing bounded map so a delayed start cannot revive it after another item completes.
+      // Older final-only tuples retain their original empty-history behavior.
+      if (item.text === "" && !this.#live) return;
+      if (!this.#admit(coordinate, JSON.stringify([item.type, item.text])) || item.text === "")
         return;
       this.#session.pushUpstream({
         type: "assistant",
