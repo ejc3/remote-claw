@@ -306,8 +306,10 @@ slice separately from the historical single-choice result; [Bash acceptance](doc
 is tracked separately. File cards show the complete bounded path/content or before/after text;
 Allow once preserves native input, never folder/session permission grants. Read options, replace-all,
 and oversized/unfamiliar inputs stay native. See the separate
-[file-approval acceptance](docs/release-finish-line.md#native-file-approvals). Model/mode and end
-actions remain native/local.
+[file-approval acceptance](docs/release-finish-line.md#native-file-approvals). The separate
+[qualified session-only model seam](docs/protocol.md#claude-native-model-settings) offers Sonnet 4.6 and Haiku 4.5
+with last-confirmed native state, without changing global/default settings. Effort, mode, permission policy, and end remain native/local;
+the bounded one-time approval decisions above do not change permission policy.
 
 To restart only the companion for a still-running native session, explicitly supply that session's
 exact `cse_*` ID:
