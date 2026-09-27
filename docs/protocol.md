@@ -27,8 +27,10 @@ its bounded failure result is provider-transport isolation, not per-device unsub
 restart/backfill and broker-loss isolation on Linux arm64 with 0.151.0/explicit WS and
 0.153.4/managed Unix, both with paginated history. Separate
 [0.154.0 official desktop Remote recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers selecting a fresh projection. Legacy-history and mobile network-loss/deep-sleep recovery
-and automatic stable-ID reconnect remain unqualified.
+adds the actual Mac app and reopened viewers selecting a fresh projection. Separate
+[Android network/idle qualification](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+does not qualify physical radio loss or natural screen-off/deep-sleep recovery. Legacy-history and
+automatic stable-ID reconnect also remain unqualified.
 M4's exact Claude 2.1.237/Linux arm64/Bedrock Sonnet 4.6 tmux acceptance is also complete for its
 lower-fidelity local-pane/two-browser boundary. A browser turn stayed queued while an active model turn
 held a native permission modal, both browsers departed, local approval completed the native turn, the
@@ -401,10 +403,12 @@ can interfere with advisory storage; the broker cannot forge session AEAD withou
 A full viewer pass already carries those keys. This adds no new host-authentication claim. Ordinary
 `POST /api/relay` rejects `assistant_preview`, preventing accidental append-only preview storage.
 
-Claude-native remains final-only in this slice: the bounded exact-2.1.237 ordinary app-client SSE
-capture exposed one final assistant record, not partial text. This is an observation of that feed,
-not a claim that all Claude interfaces lack streaming. Current qualification and exclusions are in
-[the separate live-preview slice](release-finish-line.md#codex-live-assistant-preview).
+Claude-native remains final-only. Exact 2.1.237's interactive producer does not forward text deltas
+to its RC bridge. A separate uninstalled 2.1.283 fixture has the emitter, but the provider-served
+`tengu_bridge_partial_messages` flag was false and its actual turn still produced only a final.
+This is an upstream availability limit for the tested account, not a universal Claude streaming
+claim. No version pin or provider flag was changed. See
+[the bounded qualification](release-finish-line.md#claude-interactive-streaming--upstream-blocked).
 
 #### Codex native task observations
 
@@ -467,8 +471,10 @@ once and completed a fresh turn; broker loss stopped only the companion while a 
 completed. On 2026-09-08, the same retained sentinel passed on exact 0.153.4/Linux arm64 through managed
 Unix with native-reported paginated history; no production recovery change was needed. The separate
 [0.154.0 official desktop result](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened-viewer restoration without changing this protocol. Legacy-history and mobile network-loss/deep-sleep
-recovery and automatic stable-ID reconnect remain unclaimed.
+adds the actual Mac app and reopened-viewer restoration without changing this protocol. Separate
+[Android network/idle qualification](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+does not qualify physical radio loss or natural screen-off/deep-sleep recovery. Legacy-history and
+automatic stable-ID reconnect remain unclaimed.
 Current-version and read-only command-activity acceptance is tracked separately in the
 [release roadmap](release-finish-line.md); it does not broaden these historical 0.151.0 results.
 
@@ -1039,8 +1045,10 @@ legacy `set_model` and permission `set_mode`, which stay false. A fresh exact-se
 `initialize` response supplies `current_model`; settings remain unavailable until that response is
 valid. Optional initialization does not delay presence/text or retire a healthy conversation.
 Claude returns `models:[]` on the qualified native fixture, not a usable native catalog. The shared
-snapshot therefore explicitly labels `modelChoicesSource:"qualified"` and offers only the two
-session-only IDs actually qualified: `claude-sonnet-4-6` and `claude-haiku-4-5-20251001`.
+snapshot therefore explicitly labels `modelChoicesSource:"qualified"` and offers five verified
+session-only IDs: `claude-opus-5[1m]`, `claude-fable-5`, `claude-sonnet-5`, `claude-sonnet-4-6`,
+and `claude-haiku-4-5-20251001`. These are explicit qualified choices, not discovered entitlements;
+native rejection remains rejection. No catalog subprocess, aliases, or global defaults are used.
 An unknown bounded native model stays visible but is never added as a selectable option.
 
 Each choice has `defaultEffort:null, efforts:[]`; `collaborationModes:[]` and current effort/mode
@@ -1052,7 +1060,7 @@ string default. Codex's native catalog parser independently still requires its r
 Omitted `modelChoicesSource` preserves older native-catalog hosts; invalid source values fail parsing.
 
 The viewer uses existing `set_session_settings {change:{model},expiry}`. The adapter checks the exact
-two-ID allowlist and expiry at the serial writer, consumes already-confirmed targets as no-ops, and
+five-ID allowlist and expiry at the serial writer, consumes already-confirmed targets as no-ops, and
 sends one fixed `control_request/set_model` body to the bound native session. No arbitrary alias,
 effort, mode, default/global configuration, sandbox, or permission fields are forwarded. The expected
 model/request guard is registered before POST; stale pre-write initialize responses are invalidated.
@@ -1193,8 +1201,10 @@ These are product limits, not invitations to rebuild a second protocol stack. M1
 the bounded exact-tuple M3b coexistence/provider-transport-isolation gate, the Codex recovery follow-on
 on Linux arm64 with 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated, and the exact M5
 accountless Bedrock tuple are complete. Separate [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-also passed. Legacy-history and mobile network-loss/deep-sleep recovery and automatic stable-ID reconnect remain unqualified. Add
-protocol machinery only for a concrete later capability failure.
+also passed. Separate [Android network/idle qualification](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+does not qualify physical radio loss or natural screen-off/deep-sleep recovery. Legacy-history and
+automatic stable-ID reconnect remain unqualified. Add protocol machinery only for a concrete later
+capability failure.
 
 ## 13. Code and test map
 

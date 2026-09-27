@@ -14,8 +14,10 @@ exact official-Remote/TUI/two-browser coexistence and provider-transport-isolati
 green for that tuple. The Codex clean companion restart/backfill and broker-loss follow-on is green
 on 0.151.0/explicit WS/paginated and 0.153.4/managed Unix/paginated. Separate
 [0.154.0 official desktop recovery](release-finish-line.md#codex-official-remote-recovery--complete)
-adds the actual Mac app and reopened viewers; legacy-history and mobile network-loss/deep-sleep recovery and automatic stable-ID
-reconnect remain untested. M4's packed exact-Claude/Linux/Bedrock tmux outcome is also green: local pane,
+adds the actual Mac app and reopened viewers. Separate
+[Android network/idle qualification](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+does not qualify physical radio loss or natural screen-off/deep-sleep recovery; legacy-history and
+automatic stable-ID reconnect also remain untested. M4's packed exact-Claude/Linux/Bedrock tmux outcome is also green: local pane,
 two browsers, reload, a browser turn queued without touching a focused native permission modal, local
 approval after both browsers departed, queued-turn completion, broker loss, and later local work. See
 [Product goal and release gates](release-finish-line.md) and [Architecture](v2-architecture.md).
@@ -161,7 +163,9 @@ The main configuration:
 - builds and serves the production Next application;
 - uses the durable local SQLite profile;
 - runs transcript, handoff, UX, revive, liveness, and send-guard scenarios in mobile Chromium;
-- runs the background-to-foreground revive scenario in iPhone WebKit;
+- runs foreground revive and offline/foreground recovery in both mobile Chromium and iPhone WebKit:
+  the latter requires a failed transcript subscription, peer work during loss, no-reload catch-up,
+  draft preservation, and confirmed later sends without duplicates;
 - uses one worker and no retry, so a race remains visible.
 
 For visual changes, also run the light/dark screenshot configuration and inspect the images:
@@ -588,7 +592,9 @@ owns that acceptance record. The separate
 [0.154.0 official desktop recovery result](release-finish-line.md#codex-official-remote-recovery--complete)
 records a home-only adaptation with actual Mac observation checkpoints and a separate reopened-viewer
 restoration tail, including its original helper-selection failure. It adds no checked-in suite.
-Legacy-history and mobile network-loss/deep-sleep recovery and automatic stable-ID reconnect remain untested.
+Separate [Android network/idle qualification](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+does not qualify physical radio loss or natural screen-off/deep-sleep recovery. Legacy-history and
+automatic stable-ID reconnect remain untested.
 The single opt-in sentinel starts a built local SQLite broker and two Chromium contexts (desktop and
 phone), runs a packed-installed companion, stops/restarts it on the same native thread with a fresh
 projection, compares native text history unchanged, and checks browser turns once. It then cuts every
@@ -635,16 +641,19 @@ The later milestones use the same shared security checks but keep product-specif
 | OpenCode status follow-on | Complete: one installed exact 1.17.5 session's MAIN running-to-idle transition was observed consistently by an attached TUI and two independent Chromium contexts; this does not reopen M2 |
 | OpenCode beyond M2 | Each added version, platform, model, permission/control family, or native collaboration surface needs its own exact tuple and bounded outcome; it does not reopen the completed text/interrupt tuple |
 | Native files and image previews | Current Claude-native and exact Codex 0.154.0 implementation uses private host-owned files and encrypted bounded previews; each adapter passed one mixed-upload/native-ingestion/reload outcome. Cheap regressions own MIME/base64/count/byte/capability/unsafe-path admission, retention, Claude browser-origin native-reference exclusion, and the shared 32 MiB decoded history/live preview budget (no duplicate spend; labels survive exhaustion). Actual native ingestion needs a real-native sentinel and must not be mistaken for Read approval. Historical image-only results are unchanged; [files/previews acceptance](release-finish-line.md#native-files-and-image-previews) records the bounded result |
-| Native-phone foreground recovery | Actual Android short background/resume passed for both retained native sessions, with a browser-origin turn while backgrounded and one later phone-origin turn; canonical/TUI/two-viewer counts stayed 1/1 after reload. This does not establish true disconnect, lock/deep-sleep, or network-loss recovery; [scope and private evidence](release-finish-line.md#native-phone-backgroundresume--2026-09-26) remain explicit |
+| Native-phone foreground recovery | Actual Android short background/resume and separate [UID-scoped network/forced-idle qualification](release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27) are recorded independently. The latter exercises OS/provider behavior unavailable to deterministic mocks; it does not qualify physical radio loss or natural screen-off/deep sleep |
 | Codex native session settings | Exact 0.154.0 implementation, two-browser settings/reload sentinel, and bounded [native acceptance passed](release-finish-line.md#codex-native-session-settings). Cheap parser/adapter/UI tests own bounded catalogs, one-field changes, capability fallback, no permission/sandbox fields, native-confirmed ticks, mode preserving known supported model/effort, FIFO/expiry recheck, unknown native values, timeout/peer conflict, and no retry. The actual app-server journey established subsequent turns using the selected model/effort/mode and restored the original settings without policy changes; a fake notification cannot establish that native application. This does not reopen prior recovery/approval gates |
-| Codex beyond accepted tuples | Current-version/read-only activity/interrupt/image/command-approval/question and managed Unix/paginated recovery, including the [0.154.0 official desktop result](release-finish-line.md#codex-official-remote-recovery--complete), are tracked in the release roadmap. Legacy-history and mobile network-loss/deep-sleep recovery, automatic stable-ID reconnect, further versions, platforms, other permissions/forms and controls, and any per-device unsubscribe claim need their own bounded outcome without reopening accepted results |
+| Codex beyond accepted tuples | Current-version/read-only activity/interrupt/image/command-approval/question and managed Unix/paginated recovery, including the [0.154.0 official desktop result](release-finish-line.md#codex-official-remote-recovery--complete), are tracked in the release roadmap. Legacy-history, physical radio-loss/natural-deep-sleep recovery, automatic stable-ID reconnect, further versions, platforms, other permissions/forms and controls, and any per-device unsubscribe claim need their own bounded outcome without reopening accepted results |
 | tmux | Complete for exact Claude 2.1.237/Linux arm64 and Bedrock Sonnet 4.6: packed install, recoverable local pane, two browsers, reload, active-turn isolation at a focused native permission modal, queued browser completion after both browsers depart, and broker-loss isolation; idle-editor concurrency, independent peer ordering, and provider-native/official-client coexistence are explicitly not advertised |
 | Provider/account mode | Credentialed inference smoke for every exact advertised agent/provider/model/region/account-mode/capability tuple; no Anthropic account/API when claimed, while required provider and remote-claw credential handling is verified |
 
 Claude's separate [model-only acceptance](release-finish-line.md#claude-native-model-settings) uses
-exact 2.1.237/Linux arm64, two verified IDs (not a native catalog), desktop Chromium and phone-sized
-WebKit. One Haiku switch, Sonnet restore, native initialize confirmations and reload establish the
-user outcome without an inference turn. Detailed tests stay at the client/adapter boundary: exact
+exact 2.1.237/Linux arm64, a verified subset (not a native catalog), desktop Chromium and phone-sized
+WebKit. The initial Haiku switch/Sonnet 4.6 restore required no inference turn. The later Opus 5
+(1M context), Fable 5, and Sonnet 5 expansion adds a fresh native confirmation and one no-tools
+inference per new literal ID, without catalog-discovery machinery or default changes. A separate
+two-viewer Opus switch/Sonnet 4.6 restore verifies native-confirmed selection and five-choice reload.
+Detailed tests stay at the client/adapter boundary: exact
 allowlist/body, missing or foreign replies, early response races, stale pre-write reads, mismatching
 current state, native reconnect, no-op/expiry, no mutation retries, and continued text/Stop/questions
 while confirmation is missing. Shared tests own null+empty effort semantics, unchanged Codex native

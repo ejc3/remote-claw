@@ -9,7 +9,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { test as base } from "@playwright/test";
+import { test as base, type Page } from "@playwright/test";
 import type { SessionSettings } from "@remote-claw/cli/harness";
 import { bypassForTarget, primeVercelBypass } from "./protection-bypass";
 
@@ -248,7 +248,15 @@ function terminate(child: ChildProcess): Promise<void> {
   });
 }
 
-export const test = base.extend<{ seedHost: SeedHost }>({
+/** Apply the existing local/preview setup to fixture pages and independent peer contexts alike. */
+export async function prepareAppPage(
+  page: Page,
+  browserName: string,
+  baseURL: string | undefined,
+): Promise<void> {
+  if (baseURL) {
+    await primeVercelBypass(page.context(), baseURL, process.env.VERCEL_AUTOMATION_BYPASS_SECRET);
+  }
   // WebKit (the ios-safari project) honors the prod CSP's `upgrade-insecure-requests` even on
   // http://localhost — Chromium exempts localhost, WebKit does not — so it upgrades the _next/static
   // chunks to https://localhost, which the plain-http test server can't serve (TLS handshake fails), and
@@ -258,21 +266,22 @@ export const test = base.extend<{ seedHost: SeedHost }>({
   // test in transcript.spec.ts). The app/prod policy is untouched (this lives entirely in the harness).
   // Documents only: API/SSE responses (resourceType fetch/xhr) pass through untouched so the live
   // transcript stream is never buffered by route.fetch().
+  if (browserName === "webkit") {
+    await page.route("**/*", async (route, req) => {
+      if (req.resourceType() !== "document") return route.continue();
+      const resp = await route.fetch();
+      const headers = resp.headers();
+      const csp = headers["content-security-policy"];
+      if (csp)
+        headers["content-security-policy"] = csp.replace(/;?\s*upgrade-insecure-requests/i, "");
+      await route.fulfill({ response: resp, headers });
+    });
+  }
+}
+
+export const test = base.extend<{ seedHost: SeedHost }>({
   page: async ({ page, browserName, baseURL }, use) => {
-    if (baseURL) {
-      await primeVercelBypass(page.context(), baseURL, process.env.VERCEL_AUTOMATION_BYPASS_SECRET);
-    }
-    if (browserName === "webkit") {
-      await page.route("**/*", async (route, req) => {
-        if (req.resourceType() !== "document") return route.continue();
-        const resp = await route.fetch();
-        const headers = resp.headers();
-        const csp = headers["content-security-policy"];
-        if (csp)
-          headers["content-security-policy"] = csp.replace(/;?\s*upgrade-insecure-requests/i, "");
-        await route.fulfill({ response: resp, headers });
-      });
-    }
+    await prepareAppPage(page, browserName, baseURL);
     await use(page);
   },
   seedHost: async ({ baseURL }, use) => {

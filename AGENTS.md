@@ -55,8 +55,9 @@ ordinary emails/path prose and native/provider history are unaffected. Canonical
 See historical
 [image acceptance](docs/release-finish-line.md#claude-native-images--complete) and the separate
 [files/previews slice](docs/release-finish-line.md#native-files-and-image-previews).
-The separate [Claude model seam](docs/protocol.md#claude-native-model-settings) offers only qualified
-session-only Sonnet 4.6/Haiku 4.5 choices through `configureSession`, explicitly not a native catalog.
+The separate [Claude model seam](docs/protocol.md#claude-native-model-settings) offers qualified
+session-only Opus 5 (1M context), Fable 5, Sonnet 5, Sonnet 4.6, and Haiku 4.5 choices through
+`configureSession`, explicitly not a native catalog.
 Fresh owned initialize responses publish the last-confirmed model; native ACKs never imply application.
 One pending model guard leaves text/interrupt/approvals usable, and native reconnect refreshes state
 without retrying mutations. No effort/mode/default/permission writes are added; optional initialization
@@ -93,7 +94,10 @@ The separate [0.154.0 official desktop Remote recovery](docs/release-finish-line
 qualifies managed Unix/paginated history with the actual Mac app and reopened viewers selecting a fresh
 projection. A separate [actual Android background/resume check](docs/release-finish-line.md#native-phone-backgroundresume--2026-09-26)
 passed for both agents, without proving a connection drop or screen-lock/deep-sleep recovery.
-Legacy-history and mobile network-loss/deep-sleep recovery and automatic stable-ID reconnect remain unqualified.
+The later [bounded Android network-recovery result](docs/release-finish-line.md#native-phone-network-loss-and-forced-doze--2026-09-27)
+qualifies UID-scoped network outages for both native apps; that section owns the separate forced-Doze scope.
+Physical radio loss, natural screen-off/deep-sleep recovery, legacy-history recovery, and automatic
+stable-ID reconnect remain unqualified.
 The current code accepts exact Codex 0.151.0, 0.153.4, and 0.154.0 on
 Linux arm64
 and also projects completed `commandExecution` as read-only `Shell` calls and bounded results,
