@@ -134,7 +134,9 @@ tuple's tested journeys and exclusions.
 Exact 0.154.0 now conditionally offers [native model/effort/collaboration settings](protocol.md#codex-native-session-settings)
 after catalog discovery, without changing permissions or sandbox policy. The
 [separate settings slice](release-finish-line.md#codex-native-session-settings) tracks its current
-acceptance; Claude settings remain native/local. Other controls, general file-change
+acceptance. Exact Claude 2.1.237 separately offers [qualified session-only model choices](protocol.md#claude-native-model-settings),
+with last-confirmed state from owned fresh initialization; effort, mode, defaults, and permission settings remain native/local.
+Other controls, general file-change
 activity, reconstructed task tracking, and other versions/platforms remain outside this implementation.
 Exact 0.154.0 now projects bounded native [sub-agent observations](protocol.md#codex-native-task-observations)
 through the existing task rows; child controls/output subscriptions remain native-owned.
