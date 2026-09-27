@@ -1298,7 +1298,10 @@ test.describe("capability gating (#149)", () => {
     await expect(sheet).toContainText(
       "Answer the Claude prompts shown here; other permissions stay in Claude",
     );
-    await expect(sheet).toContainText("can’t switch model");
+    // This preset advertises the qualified model seam, but the scripted host has no native
+    // initialize response. Capability alone must not fabricate a current model or selectable choices.
+    await expect(sheet).toContainText("Native settings are not available yet.");
+    await expect(sheet.getByRole("button", { name: /^Model:/ })).toHaveCount(0);
     const interrupt = sheet.locator(".mode-row-danger", { hasText: "Interrupt" });
     await expect(interrupt).toBeEnabled();
     await interrupt.click();
