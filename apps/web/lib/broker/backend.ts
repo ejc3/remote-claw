@@ -63,6 +63,9 @@ export interface PublishResult {
 }
 
 export interface BrokerBackend {
+  /** Optional advisory cache. Never appends frames, provisions a channel, or owns native authority. */
+  putLiveOutput?(token: string, frame: WireFrame): Promise<boolean>;
+  getLiveOutput?(token: string): Promise<WireFrame | null>;
   /**
    * Resume-or-start the token's channel and deliver one payload (a frame, or the close sentinel).
    * The FIRST publisher to a token brings the channel into existence; later publishes resume it.

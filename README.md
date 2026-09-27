@@ -380,9 +380,15 @@ available while browser text is queued; that text waits for native idle before s
 the model turn does not guarantee cancellation of native background commands.
 Completed native `commandExecution` items appear as read-only `Shell` calls and bounded results,
 including failed, declined, and nonzero-exit outcomes. Activity observation itself adds no execution
-authority, streaming partials, file-change projection, or task lifecycle tracking. Exact 0.154.0
+authority, file-change projection, or task lifecycle tracking. Exact 0.154.0
 separately shows native [sub-agent observations](docs/protocol.md#codex-native-task-observations)
 in the existing activity details, without reconstructing child state or granting child controls.
+It separately implements [live parent-assistant text previews](docs/protocol.md#codex-live-assistant-preview)
+with SQLite/libSQL: one encrypted latest-value Live row, replaced by the canonical final reply.
+Previews are bounded, advisory, and expire after 30 seconds; their failure never blocks final output.
+This is not token-exact/full-stream parity: child, reasoning, and command streams are excluded.
+Claude-native and other adapters/backends remain final-only in this slice. See
+[current acceptance](docs/release-finish-line.md#codex-live-assistant-preview).
 
 The separate 0.153.4/0.154.0 approval path shows the complete bounded command, absolute cwd, and optional
 native reason only for ordinary local commands with no network/additional-permission context and

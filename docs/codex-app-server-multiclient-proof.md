@@ -34,7 +34,11 @@ tracks its bounded native acceptance separately from the historical results belo
 Interrupt
 targets one observed active native turn without retargeting or retrying, and remains reachable while
 text waits for native idle. Background commands may outlive the interrupted model turn. Other controls,
-streaming partials, general file-change activity, other tool families, and reconstructed task tracking are unsupported.
+general file-change activity, other tool families, and reconstructed task tracking are unsupported.
+Exact 0.154.0 separately implements [bounded live parent-assistant previews](protocol.md#codex-live-assistant-preview)
+on SQLite, not token-exact or child/reasoning/command streaming. That current slice has
+[separate acceptance](release-finish-line.md#codex-live-assistant-preview) and does not rewrite the
+historical multiclient results below.
 Exact 0.154.0 separately projects bounded native parent-thread
 [sub-agent observations](protocol.md#codex-native-task-observations) through existing task rows;
 child control/output subscriptions and inferred success/idle remain excluded.

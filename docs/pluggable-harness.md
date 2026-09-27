@@ -329,7 +329,12 @@ browser prompt. Exact 0.154.0 also projects bounded parent-thread `subAgentActiv
 through existing task rows, with the same coordinate fence and conservative terminal-history rule.
 No child controls, inferred success/idle, or reconstructed lifecycle tracker is added; see
 [the task boundary](protocol.md#codex-native-task-observations). Unfinished commands, other general tool
-activity, streaming partials, and general file-change activity are not projected.
+activity and general file-change activity are not projected.
+Exact 0.154.0 separately advertises `liveAssistant:true` for bounded parent text previews through
+SQLite's optional latest-only encrypted value. This does not append partial snapshots to canonical
+history, block final publication, establish idle, or grant any control. Other versions, drivers,
+backends, and child/reasoning/command streams remain final-only in this slice. See
+[the preview boundary](protocol.md#codex-live-assistant-preview).
 Fresh pending patch approvals are a separate bounded surface.
 Exact 0.153.4 and 0.154.0 additionally admit ordinary local `commandExecution/requestApproval` records through
 `codex/approvals.ts`: complete bounded command/absolute cwd/optional reason, `kind:"command"`,

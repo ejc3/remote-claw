@@ -13,6 +13,7 @@ import { Spinner } from "@astryxdesign/core/Spinner";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
 import { Text } from "@astryxdesign/core/Text";
 import { parsePass, toHex } from "@remote-claw/clawsec";
+import type { LiveItem, LiveOutput } from "@remote-claw/cli/broker";
 import {
   harnessMetadata,
   harnessPolicy,
@@ -88,6 +89,7 @@ import {
   shouldAcceptAnnounce,
   TRANSCRIPT_GAP_STALL_MS,
   Viewer,
+  visibleLiveItem,
 } from "./lib/viewer";
 import { ThemeToggle } from "./theme-toggle";
 import { UiIcon } from "./ui-icon";
@@ -1418,6 +1420,9 @@ export function Transcript(props: {
     };
   }, []);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [liveOutput, setLiveOutput] = useState<{ sessionId: string; value: LiveOutput } | null>(
+    null,
+  );
   const [activitySheetId, setActivitySheetId] = useState<string | null>(null);
   const transcriptItems = useMemo(() => groupTranscriptActivity(messages), [messages]);
   const openActivity =
@@ -1461,6 +1466,54 @@ export function Transcript(props: {
   // Thinking/needs are only meaningful while connected; a stale announce's phase says nothing.
   const cs = announce ? connState(announce.freshnessAt, now, reconnectingSince) : null;
   const connected = cs === "connected";
+  const liveItem =
+    connected && liveOutput?.sessionId === sessionId
+      ? visibleLiveItem(liveOutput.value, announce, messages, now)
+      : null;
+  const liveEnabled = announce?.capabilities?.liveAssistant === true && connected;
+  useEffect(() => {
+    setLiveOutput(null);
+    if (!liveEnabled) return;
+    let active = true;
+    let stopped = false;
+    let inFlight = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | null = null;
+    const visible = () => document.visibilityState !== "hidden";
+    const poll = async () => {
+      if (!active || stopped || inFlight || !visible()) return;
+      inFlight = true;
+      controller = new AbortController();
+      let delay = 1000;
+      try {
+        const value = await viewer.readLiveOutput(sessionId, controller.signal);
+        if (active && !controller.signal.aborted) {
+          if (value === undefined) stopped = true;
+          setLiveOutput(value ? { sessionId, value } : null);
+        }
+      } catch {
+        delay = 5000;
+      } finally {
+        inFlight = false;
+        if (active && !stopped && visible()) timer = setTimeout(poll, delay);
+      }
+    };
+    const visibility = () => {
+      clearTimeout(timer);
+      if (document.visibilityState === "hidden") {
+        controller?.abort();
+        setLiveOutput(null);
+      } else void poll();
+    };
+    document.addEventListener("visibilitychange", visibility);
+    void poll();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      controller?.abort();
+      document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [viewer, sessionId, liveEnabled]);
   const reportsStatus = reportsWorkerStatus(announce?.capabilities);
   const phase = connected && reportsStatus ? (announce?.phase ?? "idle") : "idle";
   const needs = connected && reportsStatus ? (announce?.needs ?? false) : false;
@@ -1778,17 +1831,19 @@ export function Transcript(props: {
   useEffect(() => {
     const el = scrollerRef.current;
     if (el === null) return;
-    const grew = transcriptHasVisibleAddition(
-      el.scrollHeight > prevScrollHeightRef.current,
-      prevMessageCountRef.current,
-      messages,
-    );
+    const grew =
+      transcriptHasVisibleAddition(
+        el.scrollHeight > prevScrollHeightRef.current,
+        prevMessageCountRef.current,
+        messages,
+      ) ||
+      (liveItem !== null && el.scrollHeight > prevScrollHeightRef.current);
     prevScrollHeightRef.current = el.scrollHeight;
     prevMessageCountRef.current = messages.length;
     const action = transcriptScrollAction(atBottomRef.current, grew);
     if (action === "follow") el.scrollTop = el.scrollHeight;
     else if (action === "show-pill") setShowJump(true);
-  }, [messages]);
+  }, [messages, liveItem]);
 
   // Track whether the viewer is pinned to the bottom (within ~64px); clears the pill once they catch up.
   const onTranscriptScroll = useCallback(() => {
@@ -2154,7 +2209,7 @@ export function Transcript(props: {
         {showGapRecovery && gap !== null && (
           <GapRecovery gap={gap} retrying={gapRetrying} onRetry={() => void retryGap()} />
         )}
-        {messages.length === 0 && !showGapRecovery && (
+        {messages.length === 0 && !showGapRecovery && liveItem === null && (
           <p className="empty-pad">{emptyTranscriptHint(cs)}</p>
         )}
         {transcriptItems.map((item) =>
@@ -2181,6 +2236,7 @@ export function Transcript(props: {
             />
           ),
         )}
+        {liveItem !== null && <LivePreview item={liveItem} />}
       </div>
 
       {openActivity !== null && (
@@ -4224,3 +4280,18 @@ export const Prose = memo(function Prose({ text, className }: { text: string; cl
     </div>
   );
 });
+
+/** Non-canonical text has no transcript actions and does not repeatedly announce token updates. */
+export function LivePreview({ item }: { item: LiveItem }) {
+  return (
+    <section className="live-output" aria-label="Live assistant preview" aria-live="off">
+      <span className="live-output-label">Live · reply in progress</span>
+      <Prose text={item.text} className="assistant" />
+      {item.truncated && (
+        <p className="live-output-label">
+          Preview limit reached. The complete reply will appear when finished.
+        </p>
+      )}
+    </section>
+  );
+}

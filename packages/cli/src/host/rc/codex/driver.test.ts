@@ -655,6 +655,105 @@ async function stop(ac: AbortController, run: Promise<number>): Promise<void> {
   await expect(run).resolves.toBe(0);
 }
 
+describe("Codex parent live output", () => {
+  const event = (method: string, params: Record<string, unknown>): CodexInbound => ({
+    kind: "notification",
+    value: { method, params: { threadId: THREAD_ID, turnId: "turn-live", ...params } },
+  });
+  it("keeps drafts outside retained history and correlates one authoritative corrected final", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    const s = await start(client);
+    try {
+      client.emit(event("item/agentMessage/delta", { itemId: "unknown", delta: "ignored" }));
+      client.emit(event("item/started", { item: assistantItem("live", "hello") }));
+      client.emit(event("item/agentMessage/delta", { itemId: "live", delta: " world" }));
+      await waitFor(() => s.session.liveOutput.item?.text === "hello world");
+      const finalId = s.session.liveOutput.item?.finalMsgId;
+      expect(finalId).toMatch(/^native-text-[a-f0-9]{64}$/);
+      expect(upstream(s.session, "assistant")).toHaveLength(0);
+      expect(client.startCalls).toHaveLength(0);
+      const before = s.session.liveOutput;
+      client.emit(event("item/started", { item: assistantItem("live", "duplicate start") }));
+      client.emit(
+        event("item/agentMessage/delta", {
+          threadId: OTHER_THREAD_ID,
+          itemId: "live",
+          delta: "wrong thread",
+        }),
+      );
+      client.emit(event("item/completed", { item: assistantItem("live", "corrected final") }));
+      await waitFor(() => upstream(s.session, "assistant").length === 1);
+      expect(before.item?.text).toBe("hello world");
+      expect(s.session.liveOutput.item).toBeNull();
+      expect(upstream(s.session, "assistant")[0]).toMatchObject({ native_text_id: finalId });
+      client.emit(event("item/started", { item: assistantItem("live", "replayed") }));
+      client.emit(event("item/agentMessage/delta", { itemId: "live", delta: "late" }));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(s.session.liveOutput.item).toBeNull();
+      expect(upstream(s.session, "assistant")).toHaveLength(1);
+    } finally {
+      await stop(s.ac, s.run);
+    }
+  });
+  it("bounds drafts and drops unsupported overlap without blocking canonical completion", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    const s = await start(client);
+    try {
+      client.emit(event("item/started", { item: assistantItem("one", "😀".repeat(20_000)) }));
+      await waitFor(() => s.session.liveOutput.item?.truncated === true);
+      expect(JSON.stringify(s.session.liveOutput).length).toBeLessThan(16 * 1024);
+      const draft = s.session.liveOutput;
+      client.emit(event("item/agentMessage/delta", { itemId: "one", delta: "ignored after cap" }));
+      client.emit(event("item/started", { item: assistantItem("two", "overlap") }));
+      await waitFor(() => s.session.liveOutput.item === null);
+      expect(draft.item?.truncated).toBe(true);
+      client.emit(event("item/completed", { item: assistantItem("one", "first final") }));
+      client.emit(event("item/completed", { item: assistantItem("two", "second final") }));
+      await waitFor(() => upstream(s.session, "assistant").length === 2);
+      expect(s.session.closed).toBe(false);
+    } finally {
+      await stop(s.ac, s.run);
+    }
+  });
+  it("does not revive an empty completed item after a different item completes", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    const s = await start(client);
+    try {
+      client.emit(event("item/started", { item: assistantItem("empty-A", "draft A") }));
+      client.emit(event("item/completed", { item: assistantItem("empty-A", "") }));
+      client.emit(event("item/completed", { item: assistantItem("final-B", "final B") }));
+      client.emit(event("item/started", { item: assistantItem("empty-A", "stale A") }));
+      client.emit(event("item/agentMessage/delta", { itemId: "empty-A", delta: " stale delta" }));
+      client.emit(event("item/completed", { item: assistantItem("barrier", "processed") }));
+      await waitFor(() => upstream(s.session, "assistant").length === 2);
+      expect(s.session.liveOutput.item).toBeNull();
+      expect(
+        s.session.snapshotUpstream().some((item) => JSON.stringify(item).includes("stale")),
+      ).toBe(false);
+      expect(s.session.closed).toBe(false);
+    } finally {
+      await stop(s.ac, s.run);
+    }
+  });
+  it("leaves older native tuples final-only with unchanged final message projection", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.153.4";
+    const s = await start(client);
+    try {
+      client.emit(event("item/started", { item: assistantItem("old", "draft") }));
+      client.emit(event("item/completed", { item: assistantItem("old", "final") }));
+      await waitFor(() => upstream(s.session, "assistant").length === 1);
+      expect(s.session.liveOutput.item).toBeNull();
+      expect(upstream(s.session, "assistant")[0]?.native_text_id).toBeUndefined();
+    } finally {
+      await stop(s.ac, s.run);
+    }
+  });
+});
+
 describe("Codex native-confirmed settings", () => {
   function settingsClient() {
     const client = new FakeCodexClient();

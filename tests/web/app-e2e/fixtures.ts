@@ -57,6 +57,7 @@ export type SeedHost = (opts?: {
     | "codex"
     | "codex-files"
     | "codex-settings"
+    | "codex-live"
     | "codex-approval"
     | "codex-questions";
   /** Harness preset (RC_E2E_HARNESS) for the agent+mode badge (#164). Unset is the private MITM relay;

@@ -86,6 +86,7 @@ function snapshotAnnouncement(announcement: BridgeAnnouncement): BridgeAnnouncem
       ...(announcement.capabilities.files !== undefined
         ? { files: announcement.capabilities.files }
         : {}),
+      ...(announcement.capabilities.liveAssistant === true ? { liveAssistant: true } : {}),
       controls: {
         interrupt: announcement.capabilities.controls.interrupt,
         setModel: announcement.capabilities.controls.setModel,

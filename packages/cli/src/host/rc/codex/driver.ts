@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { boundLiveText } from "../../../broker/live-output.js";
 import { parseSessionSettings, type SessionSettings } from "../../../harness.js";
 import { NOOP_TRACER, type Tracer } from "../../../trace.js";
 import {
@@ -257,6 +258,9 @@ class CodexReconciler {
   readonly #seen = new Map<string, string>();
   readonly #uploads: NativeUploadStore;
   readonly #previews: NativePreviewBudget;
+  readonly #live: boolean;
+  #draftCoordinate: string | null = null;
+  #overlap = false;
   readonly tasksSupported: boolean;
 
   constructor(
@@ -265,12 +269,65 @@ class CodexReconciler {
     uploads: NativeUploadStore,
     previewByteLimit?: number,
     tasksSupported = false,
+    live = false,
   ) {
     this.#session = session;
     this.#mutations = mutations;
     this.#uploads = uploads;
     this.#previews = new NativePreviewBudget(previewByteLimit);
+    this.#live = live;
     this.tasksSupported = tasksSupported;
+  }
+
+  #textId(coordinate: string): string {
+    return `native-text-${createHash("sha256")
+      .update(JSON.stringify(["parent-text-v1", this.#session.id, coordinate]))
+      .digest("hex")}`;
+  }
+
+  observeLive(method: string, params: Record<string, unknown>): void {
+    if (!this.#live) return;
+    if (method === "turn/completed") {
+      this.#draftCoordinate = null;
+      this.#overlap = false;
+      this.#session.setLiveOutput(null);
+      return;
+    }
+    if (typeof params.turnId !== "string" || !params.turnId || params.turnId.length > 256) return;
+    const item = record(params.item);
+    const id = method === "item/started" ? item?.id : params.itemId;
+    if (typeof id !== "string" || !id || id.length > 256) return;
+    const coordinate = JSON.stringify([params.turnId, id]);
+    if (this.#seen.has(coordinate) || this.#overlap) return;
+    if (
+      method === "item/started" &&
+      item?.type === "agentMessage" &&
+      typeof item.text === "string"
+    ) {
+      if (this.#draftCoordinate === coordinate) return;
+      if (this.#draftCoordinate !== null) {
+        this.#overlap = true;
+        this.#draftCoordinate = null;
+        this.#session.setLiveOutput(null);
+        return;
+      }
+      this.#draftCoordinate = coordinate;
+      this.#session.setLiveOutput({
+        finalMsgId: this.#textId(coordinate),
+        ...boundLiveText(item.text),
+      });
+    } else if (
+      method === "item/agentMessage/delta" &&
+      coordinate === this.#draftCoordinate &&
+      typeof params.delta === "string"
+    ) {
+      const current = this.#session.liveOutput.item;
+      if (current && !current.truncated)
+        this.#session.setLiveOutput({
+          finalMsgId: current.finalMsgId,
+          ...boundLiveText(current.text + params.delta),
+        });
+    }
   }
 
   accept(turnId: string, item: CodexThreadItem): void {
@@ -307,11 +364,21 @@ class CodexReconciler {
       return;
     }
 
-    if (item.type === "agentMessage" && typeof item.text === "string" && item.text !== "") {
-      if (!this.#admit(coordinate, JSON.stringify([item.type, item.text]))) return;
+    if (item.type === "agentMessage" && typeof item.text === "string") {
+      if (this.#draftCoordinate === coordinate) {
+        this.#draftCoordinate = null;
+        this.#session.setLiveOutput(null);
+      }
+      // A completed empty item still owns its live-preview coordinate. Keep its tombstone in the
+      // existing bounded map so a delayed start cannot revive it after another item completes.
+      // Older final-only tuples retain their original empty-history behavior.
+      if (item.text === "" && !this.#live) return;
+      if (!this.#admit(coordinate, JSON.stringify([item.type, item.text])) || item.text === "")
+        return;
       this.#session.pushUpstream({
         type: "assistant",
         uuid: coordinate,
+        ...(this.#live ? { native_text_id: this.#textId(coordinate) } : {}),
         message: { role: "assistant", content: [{ type: "text", text: item.text }] },
       });
       return;
@@ -435,6 +502,7 @@ export class CodexDriver implements Driver {
     return {
       ...base,
       ...(this.#filesSupported ? { files: true } : {}),
+      ...(this.#filesSupported ? { liveAssistant: true } : {}),
       ...(this.#settingsSupported
         ? { controls: { ...base.controls, configureSession: true } }
         : {}),
@@ -539,6 +607,7 @@ export class CodexDriver implements Driver {
         this.#uploads,
         this.#options.projectionPreviewByteLimit,
         nativeVersion === "0.154.0",
+        this.#filesSupported,
       );
       session.workerStatus = resumed.thread.status.type === "active" ? "running" : "idle";
       await this.#reconcileHistory(reconciler, resumed.thread.historyMode, signal);
@@ -714,6 +783,10 @@ export class CodexDriver implements Driver {
     }
     const { method, params } = inbound.value;
     if (params.threadId !== this.#options.threadId) return;
+    if (method === "item/agentMessage/delta") {
+      reconciler.observeLive(method, params);
+      return;
+    }
     if (method === "thread/settings/updated") {
       if (!this.#settingsSupported || session.sessionSettings === null) return;
       const current = parseCodexCurrentSettings(params.threadSettings);
@@ -737,6 +810,7 @@ export class CodexDriver implements Driver {
       )
         throw new CodexProjectionError("Codex emitted invalid terminal turn metadata");
       this.#historyRepairs.complete(turn.id);
+      reconciler.observeLive(method, params);
       return; // A terminal turn is not native idle and does not complete child/background work.
     }
     if (method === "serverRequest/resolved") {
@@ -746,6 +820,7 @@ export class CodexDriver implements Driver {
       return;
     }
     if (method === "item/started") {
+      reconciler.observeLive(method, params);
       this.#fileApprovals?.started(params);
       return;
     }

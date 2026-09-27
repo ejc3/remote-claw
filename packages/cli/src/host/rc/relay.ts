@@ -32,8 +32,10 @@ import {
   BrokerError,
   BrokerPermanentStorageLossError,
   BrokerStreamRotationError,
+  BrokerTimeoutError,
   type SeqCursor,
 } from "../../broker/client.js";
+import { LIVE_OUTPUT_KIND, type LiveOutput, liveOutputId } from "../../broker/live-output.js";
 import {
   harnessPolicy,
   hasClaudeNativeReferences,
@@ -276,6 +278,7 @@ export function defaultAttachmentsDir(sessionId: string): string {
 interface OutItem {
   kind: string;
   text: string;
+  nativeTextId?: string;
   /** Browser source coordinate for a native-canonical user event. Only a provider-ordered companion
    * sets this; the outbound queue publishes the matching receipt at the canonical transcript seq. */
   clientMsgId?: string;
@@ -472,7 +475,15 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
       input?: unknown;
     };
     if (bb.type === "text" && typeof bb.text === "string" && bb.text !== "") {
-      items.push({ kind: sub ? "assistant_sub" : "assistant", text: bb.text });
+      items.push({
+        kind: sub ? "assistant_sub" : "assistant",
+        text: bb.text,
+        ...(!sub &&
+        typeof ev.payload.native_text_id === "string" &&
+        /^native-text-[a-f0-9]{64}$/.test(ev.payload.native_text_id)
+          ? { nativeTextId: ev.payload.native_text_id }
+          : {}),
+      });
     } else if (
       bb.type === "thinking" &&
       typeof bb.thinking === "string" &&
@@ -1097,6 +1108,10 @@ export class HostRcRelay {
     if (signal.aborted) ac.abort();
     else signal.addEventListener("abort", onAbort, { once: true });
     const child = ac.signal;
+    const live =
+      this.#capabilities.liveAssistant === true && this.#durable
+        ? this.#pumpLiveOutput(child)
+        : Promise.resolve();
     // Wake the session's followUpstream gate on abort so the OUTBOUND pump re-checks its stop predicate
     // immediately instead of lingering up to HEARTBEAT_MS parked on the gate. (Without this, serve()
     // only stops promptly when the caller also closes the session.)
@@ -1117,7 +1132,52 @@ export class HostRcRelay {
         stopSiblingOnCleanEnd(this.#pumpInbound(child)).catch(halt),
       ]);
     } finally {
+      ac.abort();
+      await live;
       signal.removeEventListener("abort", onAbort);
+    }
+  }
+
+  /** Advisory-only pump: no transcript seq, replay log, publication tail, or native idle authority. */
+  async #pumpLiveOutput(signal: AbortSignal): Promise<void> {
+    let published = -1;
+    while (!signal.aborted && !this.#session.closed) {
+      const snapshot = this.#session.liveOutput;
+      if (snapshot.revision !== published) {
+        const body: LiveOutput = {
+          v: 1,
+          startedAt: RELAY_INCARNATION_STARTED_AT,
+          incarnation: RELAY_INCARNATION,
+          revision: snapshot.revision,
+          sentAt: Date.now(),
+          item: snapshot.item,
+        };
+        try {
+          const stored = await this.#client.putLiveOutput(
+            this.#header(LIVE_OUTPUT_KIND, null, liveOutputId(body)),
+            utf8(JSON.stringify(body)),
+            signal,
+          );
+          if (stored === undefined) return; // unsupported broker remains final-only
+          if (stored) published = snapshot.revision;
+        } catch (error) {
+          // A non-cooperative timed-out transport must not accumulate outstanding preview writes.
+          if (signal.aborted || error instanceof BrokerTimeoutError) return;
+          // Ambiguous writes are not freshly re-sealed at the same coordinate. A later native
+          // change supplies a new revision; losing this advisory snapshot never loses the final.
+          published = snapshot.revision;
+        }
+      }
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", done);
+          resolve();
+        };
+        const timer = setTimeout(done, 1000);
+        signal.addEventListener("abort", done, { once: true });
+        if (signal.aborted) done();
+      });
     }
   }
 
@@ -1326,7 +1386,14 @@ export class HostRcRelay {
                 JSON.stringify({ client_msg_id: item.clientMsgId, seq }),
               );
             }
-            await this.#emit(item.kind, seq, `${item.kind}-${seq}`, item.text);
+            await this.#emit(
+              item.kind,
+              seq,
+              this.#capabilities.liveAssistant === true
+                ? (item.nativeTextId ?? `${item.kind}-${seq}`)
+                : `${item.kind}-${seq}`,
+              item.text,
+            );
           } catch (e) {
             if (gateId !== null) {
               this.#openPerms.delete(gateId); // publish failed → gate is unanswerable

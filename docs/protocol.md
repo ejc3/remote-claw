@@ -73,6 +73,8 @@ The broker is a ciphertext router. Its active API is:
 | `GET /api/stream` | Subscribe to a channel as SSE. `startIndex` resumes from a publish-order offset. |
 | `GET /api/seq` | Report whether the selected backend is durable and its highest transcript `seq`. |
 | `GET /api/frame-count` | Report the durable publish-order length used to fence old inbound commands after a host restart. |
+| `GET /api/live-output?session=<id>` | Read the optional latest encrypted assistant preview; never create a channel. |
+| `PUT /api/live-output?session=<id>` | Replace the bounded preview in an existing live SQLite channel, without appending transcript frames. |
 
 `x-broker-backend` or `?backend=` selects `vercel`, `local`, or `sqlite` when that backend is allowed by
 the deployment. `sqlite` is the durable production profile and may use local libSQL files or Turso.
@@ -140,12 +142,15 @@ and caps decoded ciphertext below the deployment edge's request-body ceiling.
 | Plane | Key | Current record kinds |
 | --- | --- | --- |
 | Content | per-session `K_session` | `user`, `user_attachment`, `assistant`, `assistant_sub`, thinking variants, `result`, `system`, `status`, `rate_limit`, `can_use_tool`, `tool_use`, `tool_result`, `task`, `permission_request` |
+| Advisory preview (separate endpoint) | per-session `K_session` | `assistant_preview` |
 | Control | `control_key` | `catch_up`, `permission`, `interrupt`, `set_mode`, `set_model`, `set_session_settings`, `command`, `end`, `attachment` |
 | Meta | `K_meta` | `accepted`, `session_announce`, `session_terminal`, `permission_resolved` |
 
 Unknown kinds fail instead of being assigned a guessed key. Content carries a numeric transcript
 `seq`; control and meta generally use `seq:null`. Direction is `out` for host publications and `in`
 for browser actions.
+Advisory previews also use `seq:null` and the session key, but are never transcript content or
+ordinary relay frames; the [preview boundary](#codex-live-assistant-preview) owns their latest-only storage.
 
 Large messages are split into independently authenticated parts with one `msg_id` and `seq`. `part`
 is zero-based and `parts` is the total count. The receiver opens every part and the complete group
@@ -345,10 +350,61 @@ Completed `commandExecution` items use the same coordinate/fingerprint fence and
 `Shell` call followed by its result. The call carries native command/cwd; result output uses the shared
 4,000-character cap plus a truncation marker when needed. Failed or declined status and nonzero exit
 codes are marked as errors, with a fallback explanation when native output is empty. Unfinished commands do not consume a projected
-identity. Apart from the exact-0.154.0 task observations below, other general tool activity, streaming partials,
+identity. Apart from the exact-0.154.0 task observations and separate live-text preview below, other general tool activity,
 general file-change activity, and reconstructed task tracking are not projected;
 the separate [file approval path](#codex-native-file-approvals) displays only fresh bounded pending patches;
 these observations cannot acknowledge a pending browser prompt or execute a command.
+
+#### Codex live assistant preview
+
+Exact Codex 0.154.0 advertises optional `liveAssistant:true`. A parent-thread `item/started`
+`agentMessage` followed by matching `item/agentMessage/delta` updates one in-memory text preview.
+Unknown coordinates, completed items, child output, reasoning, and command output never become
+previews. Overlapping parent text items suppress previews until terminal-turn observation. Empty
+native text completions also retain their coordinate in the existing 10,000-item identity bound on
+this live-enabled tuple, without emitting an empty canonical row, so replay cannot revive them.
+Native `item/completed` remains the only live final-text authority; neither previews nor their absence
+establish idle, success, delivery, or permission authority. Historical assistant finality is unchanged.
+
+The separate `assistant_preview` record uses existing session AEAD, `dir:"out"`, `seq:null`, one
+part, and no `clientMsgId`. Plaintext is at most 16 KiB; wire request and response bodies are capped
+at 32 KiB before buffering. The text prefix is bounded by escaped UTF-8 bytes with a visible
+truncation disclosure; the complete final reply still uses the ordinary transcript. Its AAD-bound
+`msgId` is `preview.v1.<startedAt>.<incarnation>.<revision>` with canonical safe nonnegative integer
+coordinates and a bounded ASCII incarnation; plaintext repeats that coordinate, timestamp, and
+either one `{finalMsgId,text,truncated}` item or `null` to clear it. For this exact supported parent
+text only, the final ID is `native-text-` plus SHA-256 of the JSON tuple
+`["parent-text-v1", projectionSessionId, JSON.stringify([turnId,itemId])]`. Fresh projections
+therefore have fresh final IDs; all other message/receipt identity rules remain unchanged.
+
+Only SQLite/libSQL implements this optional API; other backends return 501 and remain final-only.
+A singleton `live_output` row in the existing channel database holds one ciphertext, channel
+generation, coordinate, fingerprint, and expiry. It never advances either durable cursor or repairs
+the core channel/frames continuity boundary. GET and PUT do not provision missing channels. In one
+write transaction, a newer lexicographic `(startedAt,incarnation,revision)` replaces the row; an
+older or identical retry cannot refresh it, and changed ciphertext at the same coordinate collides.
+Reads reject closed/different database generations. A 30-second expiry hides stale ciphertext;
+access may clear that ciphertext while retaining the ordering/fingerprint watermark. This is bounded
+latest-value storage, not guaranteed timed physical erasure or canonical transcript retention.
+
+Publication is coalesced, at most once per second with one in-flight request, independent of the
+canonical publication queue. Missing/failed/unsupported previews do not block final replies; an
+uncertain write is not resealed at the same coordinate, and a hard request timeout stops this
+optional pump. Foreground viewers poll only the selected connected session. They authenticate the
+exact already-accepted presence generation after fetch/decryption, reject stale/future timestamps,
+retain a revision watermark, and always suppress a preview whose final ID is in canonical history.
+The safe Markdown row is explicitly labeled Live, is not a transcript row, and contains no native/tool
+action controls. Ordinary Markdown links and read-only task-list checkboxes keep their existing rendering.
+
+The existing bearer is shared identity admission, **not host-only authorization**. A bearer holder
+can interfere with advisory storage; the broker cannot forge session AEAD without content keys.
+A full viewer pass already carries those keys. This adds no new host-authentication claim. Ordinary
+`POST /api/relay` rejects `assistant_preview`, preventing accidental append-only preview storage.
+
+Claude-native remains final-only in this slice: the bounded exact-2.1.237 ordinary app-client SSE
+capture exposed one final assistant record, not partial text. This is an observation of that feed,
+not a claim that all Claude interfaces lack streaming. Current qualification and exclusions are in
+[the separate live-preview slice](release-finish-line.md#codex-live-assistant-preview).
 
 #### Codex native task observations
 
@@ -558,6 +614,9 @@ cannot bypass a disabled button:
 The model/mode columns above describe legacy `set_model` and permission `set_mode`, not the separate
 `controls.configureSession` capability. Only exact Codex 0.154.0 conditionally advertises
 [native session settings](#codex-native-session-settings) after successful catalog discovery.
+Its separate optional `liveAssistant` capability advertises native preview support before broker
+support is known. [Bounded parent text previews](#codex-live-assistant-preview) require the SQLite
+latest-value route; HTTP 404/501 falls back to final-only. No other driver advertises this capability.
 
 Text input on the stable Claude, pinned Codex, and maintained tmux surfaces must be non-empty and non-slash.
 Tmux also accepts attachments as ordinary relay-owned user turns; Codex accepts image groups and,
@@ -1095,7 +1154,7 @@ The active protocol is concentrated in these paths:
 
 - `packages/clawsec/src/{kdf,aad,aead,wire,chunk,pass}.ts` — identity, AEAD, wire, chunking, passes.
 - `packages/cli/src/security/provider.ts` — sealed/open provider selection.
-- `packages/cli/src/broker/{protocol,client,order}.ts` — taxonomy, HTTP/SSE client, viewer ordering.
+- `packages/cli/src/broker/{protocol,client,order,live-output}.ts` — taxonomy, HTTP/SSE client, viewer ordering, and bounded preview format.
 - `packages/cli/src/host/rc/{session,relay,mitm,launch}.ts` — Claude adapter and host relay.
 - `packages/cli/src/host/rc/anthropic/{client,driver,transport,credentials}.ts` — provider-native
   history/SSE/text transport, exact binding, and projection lifecycle.
@@ -1107,7 +1166,7 @@ The active protocol is concentrated in these paths:
   requests stay response-less.
 - `packages/cli/src/host/rc/drivers/{bridge,ready-bridge}.ts` — process-local readiness and broker
   bridge lifecycle shared by current adapters.
-- `apps/web/app/api/{relay,stream,seq,frame-count}/route.ts` — broker API.
+- `apps/web/app/api/{relay,stream,seq,frame-count,live-output}/route.ts` — broker API.
 - `apps/web/lib/broker/{backend,local,vercel,sqlite-multi}.ts` — broker implementations.
 - `apps/web/app/lib/viewer.ts` — browser protocol client and recovery.
 

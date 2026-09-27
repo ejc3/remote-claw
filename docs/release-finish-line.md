@@ -626,6 +626,51 @@ seed's preexisting full-access policy was unchanged; no tool, approval, or quest
 claimed by this text-only follow-up. Private evidence:
 `/home/ubuntu/remote-claw-ui-artifacts/native-final-2026-09-26.rDZlFW/README.md`.
 
+### Codex live assistant preview
+
+**Current: implemented; bounded native/browser acceptance passed 2026-09-27.** Exact Codex 0.154.0/Linux arm64 on
+SQLite/libSQL can show one changing parent-assistant Live row before the canonical final. The
+row uses safe Markdown, a bounded text prefix with truncation disclosure, and no action controls.
+It is not a transcript message, delivery receipt, success/idle indication, or full token stream.
+The [protocol boundary](protocol.md#codex-live-assistant-preview) specifies 16 KiB plaintext,
+32 KiB wire, one in-flight coalesced publication at most once per second, and 30-second expiry.
+
+One optional singleton in the existing channel database replaces earlier preview ciphertext;
+canonical frames, cursors, and channel-loss behavior are unchanged. Expired ciphertext may be
+cleared on access while retaining the ordering/fingerprint watermark: this is bounded storage,
+not guaranteed timed deletion or a transcript retention feature. Read/write routes use the
+existing shared bearer and session AEAD, not a new host-only authentication claim. Viewer
+generation checks and matching final IDs suppress stale previews; preview errors cannot block
+canonical work. Other backends and Codex versions remain final-only.
+
+The focused boundary tests cover hostile ordering, bounds, replay, generation, expiry, final-ID
+suppression, safe rendering, and blocked-preview/canonical-progress isolation. The existing native
+file-approval regression also caught the integration dispatch overlap on `item/started`; the
+single dispatch now feeds both independent observers. One uniquely marked 180-line no-tools turn in
+the retained managed thread produced a visible preview in both independent phone-layout/desktop
+Chromium viewers before canonical completion. Desktop reload during generation recovered the growing
+preview (304 then 585 characters). Both viewers then showed exactly one 13,549-character final,
+no remaining preview, and the same final-once/no-preview state after independent reloads. The native
+session/TUI and existing policy were preserved; no tool/settings changes occurred. Private evidence:
+`~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/native-live-output.DJI27J/run-IkQ5BV/`.
+The screenshot-only fixture separately targets the actual Live row in phone/desktop light/dark;
+an intentionally unpinned history viewport is not counted as visual evidence of the preview. No new
+native chaos matrix is required for deterministic driver/storage cases.
+
+The first native attempt completed its final reply but showed no preview because the shared bridge
+capability snapshot omitted `liveAssistant`. The one-field copy is fixed with a deterministic
+actual-announce regression in `drivers/bridge.test.ts`; the failed native evidence remains under
+`~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/native-live-output.DJI27J/run-PRzPKu/`.
+The correction uses a fresh projection and new prompt marker, never replays the earlier mutation.
+
+Claude-native remains final-only here. Its exact 2.1.237/Sonnet 4.6 ordinary app-client SSE capture
+of a 120-line no-tools reply contained the user record, one 9,047-character assistant record after
+13.6 seconds, then the result; no partial/ephemeral text was observed. This qualifies only the
+tested app-client feed, not a universal claim about Claude streaming interfaces. Private evidence:
+`~/remote-claw-ui-artifacts/parity-followons-2026-09-26.9yOmka/claude-streaming.Vqr9dm/README.md`.
+Child, reasoning, and command streams, native model/status changes, mobile network-loss recovery,
+and cross-agent streaming parity are outside this slice.
+
 ### Claude native task observations
 
 **Current: implemented; bounded native-history/two-viewer acceptance passed 2026-09-27.** Exact Claude

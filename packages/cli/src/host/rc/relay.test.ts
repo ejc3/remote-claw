@@ -690,6 +690,53 @@ function assistant(text: string): Record<string, unknown> {
   return { type: "assistant", message: { content: [{ type: "text", text }] } };
 }
 
+describe("HostRcRelay advisory live output", () => {
+  it("coalesces one in-flight snapshot independently of final publication and preserves final IDs", async () => {
+    const client = new FakeClient();
+    client.reportedDurable = true;
+    const release = Promise.withResolvers<void>();
+    const previews: Array<{ header: FrameHeader; body: string }> = [];
+    Object.assign(client, {
+      putLiveOutput: async (header: FrameHeader, bytes: Uint8Array, signal: AbortSignal) => {
+        previews.push({ header, body: new TextDecoder().decode(bytes) });
+        if (previews.length === 1)
+          await Promise.race([
+            release.promise,
+            new Promise<void>((resolve) =>
+              signal.addEventListener("abort", () => resolve(), { once: true }),
+            ),
+          ]);
+        return true;
+      },
+    });
+    const session = new Session("preview-session", "Preview", {});
+    const id = `native-text-${"a".repeat(64)}`;
+    session.setLiveOutput({ finalMsgId: id, text: "first", truncated: false });
+    const relay = relayOf(session, client, { ...CODEX_CAPABILITIES, liveAssistant: true });
+    const ac = new AbortController();
+    const served = relay.serve(ac.signal);
+    try {
+      await waitFor(() => previews.length === 1);
+      for (let i = 0; i < 100; i++)
+        session.setLiveOutput({ finalMsgId: id, text: `draft ${i}`, truncated: false });
+      session.pushUpstream({ ...assistant("canonical final"), native_text_id: id });
+      await waitFor(() => client.content.length === 1);
+      expect(client.content[0]).toMatchObject({ seq: 0, msgId: id, text: "canonical final" });
+      expect(previews).toHaveLength(1);
+      release.resolve();
+      await waitFor(() => previews.length === 2);
+      expect(JSON.parse(previews[1]?.body ?? "{}")).toMatchObject({ item: { text: "draft 99" } });
+      expect(previews.every((p) => p.header.seq === null)).toBe(true);
+      expect(client.content).toHaveLength(1);
+      expect(session.snapshotUpstream()).toHaveLength(1);
+    } finally {
+      release.resolve();
+      ac.abort();
+      await served;
+    }
+  });
+});
+
 describe("HostRcRelay inbound coordinate binding", () => {
   it("rejects an authenticated sibling-session command before dedup or side effects", async () => {
     const identity = await deriveIdentity(new Uint8Array(32).fill(41));

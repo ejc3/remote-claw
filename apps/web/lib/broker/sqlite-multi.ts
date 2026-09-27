@@ -4,6 +4,11 @@ import { join } from "node:path";
 import { type Client, createClient, type ResultSet, type Transaction } from "@libsql/client";
 import type { WireFrame } from "@remote-claw/clawsec";
 import {
+  compareLiveCoordinates,
+  LIVE_OUTPUT_TTL_MS,
+  parseLiveCoordinate,
+} from "@remote-claw/cli/broker";
+import {
   type BrokerBackend,
   isClose,
   PublishCollisionError,
@@ -213,6 +218,11 @@ async function runWriteTransaction<T>(
 // while changed bytes are a hard PublishCollisionError. A NULL msg_id is distinct in SQLite, so a
 // minimal internal/test frame without one always inserts.
 const DDL = [
+  `CREATE TABLE IF NOT EXISTS live_output (
+     id INTEGER PRIMARY KEY CHECK (id = 1), gen INTEGER NOT NULL,
+     started_at INTEGER NOT NULL, incarnation TEXT NOT NULL, revision INTEGER NOT NULL,
+     frame TEXT, fingerprint TEXT NOT NULL, expires_at INTEGER NOT NULL
+   )`,
   `CREATE TABLE IF NOT EXISTS channel (
      id          INTEGER PRIMARY KEY CHECK (id = 1),
      gen         INTEGER NOT NULL DEFAULT 0,
@@ -960,6 +970,71 @@ export class SqliteMultiBackend implements BrokerBackend {
         });
       }
       return { created, channelId: this.#locator.idFor(token) };
+    });
+  }
+
+  async putLiveOutput(token: string, frame: WireFrame): Promise<boolean> {
+    const incoming = parseLiveCoordinate(frame.msg_id);
+    if (!incoming) throw new Error("invalid preview coordinate");
+    const serialized = JSON.stringify(frame);
+    const fingerprint = createHash("sha256").update(serialized).digest("hex");
+    return (
+      (await this.#withChannel(token, false, (client) =>
+        runWriteTransaction(client, async (tx) => {
+          const channel = (await tx.execute("SELECT gen, closed FROM channel WHERE id = 1"))
+            .rows[0];
+          if (!channel || Number(channel.closed) !== 0) return false;
+          const gen = Number(channel.gen);
+          const previous = (await tx.execute("SELECT * FROM live_output WHERE id = 1")).rows[0];
+          if (previous && Number(previous.gen) === gen) {
+            const comparison = compareLiveCoordinates(incoming, {
+              startedAt: Number(previous.started_at),
+              incarnation: String(previous.incarnation),
+              revision: Number(previous.revision),
+            });
+            if (comparison === 0 && previous.fingerprint !== fingerprint)
+              throw new PublishCollisionError();
+            if (comparison <= 0) return true; // retries never extend expiry, even after ciphertext expires
+          }
+          await tx.execute({
+            sql: `INSERT INTO live_output (id,gen,started_at,incarnation,revision,frame,fingerprint,expires_at)
+          VALUES (1,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+          gen=excluded.gen, started_at=excluded.started_at, incarnation=excluded.incarnation,
+          revision=excluded.revision, frame=excluded.frame, fingerprint=excluded.fingerprint,
+          expires_at=excluded.expires_at`,
+            args: [
+              gen,
+              incoming.startedAt,
+              incoming.incarnation,
+              incoming.revision,
+              serialized,
+              fingerprint,
+              Date.now() + LIVE_OUTPUT_TTL_MS,
+            ],
+          });
+          return true;
+        }),
+      )) ?? false
+    );
+  }
+
+  async getLiveOutput(token: string): Promise<WireFrame | null> {
+    return this.#withChannel(token, false, async (client) => {
+      const now = Date.now();
+      const row = (
+        await client.execute(`SELECT live_output.frame, expires_at FROM live_output JOIN channel ON channel.id = 1
+          WHERE channel.closed = 0 AND live_output.gen = channel.gen`)
+      ).rows[0];
+      if (row && Number(row.expires_at) <= now) {
+        // Usually GET is read-only. Expiry drops only ciphertext, never the collision watermark.
+        if (row.frame !== null)
+          await client.execute({
+            sql: "UPDATE live_output SET frame = NULL WHERE expires_at <= ? AND frame IS NOT NULL",
+            args: [now],
+          });
+        return null;
+      }
+      return row?.frame == null ? null : (JSON.parse(String(row.frame)) as WireFrame);
     });
   }
 

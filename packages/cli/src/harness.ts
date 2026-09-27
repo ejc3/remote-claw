@@ -249,6 +249,8 @@ export interface DriverCapabilities {
   attachments: boolean;
   /** General host-owned file inputs; omission preserves older image-only hosts. */
   files?: boolean;
+  /** Bounded advisory parent assistant preview; canonical replies remain immutable. */
+  liveAssistant?: boolean;
   /** Independent of optional controls/attachments; omission is only for older hosts. */
   textInput?: "plain" | "terminal";
 }
