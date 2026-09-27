@@ -128,7 +128,11 @@ window, and viewers never inherit a catalog across host incarnations or removed 
 [separate acceptance](docs/release-finish-line.md#codex-native-session-settings).
 Exact 0.154.0 additionally projects bounded native parent-thread `subAgentActivity` events through
 existing task rows; these observations grant no child controls or inferred success/idle state.
-Other controls, streaming partials, general file-change activity, and reconstructed task tracking remain unsupported.
+Exact 0.154.0 also implements optional [bounded live parent-assistant previews](docs/protocol.md#codex-live-assistant-preview)
+through a latest-only encrypted SQLite value, separate from immutable canonical frames. They are
+advisory, generation-bound, expire after 30 seconds, and cannot block or replace canonical finals.
+Claude-native, other drivers/backends, child/reasoning/command output remain final-only in this slice.
+Other controls, general file-change activity, and reconstructed task tracking remain unsupported.
 The [release roadmap](docs/release-finish-line.md)
 owns current-version/activity/interrupt/image, command-approval, and question acceptance; the bounded
 question phone/desktop/native-TUI run passed on 0.153.4. The separate

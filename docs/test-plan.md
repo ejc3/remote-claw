@@ -109,6 +109,16 @@ terminal-before-items metadata, no partial final identity, one-shot repair, immu
 approval responsiveness, and abort cleanup. The separate [0.154.0 active-attach run](release-finish-line.md#codex-active-turn-attachment--2026-09-26)
 checks the real metadata/filter APIs and two-viewer reload without adding a timing-heavy CI matrix.
 
+The [bounded live-preview slice](release-finish-line.md#codex-live-assistant-preview) owns focused
+`broker/live-output.test.ts`, client/driver/relay regressions, and web `api/live-output.test.ts` plus
+`live-output-view.test.ts`. These cover canonical coordinate parsing, byte/body bounds, session AEAD,
+real SQLite singleton ordering/expiry/collision/core-loss behavior, generation/final suppression,
+safe Markdown, exact-version event admission, and one-in-flight coalescing without blocked final
+publication. The bridge's actual-announce regression guards preservation of the optional preview
+capability; existing file-approval driver tests guard shared `item/started` dispatch. The
+small real-native two-viewer sentinel checks visible growth before final and reload recovery;
+driver/state hostile cases remain at the cheaper deterministic boundary, not a native chaos matrix.
+
 The [native file-approval slice](release-finish-line.md#native-file-approvals) adds shared parser tests
 in `harness.test.ts`, Claude client/control tests, and Codex client/`file-approvals.test.ts`/driver tests.
 These own copied-input bounds, complete-path/content/diff display contracts, unsupported-shape

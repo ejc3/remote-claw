@@ -782,7 +782,7 @@ export class CodexDriver implements Driver {
     }
     const { method, params } = inbound.value;
     if (params.threadId !== this.#options.threadId) return;
-    if (method === "item/started" || method === "item/agentMessage/delta") {
+    if (method === "item/agentMessage/delta") {
       reconciler.observeLive(method, params);
       return;
     }
@@ -819,6 +819,7 @@ export class CodexDriver implements Driver {
       return;
     }
     if (method === "item/started") {
+      reconciler.observeLive(method, params);
       this.#fileApprovals?.started(params);
       return;
     }

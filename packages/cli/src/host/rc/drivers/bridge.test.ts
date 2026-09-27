@@ -219,6 +219,7 @@ describe("bridge lifecycle", () => {
       session,
       capabilities: {
         ...MITM_CAPABILITIES,
+        liveAssistant: true,
         controls: { ...MITM_CAPABILITIES.controls, configureSession: true },
       },
       harness: TMUX_HARNESS,
@@ -245,6 +246,7 @@ describe("bridge lifecycle", () => {
 
     expect(pushed).toEqual(["hello after discovery"]);
     expect(client.announces[0]?.capabilities).toMatchObject({
+      liveAssistant: true,
       controls: { configureSession: true },
     });
     expect(client.posts.map((post) => post.kind)).toEqual(["accepted", "user"]);

@@ -487,11 +487,18 @@ buffered notifications before readiness. Projected items are keyed by immutable
 <code>(turnId,itemId)</code>, not the turn-scoped item ID alone; exact replay deduplicates and changed
 projected bytes at the same coordinate fence the projection. Completed commands emit read-only
 <code>Shell</code> calls and bounded results, including failed/declined/nonzero-exit outcomes. Unfinished
-commands, other general tool activity, streaming partials, general file-change activity, and reconstructed task tracking are
+commands, other general tool activity, general file-change activity, and reconstructed task tracking are
 not projected. Exact 0.154.0 copies bounded native parent-thread sub-agent observations into existing
 task rows, without child controls/subscriptions or inferred outcome/idle state; see
 [the task boundary](protocol.md#codex-native-task-observations). Task history follows the same
 conservative terminal-turn/deferred-repair rule described below.
+Exact 0.154.0 separately copies bounded parent assistant deltas into one advisory encrypted preview,
+outside the immutable transcript. An optional SQLite singleton retains only the latest ciphertext
+plus generation/revision/fingerprint; 30-second expiry hides stale data without claiming timed
+physical erasure. Independent coalesced publication cannot block canonical finals. Viewers require
+the accepted presence generation and suppress previews on matching final IDs; no idle, permission,
+or host-only authentication authority is added. Child/reasoning/command streams and other
+drivers/backends are excluded. See [the complete preview boundary](protocol.md#codex-live-assistant-preview).
 The separate bounded file-approval path displays fresh pending patches, not a general file-activity ledger.
 Historical assistant text requires native terminal-turn evidence read before paginated item history,
 or retained on a legacy full-turn page. Active/unknown turn text is deferred; one terminal-triggered
