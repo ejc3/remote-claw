@@ -18,6 +18,8 @@ export interface ParsedTool {
   name: string;
   input: ToolInput;
   sub: boolean;
+  /** Optional on older retained frames. Only an exact native ID can correlate a result. */
+  id?: string;
 }
 
 export function isRoutineActivityMessage(message: Message): boolean {
@@ -181,11 +183,12 @@ export function sanitizeInput(raw: unknown): ToolInput {
 /** Parse a `tool_use` content frame's text — `{name, input, sub}` — tolerating any malformed JSON. */
 export function parseToolUse(text: string): ParsedTool {
   try {
-    const t = JSON.parse(text) as { name?: unknown; input?: unknown; sub?: unknown };
+    const t = JSON.parse(text) as { name?: unknown; input?: unknown; sub?: unknown; id?: unknown };
     return {
       name: typeof t.name === "string" ? t.name : "tool",
       input: sanitizeInput(t.input),
       sub: t.sub === true,
+      ...(typeof t.id === "string" && t.id !== "" ? { id: t.id } : {}),
     };
   } catch {
     return { name: "tool", input: {}, sub: false };
@@ -420,6 +423,55 @@ export function parseTask(text: string): TaskEvent {
   } catch {
     return { subtype: "", taskId: "", description: "", toolUseId: "" };
   }
+}
+
+export interface TaskObservation {
+  id: string;
+  title: string;
+  /** Last received report, not the task's latest native state. Backfill can arrive after live work. */
+  lastReceived: TaskEvent;
+  messages: Message[];
+}
+
+/** Selected-session observations only. Do not infer running/finished from a task subtype, a parent
+ * reply, elapsed time, or a tool result. A start and a later report can straddle many transcript runs.
+ * Conflicting/missing spawning IDs remain separate rather than guessing a relationship. These
+ * frames carry no native event order: host seq is receipt order, and deferred history repair can
+ * append an older start after a live completion report. Preserve that order without inferring
+ * current state or inventing subtype precedence. */
+export function taskObservations(messages: readonly Message[]): TaskObservation[] {
+  const tasks = new Map<string, TaskObservation>();
+  const titledStarts = new Set<string>();
+  for (const message of messages) {
+    if (message.kind !== "task") continue;
+    const task = parseTask(message.text);
+    if (task.taskId === "") continue;
+    const id = JSON.stringify([task.taskId, task.toolUseId]);
+    const previous = tasks.get(id);
+    if (previous) {
+      if (task.subtype === "task_started" && task.description !== "" && !titledStarts.has(id))
+        previous.title = task.description;
+      previous.lastReceived = task;
+      previous.messages.push(message);
+    } else {
+      tasks.set(id, {
+        id,
+        title: task.description || `Task ${task.taskId}`,
+        lastReceived: task,
+        messages: [message],
+      });
+    }
+    if (task.subtype === "task_started" && task.description !== "") titledStarts.add(id);
+  }
+  return [...tasks.values()];
+}
+
+export function taskEventLabel(subtype: string): string {
+  return subtype === "task_started"
+    ? "Started"
+    : subtype === "task_updated" || subtype === "task_notification"
+      ? "Update"
+      : "Event";
 }
 
 export interface PermissionResolution {

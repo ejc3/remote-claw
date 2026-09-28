@@ -153,6 +153,20 @@ function completed(item: CodexThreadItem, threadId = THREAD_ID, turnId = "turn-1
   };
 }
 
+function commandStarted(
+  item: CodexThreadItem,
+  threadId = THREAD_ID,
+  turnId = "turn-1",
+): CodexInbound {
+  return {
+    kind: "notification",
+    value: {
+      method: "item/started",
+      params: { threadId, turnId, item: { ...item, status: "inProgress" } },
+    },
+  };
+}
+
 class FakeCodexClient implements CodexClient {
   initializeCalls = 0;
   nativeVersion = CODEX_APP_SERVER_VERSION;
@@ -1825,6 +1839,153 @@ describe("Codex M3a companion", () => {
         .map((p) => JSON.parse(p.text).description),
     ).toEqual(["/root/example — completed", "/root/example — started"]);
     expect(client.startCalls).toEqual([]);
+    await stop(launched.ac, launched.run);
+  });
+
+  it("observes command start before approval and emits only its matching final result", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    client.resumeResult.thread.status = { type: "active" };
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    const item = commandItem("approval-command", { command: "ls /example" });
+    client.emit(commandStarted(item, THREAD_ID, "approval-turn"));
+    client.emit(commandStarted(item, THREAD_ID, "approval-turn"));
+    const approval = commandApproval();
+    client.emit({ kind: "request", value: approval });
+    await waitFor(() => upstream(launched.session, "control_request").length === 1);
+    await waitFor(() => launched.broker.posts.some((p) => p.recordKind === "tool_use"));
+    expect(launched.broker.posts.filter((p) => p.recordKind === "tool_use")).toHaveLength(1);
+    expect(launched.broker.posts.filter((p) => p.recordKind === "tool_result")).toHaveLength(0);
+    expect(client.approvalCalls).toEqual([]); // Observation is not permission to execute.
+    expect(launched.session.workerStatus).toBe("running");
+    launched.session.pushControlResponse(approvalViewerId(launched.session), "allow");
+    await waitFor(() => client.approvalCalls.length === 1);
+    expect(client.approvalCalls[0]).toEqual({ request: approval, decision: "accept" });
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "turn/completed",
+        params: { threadId: THREAD_ID, turn: { id: "approval-turn", status: "interrupted" } },
+      },
+    });
+    client.emit({
+      kind: "notification",
+      value: {
+        method: "thread/status/changed",
+        params: { threadId: THREAD_ID, status: { type: "idle" } },
+      },
+    });
+    await waitFor(() => launched.session.workerStatus === "idle");
+    expect(launched.broker.posts.filter((p) => p.recordKind === "tool_result")).toHaveLength(0);
+    client.emit(completed(item, THREAD_ID, "approval-turn"));
+    client.emit(completed(item, THREAD_ID, "approval-turn"));
+    client.emit(commandStarted(item, THREAD_ID, "approval-turn"));
+    client.emit(completed(assistantItem("barrier", "Done")));
+    await waitFor(() => launched.broker.posts.some((p) => p.text === "Done"));
+    const tools = launched.broker.posts.filter((p) => p.recordKind?.startsWith("tool_"));
+    expect(tools.map((p) => p.recordKind)).toEqual(["tool_use", "tool_result"]);
+    expect(JSON.parse(tools[0]?.text ?? "")).toMatchObject({
+      id: coordinate("approval-turn", "approval-command"),
+      name: "Shell",
+      input: { command: "ls /example", cwd: "/example" },
+    });
+    expect(JSON.parse(tools[1]?.text ?? "")).toMatchObject({
+      tool_use_id: coordinate("approval-turn", "approval-command"),
+      output: "file content",
+    });
+    expect(client.startCalls).toEqual([]);
+    expect(client.interruptCalls).toEqual([]);
+    await stop(launched.ac, launched.run);
+  });
+
+  it.each([
+    "start-command",
+    "start-cwd",
+    "final-command",
+    "final-cwd",
+    "final-type",
+  ])("fences a changed command observation (%s) without stopping native Codex", async (mutation) => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    client.emit(commandStarted(commandItem("same")));
+    await waitFor(() => upstream(launched.session, "assistant").length === 1);
+    const changed = mutation.endsWith("type")
+      ? assistantItem("same", "not a command")
+      : commandItem("same", mutation.endsWith("cwd") ? { cwd: "/other" } : { command: "pwd" });
+    client.emit(mutation.startsWith("start") ? commandStarted(changed) : completed(changed));
+    await expect(within(launched.run)).resolves.toBe(1);
+    expect(upstream(launched.session, "assistant")).toHaveLength(1);
+    expect(upstream(launched.session, "user")).toHaveLength(0);
+    expect(client.externalThreadRunning).toBe(true);
+    expect(client.startCalls).toEqual([]);
+    expect(client.approvalCalls).toEqual([]);
+  });
+
+  it("bounds pending command starts while retaining final-only fallback and releasing settled slots", async () => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = "0.154.0";
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    for (let index = 0; index < 257; index++)
+      client.emit(commandStarted(commandItem(`command-${index}`)));
+    client.emit(completed(commandItem("command-256")));
+    client.emit(completed(commandItem("command-0")));
+    client.emit(commandStarted(commandItem("new-slot")));
+    client.emit(completed(assistantItem("barrier", "Done")));
+    await waitFor(() => launched.broker.posts.some((p) => p.text === "Done"));
+    const calls = launched.broker.posts.filter((p) => p.recordKind === "tool_use");
+    expect(calls).toHaveLength(258);
+    expect(JSON.parse(calls[256]?.text ?? "").id).toBe(coordinate("turn-1", "command-256"));
+    expect(JSON.parse(calls[257]?.text ?? "").id).toBe(coordinate("turn-1", "new-slot"));
+    expect(launched.broker.posts.filter((p) => p.recordKind === "tool_result")).toHaveLength(2);
+    expect(launched.session.closed).toBe(false);
+    expect(client.startCalls).toEqual([]);
+    await stop(launched.ac, launched.run);
+  });
+
+  it.each([
+    "0.151.0",
+    "0.153.4",
+    "0.154.0",
+  ])("qualifies bounded live command starts only, never unfinished history (%s)", async (version) => {
+    const client = new FakeCodexClient();
+    client.nativeVersion = version;
+    client.pages = [
+      {
+        data: [
+          { turnId: "turn-1", item: commandItem("unfinished", { status: "inProgress" }) },
+          { turnId: "turn-1", item: commandItem("settled") },
+        ],
+        nextCursor: null,
+      },
+    ];
+    client.buffered.push(commandStarted(commandItem("settled")));
+    const launched = await start(client);
+    controllers.push(launched.ac);
+    client.emit(commandStarted(commandItem("foreign"), OTHER_THREAD_ID));
+    client.emit(commandStarted(commandItem("bad-turn"), THREAD_ID, "x".repeat(257)));
+    for (const [index, override] of [
+      { id: "" },
+      { id: "x".repeat(257) },
+      { command: " " },
+      { command: "x".repeat(16_385) },
+      { cwd: "" },
+      { cwd: "x".repeat(4097) },
+    ].entries())
+      client.emit(commandStarted(commandItem(`invalid-${index}`, override)));
+    client.emit(commandStarted(commandItem("valid")));
+    client.emit(completed(assistantItem("barrier", "Done")));
+    await waitFor(() => launched.broker.posts.some((p) => p.text === "Done"));
+    const calls = launched.broker.posts.filter((p) => p.recordKind === "tool_use");
+    expect(calls.map((p) => JSON.parse(p.text).id)).toEqual([
+      coordinate("turn-1", "settled"),
+      ...(version === "0.154.0" ? [coordinate("turn-1", "valid")] : []),
+    ]);
+    expect(launched.broker.posts.filter((p) => p.recordKind === "tool_result")).toHaveLength(1);
+    expect(launched.session.closed).toBe(false);
     await stop(launched.ac, launched.run);
   });
 

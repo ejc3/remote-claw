@@ -101,7 +101,11 @@ stable-ID reconnect remain unqualified.
 The current code accepts exact Codex 0.151.0, 0.153.4, and 0.154.0 on
 Linux arm64
 and also projects completed `commandExecution` as read-only `Shell` calls and bounded results,
-including failed/declined/nonzero-exit outcomes. Browser mutations are non-empty non-slash text,
+including failed/declined/nonzero-exit outcomes. Exact 0.154.0 also projects bounded live command
+starts, which may precede approval and never prove execution; final results correlate without a second
+call row. The shared [Activity panel](docs/protocol.md#session-activity-viewer) groups retained task
+observations across conversation breaks, not running/completed task state. See
+[command-start rules](docs/protocol.md#codex-command-start-observations). Browser mutations are non-empty non-slash text,
 images with an optional non-slash caption, and interrupt; exact 0.154.0 additionally advertises
 general files, never 0.151.0/0.153.4. Images use the existing encrypted composer payload and
 host-constructed inline data URLs; files use host-generated private references, never viewer URLs

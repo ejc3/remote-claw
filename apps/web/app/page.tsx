@@ -65,6 +65,8 @@ import {
   sanitizeInput,
   summarizeActivity,
   type ToolInput,
+  taskEventLabel,
+  taskObservations,
   toolHint,
 } from "./lib/transcript";
 import {
@@ -1424,6 +1426,11 @@ export function Transcript(props: {
     null,
   );
   const [activitySheetId, setActivitySheetId] = useState<string | null>(null);
+  const [sessionActivityOpen, setSessionActivityOpen] = useState(false);
+  const activityMessages = useMemo(
+    () => messages.filter((m) => ["tool_use", "tool_result", "task"].includes(m.kind)),
+    [messages],
+  );
   const transcriptItems = useMemo(() => groupTranscriptActivity(messages), [messages]);
   const openActivity =
     activitySheetId === null
@@ -2176,6 +2183,18 @@ export function Transcript(props: {
             Permissions off
           </span>
         )}
+        <Button
+          className="session-activity-button"
+          variant="ghost"
+          size="sm"
+          icon={<UiIcon name="task" size={18} />}
+          label="Activity"
+          aria-label="Session activity"
+          tooltip="Session activity"
+          aria-haspopup="dialog"
+          aria-expanded={sessionActivityOpen}
+          onClick={() => setSessionActivityOpen(true)}
+        />
         <IconButton
           className="chat-menu"
           variant="ghost"
@@ -2241,6 +2260,13 @@ export function Transcript(props: {
 
       {openActivity !== null && (
         <ActivitySheet group={openActivity} onClose={() => setActivitySheetId(null)} />
+      )}
+      {sessionActivityOpen && (
+        <SessionActivitySheet
+          messages={activityMessages}
+          connected={connected}
+          onClose={() => setSessionActivityOpen(false)}
+        />
       )}
 
       {/* `.jump-latest` keeps only its absolute positioning (centred, floating above the composer);
@@ -3265,6 +3291,114 @@ function ActivitySheet({ group, onClose }: { group: ActivityGroup; onClose: () =
   );
 }
 
+/** A read-only index over the selected transcript, not a second task runtime. Kept independent of
+ * conversation scroll so later reports remain discoverable even after prose splits an activity run. */
+export function SessionActivitySheet({
+  messages,
+  connected,
+  onClose,
+}: {
+  messages: readonly Message[];
+  connected: boolean;
+  onClose: () => void;
+}) {
+  const tasks = useMemo(() => taskObservations(messages), [messages]);
+  // This is an initial preference, not a live condition: a new task must not collapse commands the
+  // user is reading. Native <details> owns subsequent disclosure/focus state until the sheet closes.
+  const [initialEventsOpen] = useState(() => tasks.length === 0);
+  const resultIds = useMemo(
+    () =>
+      new Set(
+        messages
+          .filter((m) => m.kind === "tool_result")
+          .map((m) => parseToolResult(m.text).toolUseId),
+      ),
+    [messages],
+  );
+  return (
+    <Sheet label="Session activity" onClose={onClose} wide>
+      <p className="activity-sheet-summary" role="status">
+        {connected
+          ? "Native events appear here as they arrive."
+          : "Not connected — showing last received activity."}
+      </p>
+      {messages.length === 0 ? (
+        <p className="empty-pad">No activity yet.</p>
+      ) : (
+        <>
+          {tasks.length > 0 && (
+            <section className="task-observations" aria-label="Task observations">
+              <h3>
+                Tasks <span>{tasks.length}</span>
+              </h3>
+              <p className="task-observations-note">
+                Reports in received order; recovered history may arrive late. Task controls stay in
+                the native app.
+              </p>
+              {tasks.map((task) => (
+                <details className="task-observation" key={task.id}>
+                  <summary>
+                    <UiIcon name="task" size={18} />
+                    <span className="task-observation-copy">
+                      <span className="task-observation-title">{task.title}</span>
+                      <span className="task-observation-meta">
+                        Last received: {taskEventLabel(task.lastReceived.subtype)} ·{" "}
+                        {task.messages.length} {task.messages.length === 1 ? "event" : "events"}
+                      </span>
+                      {task.lastReceived.description !== task.title &&
+                        task.lastReceived.description !== "" && (
+                          <span className="task-observation-report">
+                            {task.lastReceived.description}
+                          </span>
+                        )}
+                    </span>
+                    <UiIcon name="chevron-right" size={16} className="task-observation-chevron" />
+                  </summary>
+                  <ol className="activity-list" aria-label="Task event history">
+                    {task.messages.map((message) => (
+                      <li className="activity-item" key={`${message.msgId}:${message.seq}`}>
+                        <ActivityMessageRow message={message} />
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              ))}
+            </section>
+          )}
+          <details className="session-activity-events" open={initialEventsOpen}>
+            <summary>
+              <span>
+                All events <span className="session-activity-count">{messages.length}</span>
+              </span>
+              <UiIcon name="chevron-right" size={16} />
+            </summary>
+            <p className="activity-sheet-summary">{summarizeActivity(messages)}</p>
+            <ol className="activity-list" aria-label="Session activity events">
+              {messages.map((message) => {
+                const tool = message.kind === "tool_use" ? parseToolUse(message.text) : null;
+                const emptyResult =
+                  message.kind === "tool_result" && parseToolResult(message.text).output === "";
+                return (
+                  <li className="activity-item" key={`${message.msgId}:${message.seq}`}>
+                    {emptyResult ? (
+                      <p className="activity-empty-result">Result received without text output.</p>
+                    ) : (
+                      <ActivityMessageRow message={message} />
+                    )}
+                    {tool?.id && !resultIds.has(tool.id) && (
+                      <p className="activity-awaiting-result">No result received yet.</p>
+                    )}
+                  </li>
+                );
+              })}
+            </ol>
+          </details>
+        </>
+      )}
+    </Sheet>
+  );
+}
+
 function ActivityMessageRow({ message }: { message: Message }) {
   if (message.kind === "tool_use") return <ToolRow text={message.text} />;
   if (message.kind === "tool_result") return <ToolResultRow text={message.text} />;
@@ -4080,12 +4214,13 @@ function ToolRow({ text }: { text: string }) {
   const stat = isEdit ? editStat(input) : null;
   // A tool_use frame proves an invocation, not success. Keep the action event-like (Command/Edit/Read/
   // Task) and render the model-authored description as secondary text instead of implying completion.
-  const action = isTask ? "Task" : isEdit ? "Edit" : name === "Bash" ? "Command" : name;
+  const isCommand = name === "Bash" || name === "Shell";
+  const action = isTask ? "Task" : isEdit ? "Edit" : isCommand ? "Command" : name;
   const subject = isTask
     ? input.description || "Sub-agent"
     : isEdit || name === "Read"
       ? file
-      : input.description;
+      : input.description || (isCommand ? input.command?.replace(/\s+/gu, " ").trim() : undefined);
 
   // Only expandable when the detail body will actually render something. `description` is already in
   // the label, and a Task's prompt is the only prompt we render — so don't open to an empty box.
@@ -4096,7 +4231,7 @@ function ToolRow({ text }: { text: string }) {
       ? "edit"
       : name === "Read"
         ? "file"
-        : name === "Bash"
+        : isCommand
           ? "terminal"
           : "tool";
 

@@ -17,7 +17,10 @@ The earlier `0.146.0` observations below remain historical seam evidence.
 
 **Current implementation:** the version gate accepts exact `0.151.0`, `0.153.4`, and `0.154.0` on Linux arm64.
 Besides native text/status, completed `commandExecution` items now become read-only `Shell` calls and
-bounded results, including failed/declined/nonzero-exit outcomes. Browser mutations are ordinary
+bounded results, including failed/declined/nonzero-exit outcomes. Exact 0.154.0 also observes bounded
+[live command starts](protocol.md#codex-command-start-observations), which may precede approval and
+do not assert execution. The shared [Activity panel](protocol.md#session-activity-viewer) groups
+retained task reports without reconstructing current child state. Browser mutations are ordinary
 non-empty non-slash text, image groups with an optional non-slash caption, and interrupt. Exact 0.153.4
 and 0.154.0 implement one-shot ordinary local-command approvals and bounded non-secret blocking choice
 forms; their dedicated response APIs use exact connection-owned callbacks and native-confirmed
@@ -186,7 +189,8 @@ The resumed thread's native `historyMode` now chooses the bounded reader rather 
 so retained inline-image groups do not combine into an oversized frame. The historical M3b readers
 retained only user/assistant text. Current readers also
 retain `commandExecution` and `subAgentActivity` (exact 0.154.0 projection); the projection validates supported completed shapes before counting the
-shared 10,000 native-item cap. Other tool families, reasoning, and unfinished commands are not projected.
+shared 10,000 native-item cap. Other tool families, reasoning, and unfinished history commands are not projected.
+Exact 0.154.0's bounded live command starts are a separate observation, not final history or approval.
 The immutable projection coordinate is `(turnId,itemId)`, because Codex may reuse one item ID in
 different turns. Same-coordinate, same-byte history/live overlap deduplicates; changed projected bytes
 at the same coordinate fence the companion.

@@ -93,6 +93,32 @@ test("transcript: prose and compact activity details", async ({ page, seedHost }
   await page.screenshot({ path: `${OUT()}/04-tool-output-expanded.png`, fullPage: true });
 });
 
+test("session activity: task observations and full event history", async ({ page, seedHost }) => {
+  const { pass, publishActivity } = await seedHost({ harness: "native-rc", caps: "native-rc" });
+  await connect(page, pass);
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  await expect(page.locator(".prose.assistant", { hasText: "Build is green" })).toBeVisible();
+  await publishActivity([
+    {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "tk1",
+      tool_use_id: "toolu_task1",
+      description: "tk1 — reported completed",
+    },
+  ]);
+  await page.getByRole("button", { name: "Session activity", exact: true }).click();
+  const sheet = page.getByRole("dialog", { name: "Session activity", exact: true });
+  const task = sheet.locator("details.task-observation");
+  await expect(task).toHaveCount(1);
+  await expect(task).toContainText("tk1 — reported completed");
+  await task.locator("summary").click();
+  await expect(task.locator(".task-row")).toHaveCount(2);
+  await settleSheet(page);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: `${OUT()}/03d-session-activity.png`, fullPage: true });
+});
+
 test("stable Claude: local-permission disclosure and text-only composer", async ({
   page,
   seedHost,
