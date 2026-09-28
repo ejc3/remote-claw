@@ -385,10 +385,15 @@ Interrupt targets one observed active turn without retrying or switching to a ne
 available while browser text is queued; that text waits for native idle before starting. Interrupting
 the model turn does not guarantee cancellation of native background commands.
 Completed native `commandExecution` items appear as read-only `Shell` calls and bounded results,
-including failed, declined, and nonzero-exit outcomes. Activity observation itself adds no execution
+including failed, declined, and nonzero-exit outcomes. Exact 0.154.0 also shows bounded
+[live command starts](docs/protocol.md#codex-command-start-observations) before their final result,
+without treating a start as approval or execution. Activity observation itself adds no execution
 authority, file-change projection, or task lifecycle tracking. Exact 0.154.0
 separately shows native [sub-agent observations](docs/protocol.md#codex-native-task-observations)
 in the existing activity details, without reconstructing child state or granting child controls.
+The persistent [Activity panel](docs/protocol.md#session-activity-viewer) makes task reports and all
+tool events reachable across conversation breaks on phone and desktop. It shows retained observations,
+not invented live task status; native permissions remain unchanged.
 It separately implements [live parent-assistant text previews](docs/protocol.md#codex-live-assistant-preview)
 with SQLite/libSQL: one encrypted latest-value Live row, replaced by the canonical final reply.
 Previews are bounded, advisory, and expire after 30 seconds; their failure never blocks final output.
@@ -433,7 +438,9 @@ uses ascending `thread/items/list`; `legacy` uses ascending `thread/turns/list` 
 oversized history frame, with a 100,000-page raw scan cap. Both retain user/assistant text, native
 image-bearing user input, `commandExecution`, and `subAgentActivity` (exact 0.154.0 projection); the projection
 validates supported completed shapes before counting the shared 10,000 native-item limit. Other tool
-families, reasoning, and unfinished commands are not projected. Projected identity is the immutable
+families, reasoning, and unfinished history commands are not projected. Exact 0.154.0 separately
+observes bounded live command starts; see [the boundary](docs/protocol.md#codex-command-start-observations).
+Projected final identity is the immutable
 `(turnId,itemId)` pair: replay of the same pair and bytes deduplicates, while changed projected bytes
 at the same pair fence the companion.
 Historical assistant text from active/unknown turns is deferred until native completion, with one

@@ -40,6 +40,7 @@ import {
 // Preserve the existing roughly 100k raw-item scan budget, independently of projected item limits.
 const HISTORY_PAGE_LIMIT = 100_000;
 const CORRELATION_TIMEOUT_MS = 15_000;
+const COMMAND_START_LIMIT = 256;
 
 function settingsConfirmed(
   update: CodexSettingsUpdate,
@@ -256,6 +257,7 @@ class CodexReconciler {
   readonly #session: Session;
   readonly #mutations: Map<string, BrowserMutation>;
   readonly #seen = new Map<string, string>();
+  readonly #commandStarts = new Map<string, string>();
   readonly #uploads: NativeUploadStore;
   readonly #previews: NativePreviewBudget;
   readonly #live: boolean;
@@ -330,11 +332,76 @@ class CodexReconciler {
     }
   }
 
+  observeCommandStart(params: Record<string, unknown>): void {
+    // Command/task observations share the exact 0.154.0 qualification. A start can precede approval;
+    // this is an immutable observation, not proof of process execution or permission authority.
+    if (!this.tasksSupported) return;
+    const item = record(params.item);
+    const turnId = params.turnId;
+    if (
+      typeof turnId !== "string" ||
+      turnId.trim() === "" ||
+      turnId.length > 256 ||
+      item?.type !== "commandExecution" ||
+      item.status !== "inProgress" ||
+      typeof item.id !== "string" ||
+      item.id.trim() === "" ||
+      item.id.length > 256 ||
+      typeof item.command !== "string" ||
+      item.command.trim() === "" ||
+      item.command.length > 16_384 ||
+      typeof item.cwd !== "string" ||
+      item.cwd.trim() === "" ||
+      item.cwd.length > 4096
+    )
+      return;
+    const coordinate = JSON.stringify([turnId, item.id]);
+    if (this.#seen.has(coordinate)) return;
+    const fingerprint = this.#commandFingerprint(item.command, item.cwd);
+    const previous = this.#commandStarts.get(coordinate);
+    if (previous !== undefined) {
+      if (previous !== fingerprint)
+        throw new CodexProjectionError("Codex changed a started command's input");
+      return;
+    }
+    // Optional start visibility must not fail a healthy conversation. Final items still use the
+    // normal completed-call/result path if a start was omitted at this bound.
+    if (this.#commandStarts.size >= COMMAND_START_LIMIT) return;
+    this.#commandStarts.set(coordinate, fingerprint);
+    this.#publishCommand(turnId, item.id, item.command, item.cwd);
+  }
+
+  #commandFingerprint(command: string, cwd: string): string {
+    return createHash("sha256")
+      .update(JSON.stringify([command, cwd]))
+      .digest("hex");
+  }
+
+  #publishCommand(turnId: string, itemId: string, command: string, cwd: string): void {
+    this.#session.pushUpstream({
+      type: "assistant",
+      uuid: JSON.stringify([turnId, itemId, "call"]),
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            id: JSON.stringify([turnId, itemId]),
+            name: "Shell",
+            input: { command, cwd },
+          },
+        ],
+      },
+    });
+  }
+
   accept(turnId: string, item: CodexThreadItem): void {
     // Codex item ids are stable only within one turn. The app-server stores and reconciles them by
     // (turn_id, item_id), and legacy histories may legitimately reuse an id after rollback. JSON's
     // tuple encoding is an exact, collision-free session coordinate for arbitrary string ids.
     const coordinate = JSON.stringify([turnId, item.id]);
+    if (this.#commandStarts.has(coordinate) && item.type !== "commandExecution")
+      throw new CodexProjectionError("Codex replaced a started command with another item type");
     if (item.type === "userMessage") {
       const input = userInput(item);
       if (input === null) return;
@@ -436,22 +503,12 @@ class CodexReconciler {
           JSON.stringify([item.type, item.command, item.cwd, item.status, item.exitCode, output]),
         )
         .digest("hex");
+      const started = this.#commandStarts.get(coordinate);
+      if (started !== undefined && started !== this.#commandFingerprint(item.command, item.cwd))
+        throw new CodexProjectionError("Codex completed a command with changed input");
       if (!this.#admit(coordinate, fingerprint)) return;
-      this.#session.pushUpstream({
-        type: "assistant",
-        uuid: JSON.stringify([turnId, item.id, "call"]),
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "tool_use",
-              id: coordinate,
-              name: "Shell",
-              input: { command: item.command, cwd: item.cwd },
-            },
-          ],
-        },
-      });
+      this.#commandStarts.delete(coordinate);
+      if (started === undefined) this.#publishCommand(turnId, item.id, item.command, item.cwd);
       this.#session.pushUpstream({
         type: "user",
         uuid: JSON.stringify([turnId, item.id, "output"]),
@@ -821,6 +878,7 @@ export class CodexDriver implements Driver {
     }
     if (method === "item/started") {
       reconciler.observeLive(method, params);
+      reconciler.observeCommandStart(params);
       this.#fileApprovals?.started(params);
       return;
     }

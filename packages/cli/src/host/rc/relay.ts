@@ -472,6 +472,7 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
       text?: string;
       thinking?: string;
       name?: string;
+      id?: unknown;
       input?: unknown;
     };
     if (bb.type === "text" && typeof bb.text === "string" && bb.text !== "") {
@@ -503,7 +504,12 @@ function mapUpstreamItems(ev: RcEvent): OutItem[] {
       // name + input so the UI can render the activity (and recognize a sub-agent).
       items.push({
         kind: "tool_use",
-        text: JSON.stringify({ name: bb.name ?? "tool", input: bb.input ?? null, sub }),
+        text: JSON.stringify({
+          name: bb.name ?? "tool",
+          input: bb.input ?? null,
+          sub,
+          ...(typeof bb.id === "string" && bb.id !== "" ? { id: bb.id } : {}),
+        }),
       });
     }
   }

@@ -196,6 +196,10 @@ if (process.env.RC_E2E_ATTACHMENT_ECHO === "1") {
 }
 const commands = createInterface({ input: process.stdin });
 commands.on("line", (line) => {
+  if (line.startsWith("activity:")) {
+    const frames = JSON.parse(line.slice("activity:".length)) as Record<string, unknown>[];
+    for (const frame of frames) session.pushUpstream(frame);
+  }
   if (line.trim() === "resolve-permission" && fileApproval) {
     session.pushUpstream({ type: "control_cancel_request", request_id: "perm-e2e-file" });
   }

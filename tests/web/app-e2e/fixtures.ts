@@ -26,6 +26,8 @@ export interface SeedResult {
   resolvePermission: () => Promise<void>;
   /** Publish a scripted native settings confirmation independently of browser POST acceptance. */
   confirmSettings: (settings: SessionSettings) => Promise<void>;
+  /** Append test-owned provider observations through the production Session/relay. */
+  publishActivity: (frames: Record<string, unknown>[]) => Promise<void>;
 }
 export type SeedHost = (opts?: {
   /** Reuse this test's identity for a distinct session on the same discovery bus. Passed via env. */
@@ -197,6 +199,16 @@ function spawnHost(opts: {
                   return;
                 }
                 child.stdin.write(`settings:${JSON.stringify(settings)}\n`, (error) =>
+                  error ? reject(error) : resolve(),
+                );
+              }),
+            publishActivity: (frames) =>
+              new Promise<void>((resolve, reject) => {
+                if (child.stdin === null || child.stdin.destroyed) {
+                  reject(new Error("host-runner exited before publishing activity"));
+                  return;
+                }
+                child.stdin.write(`activity:${JSON.stringify(frames)}\n`, (error) =>
                   error ? reject(error) : resolve(),
                 );
               }),

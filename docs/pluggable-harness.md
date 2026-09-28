@@ -18,6 +18,11 @@ Five drivers exist:
   implements bounded native patch approvals and conditionally offers native-confirmed
   model/effort/collaboration settings.
 
+Exact Codex 0.154.0 also emits bounded [live command-start observations](protocol.md#codex-command-start-observations)
+before final results; starts do not imply approval or execution. The shared
+[Activity panel](protocol.md#session-activity-viewer) indexes retained tool/task observations across
+conversation breaks for all adapters. It adds no task controls or inferred running/completed state.
+
 The private MITM remains the supported Claude beta. The native companion has passed its structured
 API-path, local Graduate, literal official web UI coexistence, and separate exact-SHA
 deployed-broker gates; M1 is complete.
@@ -341,7 +346,8 @@ results, including failed/declined/nonzero-exit outcomes. It cannot correlate or
 browser prompt. Exact 0.154.0 also projects bounded parent-thread `subAgentActivity` observations
 through existing task rows, with the same coordinate fence and conservative terminal-history rule.
 No child controls, inferred success/idle, or reconstructed lifecycle tracker is added; see
-[the task boundary](protocol.md#codex-native-task-observations). Unfinished commands, other general tool
+[the task boundary](protocol.md#codex-native-task-observations). Exact 0.154.0 separately observes
+bounded [live command starts](protocol.md#codex-command-start-observations). Unfinished history commands, other general tool
 activity and general file-change activity are not projected.
 Exact 0.154.0 separately advertises `liveAssistant:true` for bounded parent text previews through
 SQLite's optional latest-only encrypted value. This does not append partial snapshots to canonical

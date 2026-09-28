@@ -917,6 +917,34 @@ describe("HostRcRelay local-origin prompt rendering (local_prompt)", () => {
 });
 
 describe("HostRcRelay provider-ordered text boundaries", () => {
+  it("preserves only nonempty string tool IDs and keeps legacy calls compatible", async () => {
+    const session = new Session("s", "t", {});
+    const client = new FakeClient();
+    const ac = new AbortController();
+    const served = relayOf(session, client).serve(ac.signal);
+    try {
+      for (const id of ["native-command", undefined, "", { nested: "not an ID" }])
+        session.pushUpstream({
+          type: "assistant",
+          message: {
+            content: [{ type: "tool_use", id, name: "Shell", input: { command: "pwd" } }],
+          },
+        });
+      await waitFor(() => client.content.length === 4);
+      const legacy = { name: "Shell", input: { command: "pwd" }, sub: false };
+      expect(client.content.map((p) => JSON.parse(p.text))).toEqual([
+        { ...legacy, id: "native-command" },
+        legacy,
+        legacy,
+        legacy,
+      ]);
+      expect(client.content.every((p) => p.recordKind === "tool_use")).toBe(true);
+    } finally {
+      ac.abort();
+      await served;
+    }
+  });
+
   it("admits mixed files once and adds previews only after canonical native observation", async () => {
     const session = new Session("s", "t", {});
     const client = new FakeClient();

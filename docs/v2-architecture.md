@@ -500,12 +500,16 @@ projection validates supported completed shapes before its shared 10,000 native-
 buffered notifications before readiness. Projected items are keyed by immutable
 <code>(turnId,itemId)</code>, not the turn-scoped item ID alone; exact replay deduplicates and changed
 projected bytes at the same coordinate fence the projection. Completed commands emit read-only
-<code>Shell</code> calls and bounded results, including failed/declined/nonzero-exit outcomes. Unfinished
-commands, other general tool activity, general file-change activity, and reconstructed task tracking are
-not projected. Exact 0.154.0 copies bounded native parent-thread sub-agent observations into existing
+<code>Shell</code> calls and bounded results, including failed/declined/nonzero-exit outcomes. Exact
+0.154.0 also observes bounded live command starts before their result, without implying approval or
+execution; [command-start observations](protocol.md#codex-command-start-observations) owns the bounds
+and correlation rules. Unfinished history, other general tool activity, general file-change activity,
+and reconstructed task tracking are not projected. Exact 0.154.0 copies bounded native parent-thread sub-agent observations into existing
 task rows, without child controls/subscriptions or inferred outcome/idle state; see
 [the task boundary](protocol.md#codex-native-task-observations). Task history follows the same
 conservative terminal-turn/deferred-repair rule described below.
+The shared [session Activity panel](protocol.md#session-activity-viewer) groups retained task reports
+across conversation breaks without creating current task state, control authority, or subscriptions.
 Exact 0.154.0 separately copies bounded parent assistant deltas into one advisory encrypted preview,
 outside the immutable transcript. An optional SQLite singleton retains only the latest ciphertext
 plus generation/revision/fingerprint; 30-second expiry hides stale data without claiming timed

@@ -169,6 +169,12 @@ credentials explicitly instead of using “accountless” as “no accounts or c
 
 ## Shared follow-ups
 
+The [UX execution priority](release-finish-line.md#ux-execution-priority--2026-09-28) now sequences
+live work/task visibility, cross-client attachments, Codex steering, then session management. The
+shared [Activity panel](protocol.md#session-activity-viewer) groups retained task reports, and exact
+Codex 0.154.0 exposes bounded [command starts](protocol.md#codex-command-start-observations).
+Neither closes the remaining live output, authoritative task state, or child-control gaps.
+
 Current Claude-native [task observations](protocol.md#claude-native-task-observations) now expose
 bounded worker start descriptions and reported statuses. This does not graduate task phases,
 reconstructed child state, output subscriptions, or child controls.

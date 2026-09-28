@@ -7,6 +7,184 @@ import { expect, test } from "./fixtures";
 const BACKEND = process.env.E2E_BACKEND;
 const qp = BACKEND ? `?backend=${BACKEND}` : "";
 
+test("phone session header keeps bypass warning and Activity reachable at 393 and 320 pixels", async ({
+  page,
+  seedHost,
+}) => {
+  const { pass } = await seedHost({ harness: "tmux", caps: "tmux-bypassed" });
+  await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+  await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await page.locator("button.row", { hasText: "rc box" }).click();
+  const header = page.locator(".chat-head");
+  const activity = header.getByRole("button", { name: "Session activity", exact: true });
+  for (const width of [393, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(header.locator(".perms-bypassed")).toContainText("Permissions off");
+    await expect(activity).toContainText("Activity");
+    await activity.blur(); // Keep the previous width's keyboard-focus tooltip out of this screenshot.
+    await page.screenshot({ path: test.info().outputPath(`bypass-header-${width}.png`) });
+    for (const selector of [
+      ".back",
+      ".row-title",
+      ".perms-bypassed",
+      ".session-activity-button",
+      ".chat-menu",
+    ]) {
+      const bounds = await header.locator(selector).boundingBox();
+      expect(bounds, selector).not.toBeNull();
+      expect(bounds!.x, selector).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width, selector).toBeLessThanOrEqual(width);
+    }
+    const title = await header.locator(".row-title").boundingBox();
+    expect(title!.width).toBeGreaterThanOrEqual(64);
+    for (const control of [activity, header.locator(".back"), header.locator(".chat-menu")]) {
+      const bounds = await control.boundingBox();
+      expect(bounds!.width).toBeGreaterThanOrEqual(44);
+      expect(bounds!.height).toBeGreaterThanOrEqual(44);
+    }
+    await activity.click();
+    await expect(page.getByRole("dialog", { name: "Session activity", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(activity).toBeFocused();
+  }
+});
+
+for (const provider of ["native-rc", "codex"] as const) {
+  test(`${provider} session activity follows live reports across prose, reload, and session switching`, async ({
+    page,
+    seedHost,
+  }) => {
+    const { pass, publishActivity } = await seedHost({
+      caps: provider,
+      harness: provider,
+      profile: "smoke",
+      title: "Activity source",
+    });
+    await seedHost({
+      pass,
+      caps: provider,
+      harness: provider,
+      profile: "smoke",
+      title: "Other session",
+    });
+    await page.goto(`/${qp}#${encodeURIComponent(pass)}`);
+    await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await page.locator("button.row", { hasText: "Activity source" }).click();
+
+    const trigger = page.getByRole("button", { name: "Session activity", exact: true });
+    const sheet = page.getByRole("dialog", { name: "Session activity", exact: true });
+    const tasks = sheet.locator("details.task-observation");
+    const allEvents = sheet.locator("details.session-activity-events");
+    await trigger.click();
+    await expect(sheet.getByText("No activity yet.", { exact: true })).toBeVisible();
+    await expect(tasks).toHaveCount(0);
+
+    const title = 'Inspect <img src=x onerror="window.__activityInjected=1">';
+    const coordinates = {
+      task_id: "task-activity-a",
+      ...(provider === "native-rc" ? { tool_use_id: "tool-task-a" } : {}),
+    };
+    await publishActivity([
+      {
+        type: "assistant",
+        message: {
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-activity",
+              name: provider === "codex" ? "Shell" : "Bash",
+              input: { command: "printf activity", description: "Inspect scratch output" },
+            },
+          ],
+        },
+      },
+    ]);
+    await expect(allEvents).toHaveAttribute("open", "");
+    const command = allEvents.locator("details.tool-row");
+    const commandSummary = command.locator(":scope > summary");
+    await commandSummary.click();
+    await expect(command).toHaveAttribute("open", "");
+    await expect(commandSummary).toBeFocused();
+    await publishActivity([
+      { type: "system", subtype: "task_started", ...coordinates, description: title },
+    ]);
+    await expect(sheet.getByRole("region", { name: "Task observations" })).toBeVisible();
+    // Inserting the first task must not collapse/re-mount the command a reader already opened.
+    await expect(allEvents).toHaveAttribute("open", "");
+    await expect(command).toHaveAttribute("open", "");
+    await expect(commandSummary).toBeFocused();
+    await expect(tasks).toHaveCount(1);
+    await expect(tasks.locator("summary")).toContainText(title);
+    await tasks.locator("summary").click();
+    await expect(tasks).toHaveAttribute("open", "");
+
+    const latest =
+      provider === "native-rc"
+        ? "task-activity-a — reported completed"
+        : "/root/activity-worker — completed";
+    await publishActivity([
+      {
+        type: "assistant",
+        message: { content: [{ type: "text", text: "Intervening ordinary progress prose." }] },
+      },
+      {
+        type: "system",
+        subtype: provider === "native-rc" ? "task_notification" : "task_updated",
+        ...coordinates,
+        description: latest,
+      },
+      {
+        type: "user",
+        message: {
+          content: [
+            { type: "tool_result", tool_use_id: "tool-activity", content: "activity output" },
+          ],
+        },
+      },
+    ]);
+    // The same task card remains expanded as the live report arrives across a prose boundary.
+    await expect(tasks).toHaveCount(1);
+    await expect(tasks).toHaveAttribute("open", "");
+    await expect(tasks.locator("summary")).toContainText(title);
+    await expect(tasks).toContainText(latest);
+    await expect(tasks.locator(".task-row")).toHaveCount(2);
+    await expect(sheet.locator("img")).toHaveCount(0);
+    expect(await page.evaluate(() => Object.hasOwn(window, "__activityInjected"))).toBe(false);
+
+    const rows = allEvents.locator(".activity-item");
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(0)).toContainText("Inspect scratch output");
+    await expect(rows.nth(1)).toContainText(title);
+    await expect(rows.nth(2)).toContainText(latest);
+    await expect(rows.nth(3)).toContainText("Output");
+    await expect(allEvents).not.toContainText("Intervening ordinary progress prose.");
+    await expect(sheet.getByRole("button", { name: /^(Allow|Deny|Stop)$/ })).toHaveCount(0);
+
+    await page.keyboard.press("Escape");
+    await expect(sheet).not.toBeVisible();
+    await expect(trigger).toBeFocused();
+    await page.reload();
+    await page.locator("button.row", { hasText: "Activity source" }).click();
+    await trigger.click();
+    await expect(tasks).toHaveCount(1);
+    await expect(tasks.locator("summary")).toContainText(title);
+    await expect(tasks).toContainText(latest);
+    if ((await allEvents.getAttribute("open")) === null) {
+      await allEvents.locator(":scope > summary").click();
+    }
+    await expect(rows).toHaveCount(4);
+    await expect(rows.nth(2)).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Sessions", exact: true }).click();
+    await page.locator("button.row", { hasText: "Other session" }).click();
+    await trigger.click();
+    await expect(sheet.getByText("No activity yet.", { exact: true })).toBeVisible();
+    await expect(tasks).toHaveCount(0);
+    await expect(sheet).not.toContainText(latest);
+  });
+}
+
 test("native settings wait for confirmation and stay shared across phone and desktop", async ({
   page,
   browser,

@@ -1734,6 +1734,116 @@ summary:focus-visible,
   font-size: 12.5px;
   line-height: 1.4;
 }
+.session-activity-button {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+}
+.task-observations {
+  padding: 6px 4px 16px;
+}
+.task-observations h3 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 6px 6px;
+  font-size: 15px;
+  font-weight: 650;
+}
+.task-observations h3 > span,
+.session-activity-count {
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 450;
+  font-variant-numeric: tabular-nums;
+}
+.task-observations-note {
+  margin: 0 6px 14px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.task-observation {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.task-observation > summary,
+.session-activity-events > summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 48px;
+  padding: 14px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.task-observation > summary::-webkit-details-marker,
+.session-activity-events > summary::-webkit-details-marker {
+  display: none;
+}
+.task-observation > summary > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-dim);
+}
+.task-observation-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+.task-observation-title {
+  font-size: 15px;
+  font-weight: 550;
+  line-height: 1.45;
+}
+.task-observation-meta {
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.task-observation-report {
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.task-observation[open] > summary .task-observation-chevron,
+.session-activity-events[open] > summary > svg {
+  transform: rotate(90deg);
+}
+.task-observation > .activity-list {
+  margin: 0 6px 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.session-activity-events {
+  border-top: 1px solid var(--line);
+}
+.session-activity-events > summary {
+  align-items: center;
+  justify-content: space-between;
+  font-size: 15px;
+  font-weight: 650;
+}
+.session-activity-count {
+  margin-left: 6px;
+}
+.activity-awaiting-result,
+.activity-empty-result {
+  position: relative;
+  margin: 0 12px 10px 34px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.task-observation > summary:focus-visible,
+.session-activity-events > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: 12px;
+}
 .activity-list {
   position: relative;
   margin: 0;
@@ -2053,6 +2163,22 @@ summary:focus-visible,
   /* Give the title a real floor so it ellipsises instead of collapsing if the header is still tight. */
   .chat-head .row-title {
     min-width: 4rem;
+  }
+  /* The explicit bypass warning needs its own row on a phone; shrinking or clipping it would hide
+     safety posture, and shrinking the actions would lose their 44px touch targets. */
+  .chat-head:has(.perms-bypassed) {
+    display: grid;
+    grid-template-columns: 44px minmax(4rem, 1fr) auto 44px;
+    height: auto;
+    min-height: 54px;
+    row-gap: 0;
+    padding-block: 5px;
+  }
+  .chat-head .perms-bypassed {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    justify-self: start;
+    margin: 0 0 4px;
   }
   .transcript {
     padding: 18px 16px;

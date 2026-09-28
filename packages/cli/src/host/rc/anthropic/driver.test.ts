@@ -1137,6 +1137,7 @@ describe.skipIf(!haveOpenssl())("ClaudeNativeDriver integration", () => {
         "assistant",
       ]);
       expect(JSON.parse(harness.broker.content[1]?.text ?? "")).toEqual({
+        id: "toolu_read",
         name: "Read",
         input: { file_path: "/example.ts" },
         sub: false,

@@ -14,6 +14,7 @@ import {
   questionAnswerKey,
   sanitizeInput,
   summarizeActivity,
+  taskObservations,
   toolHint,
 } from "../app/lib/transcript.js";
 import type { Message } from "../app/lib/viewer.js";
@@ -23,6 +24,107 @@ const message = (kind: string, msgId: string, seq: number, text = ""): Message =
   msgId,
   seq,
   text,
+});
+
+describe("taskObservations", () => {
+  const task = (
+    subtype: string,
+    description: string,
+    seq: number,
+    taskId = "child",
+    toolId = "spawn",
+  ) =>
+    message(
+      "task",
+      `task-${seq}`,
+      seq,
+      JSON.stringify({ subtype, description, task_id: taskId, tool_use_id: toolId }),
+    );
+
+  it("brings reports across conversation breaks together without changing native wording", () => {
+    const start = task("task_started", "Investigate reconnect behavior", 1);
+    const update = task("task_updated", "native/path — interrupted", 4);
+    const events = [start, message("assistant", "prose", 2), message("user", "input", 3), update];
+    const grouped = taskObservations(events);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]?.title).toBe("Investigate reconnect behavior");
+    expect(grouped[0]?.lastReceived.description).toBe("native/path — interrupted");
+    expect(grouped[0]?.messages).toEqual([start, update]);
+    expect(grouped[0]).not.toHaveProperty("status");
+    expect(grouped[0]).not.toHaveProperty("completed");
+    expect(events).toEqual([
+      start,
+      message("assistant", "prose", 2),
+      message("user", "input", 3),
+      update,
+    ]);
+  });
+
+  it("keeps conflicting and missing spawn identities apart, with exact tuple keys", () => {
+    const events = [
+      task("task_started", "One", 1, "a:b", "c"),
+      task("task_started", "Two", 2, "a", "b:c"),
+      task("task_started", "Three", 3, "a:b", "different"),
+      task("task_updated", "Unbound report", 4, "a:b", ""),
+    ];
+    expect(taskObservations(events)).toHaveLength(4);
+    expect(
+      taskObservations([
+        task("task_started", "Codex child", 1, "native-thread", ""),
+        task("task_updated", "path — completed", 2, "native-thread", ""),
+      ]),
+    ).toHaveLength(1);
+  });
+
+  it("uses the first retained start description and never guesses absent task identities", () => {
+    const grouped = taskObservations([
+      task("task_notification", "Reported failed", 1),
+      task("task_started", "Original task", 2),
+      task("task_started", "A second start report", 3),
+      task("task_notification", "Reported completed", 4),
+      task("task_updated", "No ID", 5, ""),
+      message("task", "malformed", 6, "null"),
+    ]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]?.title).toBe("Original task");
+    expect(grouped[0]?.lastReceived.description).toBe("Reported completed");
+    expect(taskObservations([])).toEqual([]);
+  });
+
+  it("keeps a repaired start after live completion as last received, not latest native state", () => {
+    // This is the actual Codex deferred-history order. The larger seq is host admission order,
+    // not evidence that the native start happened after the live completion report.
+    const completed = task("task_updated", "/root/example — completed", 1, "native-thread", "");
+    const repaired = task("task_started", "/root/example — started", 2, "native-thread", "");
+    const grouped = taskObservations([completed, repaired]);
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]?.id).toBe(JSON.stringify(["native-thread", ""]));
+    expect(grouped[0]?.messages).toEqual([completed, repaired]);
+    expect(grouped[0]?.lastReceived).toEqual(parseTask(repaired.text));
+    expect(grouped[0]).not.toHaveProperty("latest");
+    expect(grouped[0]).not.toHaveProperty("status");
+    expect(grouped[0]).not.toHaveProperty("completed");
+  });
+
+  it("does not guess chronology or subtype precedence between delayed native reports", () => {
+    const completed = task("task_updated", "/root/example — completed", 1);
+    const delayed = task("task_updated", "/root/example — interacted", 2);
+    const grouped = taskObservations([completed, delayed]);
+    expect(grouped[0]?.messages).toEqual([completed, delayed]);
+    expect(grouped[0]?.lastReceived.description).toBe("/root/example — interacted");
+    // Each call is one already-selected session; another session's matching task/spawn IDs must
+    // not inherit observations or titles from an earlier projection.
+    const otherSession = taskObservations([task("task_started", "Separate session", 1)]);
+    expect(otherSession[0]?.messages).toHaveLength(1);
+    expect(otherSession[0]?.title).toBe("Separate session");
+    expect(otherSession[0]?.lastReceived.description).toBe("Separate session");
+  });
+
+  it("only retains a nonempty string tool ID for result correlation", () => {
+    expect(parseToolUse(JSON.stringify({ name: "Shell", id: "native-id" })).id).toBe("native-id");
+    for (const id of [undefined, "", 42, { id: "not-a-string" }])
+      expect(parseToolUse(JSON.stringify({ name: "Shell", id }))).not.toHaveProperty("id");
+  });
 });
 
 describe("groupTranscriptActivity", () => {

@@ -351,11 +351,45 @@ or an image-count placeholder. See [Attachments](#10-attachments).
 Completed `commandExecution` items use the same coordinate/fingerprint fence and publish a read-only
 `Shell` call followed by its result. The call carries native command/cwd; result output uses the shared
 4,000-character cap plus a truncation marker when needed. Failed or declined status and nonzero exit
-codes are marked as errors, with a fallback explanation when native output is empty. Unfinished commands do not consume a projected
-identity. Apart from the exact-0.154.0 task observations and separate live-text preview below, other general tool activity,
+codes are marked as errors, with a fallback explanation when native output is empty. Unfinished history does not consume a final projected
+identity. Exact 0.154.0 additionally observes bounded live command starts as described below.
+Apart from those starts, exact-0.154.0 task observations and the separate live-text preview below, other general tool activity,
 general file-change activity, and reconstructed task tracking are not projected;
 the separate [file approval path](#codex-native-file-approvals) displays only fresh bounded pending patches;
 these observations cannot acknowledge a pending browser prompt or execute a command.
+
+#### Codex command-start observations
+
+On exact 0.154.0, a selected-thread live `item/started` with `commandExecution` and
+`status:inProgress` publishes the read-only `Shell` call before its final result. This event can
+precede native approval: it is not proof of approval, process execution, or success. Command/cwd are
+bounded to 16,384/4,096 characters; nonempty item/turn IDs are bounded to 256 characters. At most 256
+pending starts are retained as coordinate plus command/cwd digest. Duplicate starts are ignored;
+changed pending starts or changed command/cwd at the corresponding final fence only the projection. Excess
+starts are skipped, while their validated finals still use the normal call/result path.
+
+The final keeps the same projected tool ID (`JSON.stringify([turnId,itemId])`, not the turn-scoped
+native `itemId` alone) and does not repeat an already-published call. Finals without
+an observed start retain the existing call-plus-result behavior; final replay and late starts dedupe.
+History is still final-only, and parent idle/completion/interrupt does not synthesize a command result.
+This adds no stdout streaming, execution, permission, or native-idle authority. Tool-use JSON now
+optionally carries the driver's string `id`; old frames without it remain readable and uncorrelated.
+
+#### Session activity viewer
+
+The persistent **Activity** button opens the selected session's read-only event index on phone and
+desktop. Task cards group exact `(task_id,tool_use_id)` pairs across intervening conversation rows,
+retain the first available start description, show the last received raw report, and expand to
+receipt-order history. Recovered native history can arrive after newer live reports; the panel labels
+this ordering rather than guessing event chronology or current task state. Missing/conflicting
+spawning IDs are not guessed into one task. Counts describe retained
+tasks/events, never currently running work, progress, success, or elapsed duration.
+
+All-events details retain commands, results, and task reports; transcript errors remain first-class.
+An exact tool-use/result ID match removes the "No result received yet" note, including a result with
+no output; missing IDs do not imply pending work. Connection loss labels the panel as last-received
+activity. The panel has no permission or task controls and creates no new broker state or native
+subscriptions. Existing transcript rollups remain available.
 
 #### Codex live assistant preview
 

@@ -68,6 +68,48 @@ provider-native/official-client coexistence.
 
 ## 1. Full product outcome
 
+### UX execution priority — 2026-09-28
+
+The next work is driven by how a real session feels beside the official Claude and Codex apps:
+
+1. **Live work and tasks:** make current observations easy to find, then add richer native output
+   and supported task controls. Never turn an observed start into a claim of approval or success.
+2. **Cross-client attachments:** files and images follow the same conversation across official
+   clients and remote-claw, with useful names/previews and truthful unavailable states.
+3. **Codex steering:** redirect an active turn with native exact-turn binding and honest delivery
+   feedback; preserve separate queue and interrupt semantics.
+4. **Session management:** understandable discovery, supported native lifecycle actions, and
+   reconnect/restart continuity without repeating a native mutation.
+
+Each slice must work on phone and desktop, in light and dark mode, with clear hierarchy, readable
+details, comfortable touch targets, keyboard access, and truthful reconnect states. Compare the same
+user journey in the native app and our viewer. Keep permissions native-confirmed throughout: no
+optimistic approval, persistent grant, or sandbox/policy weakening to reach parity. Unsupported
+upstream behavior is an explicit limit, not a reason to stall independent improvements. Reuse the
+existing UI and event transport; add no framework or proof machinery for hypothetical later features.
+
+**First slice, implemented:** a persistent session Activity panel groups retained task observations
+across transcript breaks; supported Codex command starts become visible before the final result.
+This is not a current-running task tracker, child transcript subscription, or task-stop surface.
+
+The 2026-09-28 native check used isolated Codex 0.154.0/Linux arm64, a loopback WebSocket server,
+attached local TUI, explicit read-only/on-request policy, a local durable broker, phone-sized WebKit,
+and desktop Chromium. Both viewers saw one command before native approval and no result. A one-time
+Allow from the phone viewer resolved natively; both viewers then saw one matching result, with one
+call/result each after reload. Native parent idle arrived four seconds before the command result;
+the viewer correctly retained the missing-result state rather than claiming completion. Existing
+user sessions, provider accounts, and global permission settings were not changed. This is not a
+fresh physical-phone or official desktop-app acceptance.
+
+The scripted-provider browser sentinel separately covers both Claude-native and Codex: live task
+updates across prose, preserving the reader's open command details/focus, reload, and selected-session
+isolation. All 56 screenshot tests passed; the new panel was inspected at both widths in both themes.
+Detailed ID/bound/finality cases remain at the adapter/pure-helper boundary, not duplicated in E2E.
+Final review also caught a crowded mobile header when the full "Permissions off" warning is present;
+the warning now occupies its own row, verified at 320px and 393px without shrinking action targets.
+Task cards explicitly show the last received report, not current native state: recovery may append
+older history after a live report. A deterministic helper regression covers that actual Codex order.
+
 remote-claw is an E2E-encrypted multiplayer layer for Claude Code, Codex, OpenCode, and an honest
 lower-fidelity tmux fallback. For every supported surface:
 
