@@ -493,3 +493,10 @@ faithful sentinel.
   `verbatimModuleSyntax`. Root secrets and known credential material never go on argv or normal output,
   and credential-shaped trace values are redacted. `--rc-json`/`--rc-quiet` never print `S`; only
   `--rc-identity` create and `--rc-show-secret` do. Explicit trace bodies may contain conversation text.
+- Session values stay out of the repository. A value copied from a working session (a shell, an
+  environment variable, a launch command or a transcript) is not useful to the repository and goes
+  stale: profile names, account names, one-off paths, model names, local ports. Don't put one in a
+  file, a comment, a commit message, or a pull request title, description or review comment. Use a
+  variable or a made-up placeholder (`example-profile`, `example-name`). Where something specific has
+  to be named, use its publicly documented identifier. Check the diff, the commit messages and the PR
+  text before every push.
