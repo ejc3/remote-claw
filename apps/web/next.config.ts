@@ -11,6 +11,13 @@ const nextConfig: NextConfig = {
   experimental: {
     extensionAlias: { ".js": [".ts", ".tsx", ".js"] },
   },
+  // Cloudflare staging build only (`pnpm cf:build` sets CF_STAGE=1; it is unset on Vercel, so this adds
+  // nothing there). Next traces @libsql/client with Node export conditions, so the Workers entry
+  // (lib-esm/web.js: HTTP/WebSocket only, no native addon) is missing from the traced copy and OpenNext
+  // cannot resolve it under the "workerd" condition. Force it in.
+  ...(process.env.CF_STAGE === "1"
+    ? { outputFileTracingIncludes: { "/**": ["./node_modules/@libsql/client/lib-esm/web.js"] } }
+    : {}),
   // Security headers — defense-in-depth for the viewer, which holds a live RC **pass** (a credential
   // that can read and steer the machine's sessions, kept in `sessionStorage` so it survives a refresh
   // per #56/#57, and client-only per the zero-knowledge model). Today nothing can exfiltrate it: the

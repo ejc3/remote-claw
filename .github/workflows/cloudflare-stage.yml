@@ -1,0 +1,59 @@
+name: cloudflare-stage
+
+# STAGING copy of the web app on Cloudflare Workers (OpenNext), Worker `remote-claw-stage`. Production
+# stays on Vercel and is untouched by this workflow. The Worker has no public URL (workers_dev and
+# preview_urls are false in apps/web/wrangler.jsonc) until an administrator puts it behind Cloudflare
+# Access.
+#
+# This repository is PUBLIC, so this workflow must never run for a fork or a pull request: it holds a
+# deploy token. Triggers are limited to a push to main and a manual dispatch (which needs write access),
+# the job refuses any other repository or ref, and nothing here uses pull_request or pull_request_target.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - "vendor/**"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - ".github/workflows/cloudflare-stage.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel an in-flight deploy: a later push waits for the running one to finish.
+concurrency:
+  group: cloudflare-stage
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'ejc3/remote-claw' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Build the Worker (OpenNext)
+        working-directory: apps/web
+        run: pnpm run cf:build
+      - name: Deploy remote-claw-stage
+        working-directory: apps/web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          test -n "${CLOUDFLARE_API_TOKEN}" || { echo "::error::repository secret CLOUDFLARE_API_TOKEN is not set"; exit 1; }
+          pnpm exec wrangler deploy

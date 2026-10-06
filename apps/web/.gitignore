@@ -9,3 +9,7 @@ next-env.d.ts
 /.swc/
 # Per-session SQLite backend (BROKER_BACKEND=sqlite): one local libSQL database per channel token.
 .rc-sqlite/
+
+# Cloudflare Workers staging build (OpenNext output + wrangler state)
+.open-next
+.wrangler
