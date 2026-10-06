@@ -1,8 +1,8 @@
 name: cloudflare-stage
 
 # STAGING copy of the web app on Cloudflare Workers (OpenNext), Worker `remote-claw-stage`. Production
-# stays on Vercel and is untouched by this workflow. The Worker has no public URL (workers_dev and
-# preview_urls are false in apps/web/wrangler.jsonc) until an administrator puts it behind Cloudflare
+# stays on Vercel and is untouched by this workflow. The Worker is reachable only through Cloudflare
+# Access (workers_dev and preview_urls are true in apps/web/wrangler.jsonc; Terraform in ejc3/aws owns the gate). Previously: behind Cloudflare
 # Access.
 #
 # This repository is PUBLIC, so this workflow must never run for a fork or a pull request: it holds a

@@ -6,7 +6,8 @@
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "account_id": "12ea67fb7ced068de03f35c22688e436",
   "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
-  "workers_dev": false,
-  "preview_urls": false,
+  // Terraform owns these two switches (ejc3/aws workers-stage.tf) and Cloudflare Access gates every request. Keep them true: Wrangler applies them on each deploy, so false would turn the staging URL off again.
+  "workers_dev": true,
+  "preview_urls": true,
   "observability": { "enabled": true }
 }
