@@ -504,20 +504,26 @@ faithful sentinel.
 ## Two clouds: Vercel and Cloudflare (standing rule)
 
 This app deploys to Vercel and to Cloudflare Workers (production on Vercel; the staging copy
-`remote-claw-stage` on Cloudflare through OpenNext, from `.github/workflows/cloudflare-stage.yml`).
-Both are supported targets, always:
+`remote-claw-stage` on Cloudflare through OpenNext). Both are supported targets, always:
 
-- **A change is done only when it works on both.** Both deploys (Vercel's check and the Cloudflare
-  workflow) must be green before merging. Do not merge a change that builds or runs on only one.
+- **A change is done only when it works on both.** Before merging, Vercel's check is green and the
+  change builds for Cloudflare (`pnpm run cf:build` in `apps/web/`). The Cloudflare workflow
+  (`.github/workflows/cloudflare-stage.yml`) deploys only from `main`, so after merging watch it go
+  green; a red Cloudflare deploy is fixed before anything else merges. Never merge a change that
+  builds or runs on only one.
 - **No platform-only code without a path on the other.** Avoid Vercel-only runtime features
-  (`@vercel/*` storage or edge APIs, Vercel-specific headers) and Node APIs the Workers runtime
-  lacks (runtime filesystem access, `fetch(..., { redirect: 'error' })`, which Workers rejects).
-  When one is unavoidable, give the other platform an equivalent and test both.
-- **Secrets live in AWS Secrets Manager** (administered from `ejc3/aws`), and every secret must
-  reach both platforms. Cloudflare: `workers-stage/remote-claw`, loaded into the Worker with
-  `scripts/workers-stage-secrets.sh remote-claw` in ejc3/aws. Vercel: set in the Vercel project (for
-  now: ejc3/aws does not write this project's environment yet), then re-record it in
-  `vercel-env/remote-claw/<target>` with `scripts/vercel-env-capture.py remote-claw TARGET`. A
-  secret changed on one platform only is a bug. Never commit one, never print one.
-- **Public build-time values** (`NEXT_PUBLIC_*`) come from the repository's Actions variables for
-  the Cloudflare build and from the Vercel environment for Vercel; keep the two equal.
+  (`@vercel/*` storage or edge APIs, Vercel-specific headers) and what the Workers runtime does not
+  give a Next.js app (a writable, persistent filesystem, or reading files at runtime that are not
+  bundled; `fetch(..., { redirect: 'error' })`, which Workers rejects). When one is unavoidable,
+  give the other platform an equivalent and test both.
+- **App secrets live in AWS Secrets Manager** (administered from `ejc3/aws`), and every secret the
+  running app reads must reach both platforms. Cloudflare: `workers-stage/remote-claw`, loaded into
+  the Worker with `scripts/workers-stage-secrets.sh remote-claw` in ejc3/aws. Vercel: set in the
+  Vercel project (for now: ejc3/aws does not write this project's environment yet), then re-record
+  it in `vercel-env/remote-claw/<target>` with `scripts/vercel-env-capture.py remote-claw TARGET`. A
+  secret changed on one platform only is a bug. Never commit one, never print one. A platform's own
+  deploy credentials (the Cloudflare deploy token, Vercel tokens) are not app secrets and stay with
+  their platform.
+- **Public build-time values** (`NEXT_PUBLIC_*`) are set in both places: the Vercel environment, and
+  an Actions variable mapped into the build step of `.github/workflows/cloudflare-stage.yml` (only
+  the names mapped there reach the Cloudflare build). Add a new one to both; keep the values equal.
