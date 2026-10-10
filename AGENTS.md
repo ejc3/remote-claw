@@ -528,4 +528,6 @@ This app deploys to Vercel and to Cloudflare Workers (production on Vercel; the 
   (the Cloudflare deploy token, Vercel tokens) are not app secrets and stay with their platform.
 - **Public build-time values** (`NEXT_PUBLIC_*`) are set in both places: the Vercel environment, and
   an Actions variable mapped into the build step of `.github/workflows/cloudflare-stage.yml` (only
-  the names mapped there reach the Cloudflare build). Add a new one to both; keep the values equal.
+  the names mapped there reach the Cloudflare build). Add a new one to both. Like a secret, each
+  takes its own environment's value: the staging copy gets the non-production one (a public key
+  pairs with its environment's private key).
