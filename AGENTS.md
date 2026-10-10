@@ -517,13 +517,15 @@ This app deploys to Vercel and to Cloudflare Workers (production on Vercel; the 
   bundled; `fetch(..., { redirect: 'error' })`, which Workers rejects). When one is unavoidable,
   give the other platform an equivalent and test both.
 - **App secrets live in AWS Secrets Manager** (administered from `ejc3/aws`), and every secret the
-  running app reads must reach both platforms. Cloudflare: `workers-stage/remote-claw`, loaded into
-  the Worker with `scripts/workers-stage-secrets.sh remote-claw` in ejc3/aws. Vercel: set in the
-  Vercel project (for now: ejc3/aws does not write this project's environment yet), then re-record
-  it in `vercel-env/remote-claw/<target>` with `scripts/vercel-env-capture.py remote-claw TARGET`. A
-  secret changed on one platform only is a bug. Never commit one, never print one. A platform's own
-  deploy credentials (the Cloudflare deploy token, Vercel tokens) are not app secrets and stay with
-  their platform.
+  running app reads must reach both platforms, each with the value for its own environment:
+  production values only to production (Vercel), non-production values to the Cloudflare staging
+  copy and Vercel previews. Never copy a production value into staging. Cloudflare:
+  `workers-stage/remote-claw`, loaded into the Worker with `scripts/workers-stage-secrets.sh
+  remote-claw` in ejc3/aws. Vercel: set in the Vercel project (for now: ejc3/aws does not write this
+  project's environment yet), then re-record it in `vercel-env/remote-claw/<target>` with
+  `scripts/vercel-env-capture.py remote-claw TARGET`. A secret the app needs that exists on one
+  platform only is a bug. Never commit one, never print one. A platform's own deploy credentials
+  (the Cloudflare deploy token, Vercel tokens) are not app secrets and stay with their platform.
 - **Public build-time values** (`NEXT_PUBLIC_*`) are set in both places: the Vercel environment, and
   an Actions variable mapped into the build step of `.github/workflows/cloudflare-stage.yml` (only
   the names mapped there reach the Cloudflare build). Add a new one to both; keep the values equal.
