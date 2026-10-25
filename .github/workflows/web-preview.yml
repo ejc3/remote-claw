@@ -17,7 +17,7 @@ concurrency:
 jobs:
   resolve-deployment:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       trusted: ${{ steps.resolve.outputs.trusted }}
       sha: ${{ steps.resolve.outputs.sha }}
@@ -42,7 +42,7 @@ jobs:
   smoke:
     needs: resolve-deployment
     if: needs.resolve-deployment.outputs.trusted == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Existing protected environment: keep the bypass unavailable to candidate-controlled workflows.
     environment: release-proof
     env:
