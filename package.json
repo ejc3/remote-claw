@@ -26,11 +26,5 @@
     "@biomejs/biome": "2.4.16",
     "esbuild": "^0.28.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"],
-    "overrides": {
-      "postcss@<8.5.10": ">=8.5.10",
-      "@astryxdesign/core": "file:./vendor/astryxdesign-core-0.1.8.tgz"
-    }
-  }
+  "packageManager": "pnpm@12.15.0"
 }
