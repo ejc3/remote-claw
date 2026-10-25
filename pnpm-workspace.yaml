@@ -9,3 +9,16 @@ packages:
   - "apps/*"
   - "tests/*"
   - "spikes/*"
+
+allowBuilds:
+  esbuild: true
+  "@swc/core": true
+  sharp: true
+  workerd: true
+  cbor-extract: false
+  "@astryxdesign/cli": false
+  "@astryxdesign/core": false
+
+overrides:
+  "postcss@<8.5.10": ">=8.5.10"
+  "@astryxdesign/core": "file:./vendor/astryxdesign-core-0.1.8.tgz"

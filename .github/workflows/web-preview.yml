@@ -17,7 +17,7 @@ concurrency:
 jobs:
   resolve-deployment:
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       trusted: ${{ steps.resolve.outputs.trusted }}
       sha: ${{ steps.resolve.outputs.sha }}
@@ -42,7 +42,7 @@ jobs:
   smoke:
     needs: resolve-deployment
     if: needs.resolve-deployment.outputs.trusted == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Existing protected environment: keep the bypass unavailable to candidate-controlled workflows.
     environment: release-proof
     env:
@@ -58,7 +58,7 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "${RC_EXPECTED_SHA}"
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
-          version: 10
+          version: 12.15.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
